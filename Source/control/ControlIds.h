@@ -24,6 +24,8 @@ enum class ControlId
     AnalyzerAveraging,
     AnalyzerHold,
     AnalyzerPeakDecay,
+    AnalyzerDisplayGain,
+    AnalyzerTilt,
     // Add control IDs as needed
     Count
 };

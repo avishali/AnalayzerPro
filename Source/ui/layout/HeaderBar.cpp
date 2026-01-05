@@ -9,20 +9,13 @@ HeaderBar::HeaderBar()
     titleLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
     addAndMakeVisible (titleLabel);
 
-    modeBox.addItem ("FFT", 1);
-    modeBox.addItem ("BAND", 2);
-    modeBox.addItem ("LOG", 3);
-    modeBox.setSelectedId (1, juce::dontSendNotification);  // Default FFT
-    modeBox.onChange = [this]
-    {
-        const int id = modeBox.getSelectedId();
-        const auto mode = (id == 2) ? DisplayMode::Band
-                         : (id == 3) ? DisplayMode::Log
-                                    : DisplayMode::FFT;
-        if (onDisplayModeChanged)
-            onDisplayModeChanged (mode);
-    };
-    addAndMakeVisible (modeBox);
+    // Mode label (read-only mirror - reflects current mode from right-side control)
+    modeLabel.setText ("FFT", juce::dontSendNotification);
+    modeLabel.setFont (juce::Font (juce::FontOptions().withHeight (12.0f)));
+    modeLabel.setJustificationType (juce::Justification::centredLeft);
+    modeLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
+    modeLabel.setInterceptsMouseClicks (false, false);  // Disable interaction
+    addAndMakeVisible (modeLabel);
 
     presetButton.setButtonText ("Preset");
     presetButton.setEnabled (false);
@@ -73,14 +66,14 @@ void HeaderBar::resized()
     buttonArea = rightGroup.removeFromRight (buttonW);
     presetButton.setBounds (buttonArea.getX(), buttonTop, buttonW, buttonH);
 
-    // Left group: Title + Mode selector (vertically centered)
-    const int modeBoxWidth = 100;
-    const int modeBoxHeight = 22;
-    const int modeBoxTop = centerY - modeBoxHeight / 2;
+    // Left group: Title + Mode label (vertically centered)
+    const int modeLabelWidth = 60;
+    const int modeLabelHeight = 20;
+    const int modeLabelTop = centerY - modeLabelHeight / 2;
     
-    // Mode selector
-    modeBox.setBounds (area.getX(), modeBoxTop, modeBoxWidth, modeBoxHeight);
-    area.removeFromLeft (modeBoxWidth + gap);
+    // Mode label (read-only, shows current mode)
+    modeLabel.setBounds (area.getX(), modeLabelTop, modeLabelWidth, modeLabelHeight);
+    area.removeFromLeft (modeLabelWidth + gap);
     
     // Title label (remaining left space, vertically centered)
     const int titleTop = centerY - 10;  // Approximate label height / 2
@@ -89,8 +82,20 @@ void HeaderBar::resized()
 
 void HeaderBar::setDisplayMode (DisplayMode m)
 {
-    const int id = (m == DisplayMode::Band) ? 2
-                   : (m == DisplayMode::Log) ? 3
-                                            : 1;
-    modeBox.setSelectedId (id, juce::dontSendNotification);
+    // Update read-only label to reflect current mode (mirror only, no authority)
+    juce::String modeText = "FFT";
+    switch (m)
+    {
+        case DisplayMode::FFT:
+            modeText = "FFT";
+            break;
+        case DisplayMode::Band:
+            modeText = "BANDS";
+            break;
+        case DisplayMode::Log:
+            modeText = "LOG";
+            break;
+    }
+    modeLabel.setText (modeText, juce::dontSendNotification);
+    repaint();
 }

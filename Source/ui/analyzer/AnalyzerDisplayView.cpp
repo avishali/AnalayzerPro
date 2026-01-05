@@ -13,11 +13,17 @@
 //==============================================================================
 AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     : audioProcessor (processor)
+#if JUCE_DEBUG
+    , lastDebugLogTime_ (juce::Time::getCurrentTime())
+#endif
 {
     addAndMakeVisible (rtaDisplay);
     // Initialize RTADisplay with default ranges
     rtaDisplay.setFrequencyRange (20.0f, 20000.0f);
     rtaDisplay.setDbRange (0.0f, -90.0f);
+    
+    // Initialize band centers
+    bandCentersHz_ = generateThirdOctaveBands();
     
     // Sync initial mode to RTADisplay (currentMode_ defaults to FFT)
     rtaDisplay.setViewMode (toRtaMode (currentMode_));
@@ -171,6 +177,205 @@ void AnalyzerDisplayView::resized()
 }
 
 //==============================================================================
+//==============================================================================
+std::vector<float> AnalyzerDisplayView::generateThirdOctaveBands()
+{
+    // Standard 1/3-octave band centers from ~20 Hz to ~20 kHz (31 bands)
+    // ISO 266:1997 standard frequencies
+    std::vector<float> centers;
+    centers.reserve (31);
+    
+    // 1/3-octave centers: f = 1000 * 10^(n/10) where n ranges from -20 to +10
+    // Filter to 20 Hz - 20 kHz range
+    const float bandCenters[] = {
+        20.0f, 25.0f, 31.5f, 40.0f, 50.0f, 63.0f, 80.0f, 100.0f, 125.0f, 160.0f,
+        200.0f, 250.0f, 315.0f, 400.0f, 500.0f, 630.0f, 800.0f, 1000.0f, 1250.0f, 1600.0f,
+        2000.0f, 2500.0f, 3150.0f, 4000.0f, 5000.0f, 6300.0f, 8000.0f, 10000.0f, 12500.0f, 16000.0f, 20000.0f
+    };
+    
+    for (float center : bandCenters)
+    {
+        if (center >= 20.0f && center <= 20000.0f)
+            centers.push_back (center);
+    }
+    
+    return centers;
+}
+
+//==============================================================================
+void AnalyzerDisplayView::convertFFTToBands (const AnalyzerSnapshot& snapshot, std::vector<float>& bandsDb, std::vector<float>& bandsPeakDb)
+{
+    if (bandCentersHz_.empty())
+    {
+        bandCentersHz_ = generateThirdOctaveBands();
+        rtaDisplay.setBandCenters (bandCentersHz_);
+    }
+    
+    const size_t numBands = bandCentersHz_.size();
+    bandsDb.resize (numBands, -120.0f);
+    bandsPeakDb.resize (numBands, -120.0f);
+    
+    const double sampleRate = snapshot.sampleRate;
+    const int fftSize = snapshot.fftSize;
+    const int numBins = snapshot.numBins;
+    const double binWidthHz = sampleRate / static_cast<double> (fftSize);
+    
+    // For each band, compute lower and upper frequency edges
+    // 1/3-octave: lower = center / 10^(1/6), upper = center * 10^(1/6)
+    const double thirdOctaveRatio = std::pow (10.0, 1.0 / 6.0);  // ~1.122462
+    
+    for (size_t bandIdx = 0; bandIdx < numBands; ++bandIdx)
+    {
+        const float centerFreq = bandCentersHz_[bandIdx];
+        const double lowerFreq = centerFreq / thirdOctaveRatio;
+        const double upperFreq = centerFreq * thirdOctaveRatio;
+        
+        // Find FFT bins that fall within this band
+        int lowerBin = static_cast<int> (std::floor (lowerFreq / binWidthHz));
+        int upperBin = static_cast<int> (std::ceil (upperFreq / binWidthHz));
+        
+        // Clamp to valid bin range
+        lowerBin = juce::jmax (0, lowerBin);
+        upperBin = juce::jmin (numBins - 1, upperBin);
+        
+        // If lowerBin > upperBin, collapse to nearest valid bin
+        if (lowerBin > upperBin)
+        {
+            const int centerBin = (lowerBin + upperBin) / 2;
+            lowerBin = juce::jlimit (0, numBins - 1, centerBin);
+            upperBin = lowerBin;
+        }
+        
+        // Sum power (not dB) of bins within band for average level
+        double sumPower = 0.0;
+        int binCount = 0;
+        float maxPeakDb = -120.0f;
+        
+        for (int bin = lowerBin; bin <= upperBin; ++bin)
+        {
+            // Convert dB to linear power for averaging
+            const float db = snapshot.fftDb[bin];
+            const float power = std::pow (10.0, db / 10.0);
+            sumPower += power;
+            binCount++;
+            
+            // For peak: use maximum (not sum) - more stable and correct
+            if (bin < static_cast<int> (snapshot.fftPeakDb.size()))
+            {
+                maxPeakDb = juce::jmax (maxPeakDb, snapshot.fftPeakDb[bin]);
+            }
+        }
+        
+        // Convert summed power back to dB (use average for proper band level)
+        if (binCount > 0 && sumPower > 0.0)
+        {
+            const double avgPower = sumPower / static_cast<double> (binCount);
+            bandsDb[bandIdx] = 10.0f * static_cast<float> (std::log10 (avgPower));
+        }
+        else
+        {
+            bandsDb[bandIdx] = -120.0f;  // Floor
+        }
+        
+        // Peak is already in dB, just use the maximum
+        bandsPeakDb[bandIdx] = maxPeakDb;
+    }
+}
+
+//==============================================================================
+void AnalyzerDisplayView::convertFFTToLog (const AnalyzerSnapshot& snapshot, std::vector<float>& logDb, std::vector<float>& logPeakDb)
+{
+    // Resample FFT bins to log-spaced bins (256 bins from 20 Hz to 20 kHz)
+    constexpr int numLogBins = 256;
+    constexpr float minFreq = 20.0f;
+    constexpr float maxFreq = 20000.0f;
+    
+    logDb.resize (numLogBins, -120.0f);
+    logPeakDb.resize (numLogBins, -120.0f);
+    
+    const double sampleRate = snapshot.sampleRate;
+    const int fftSize = snapshot.fftSize;
+    const int numBins = snapshot.numBins;
+    const double binWidthHz = sampleRate / static_cast<double> (fftSize);
+    
+    const double logMin = std::log10 (minFreq);
+    const double logMax = std::log10 (maxFreq);
+    const double logRange = logMax - logMin;
+    
+    for (int logIdx = 0; logIdx < numLogBins; ++logIdx)
+    {
+        // Compute log-spaced center frequency
+        const double logPos = logMin + (logRange * static_cast<double> (logIdx)) / static_cast<double> (numLogBins - 1);
+        const double centerFreq = std::pow (10.0, logPos);
+        
+        // Compute bin edges (halfway to adjacent log bins)
+        const double nextLogPos = (logIdx < numLogBins - 1) 
+            ? (logMin + (logRange * static_cast<double> (logIdx + 1)) / static_cast<double> (numLogBins - 1))
+            : logMax;
+        const double prevLogPos = (logIdx > 0)
+            ? (logMin + (logRange * static_cast<double> (logIdx - 1)) / static_cast<double> (numLogBins - 1))
+            : logMin;
+        
+        const double lowerFreq = std::pow (10.0, (logPos + prevLogPos) / 2.0);
+        const double upperFreq = std::pow (10.0, (logPos + nextLogPos) / 2.0);
+        
+        // Find FFT bins within this log bin
+        int lowerBin = static_cast<int> (std::floor (lowerFreq / binWidthHz));
+        int upperBin = static_cast<int> (std::ceil (upperFreq / binWidthHz));
+        
+        // Clamp to valid bin range
+        lowerBin = juce::jmax (0, lowerBin);
+        upperBin = juce::jmin (numBins - 1, upperBin);
+        
+        // If lowerBin > upperBin, collapse to nearest valid bin
+        if (lowerBin > upperBin)
+        {
+            const int centerBin = static_cast<int> (std::round (centerFreq / binWidthHz));
+            lowerBin = juce::jlimit (0, numBins - 1, centerBin);
+            upperBin = lowerBin;
+        }
+        
+        // Sum power of bins within log bin
+        double sumPower = 0.0;
+        double sumPeakPower = 0.0;
+        int binCount = 0;
+        
+        for (int bin = lowerBin; bin <= upperBin; ++bin)
+        {
+            const float db = snapshot.fftDb[bin];
+            const float power = std::pow (10.0, db / 10.0);
+            sumPower += power;
+            binCount++;
+            
+            if (bin < static_cast<int> (snapshot.fftPeakDb.size()))
+            {
+                const float peakDb = snapshot.fftPeakDb[bin];
+                const float peakPower = std::pow (10.0, peakDb / 10.0);
+                sumPeakPower += peakPower;
+            }
+        }
+        
+        // Convert to dB (use average power for proper level)
+        if (binCount > 0 && sumPower > 0.0)
+        {
+            const double avgPower = sumPower / static_cast<double> (binCount);
+            logDb[logIdx] = 10.0f * static_cast<float> (std::log10 (avgPower));
+        }
+        else
+        {
+            logDb[logIdx] = -120.0f;
+        }
+        
+        // For peak: use maximum (not average) of peak values (more stable and correct)
+        float maxPeakDb = -120.0f;
+        for (int bin = lowerBin; bin <= upperBin && bin < static_cast<int> (snapshot.fftPeakDb.size()); ++bin)
+        {
+            maxPeakDb = juce::jmax (maxPeakDb, snapshot.fftPeakDb[bin]);
+        }
+        logPeakDb[logIdx] = maxPeakDb;
+    }
+}
+
 int AnalyzerDisplayView::toRtaMode (Mode m) noexcept
 {
     // RTADisplay: 0=FFT, 1=LOG, 2=BAND
@@ -207,22 +412,11 @@ void AnalyzerDisplayView::updateModeOverlayText()
 
 void AnalyzerDisplayView::setMode (Mode mode)
 {
-    // Early return if mode hasn't changed
-    if (currentMode_ == mode)
-    {
-        // Even if mode hasn't changed, ensure RTADisplay is synchronized
-        // This handles cases where RTADisplay might have been reset or desynced
-        const int rtaMode = toRtaMode (currentMode_);
-        rtaDisplay.setViewMode (rtaMode);
-#if JUCE_DEBUG
-        lastSentRtaMode_ = rtaMode;
-#endif
-        return;
-    }
-    
+    // UI selection is authoritative - update local mode
     currentMode_ = mode;
     
-    // Forward to RTADisplay using mapping helper
+    // CRITICAL: Always sync RTADisplay to UI mode immediately
+    // UI mode is authoritative - RTADisplay must match
     const int rtaMode = toRtaMode (currentMode_);
     rtaDisplay.setViewMode (rtaMode);
 #if JUCE_DEBUG
@@ -245,13 +439,27 @@ void AnalyzerDisplayView::timerCallback()
         return;
     
     // Pull latest snapshot from analyzer engine (UI thread, reuse member snapshot)
-    // Get latest snapshot (two-read stability check handles sequence internally)
-    if (audioProcessor.getAnalyzerEngine().getLatestSnapshot (snapshot_))
+    const bool gotSnapshot = audioProcessor.getAnalyzerEngine().getLatestSnapshot (snapshot_);
+    
+    if (!gotSnapshot)
     {
-        // Check if we have new data by comparing snapshot metadata
-        // (getLatestSnapshot already ensures stable read, so we can update)
-        updateFromSnapshot (snapshot_);
+        // No new snapshot - hold last valid frame (do not touch RTADisplay)
+        return;
     }
+    
+    // CRITICAL: Only update if snapshot is valid AND has bins (prevents blinking to floor)
+    // Gate explicitly on isValid && numBins > 0 to ensure smooth updates
+    if (!snapshot_.isValid || snapshot_.numBins <= 0)
+    {
+        // Invalid snapshot - hold last valid frame (do not touch RTADisplay)
+        return;
+    }
+    
+    // Valid snapshot - store as last valid and update display
+    // getLatestSnapshot() already handles torn reads with retry loop, so we update every valid snapshot
+        lastValidSnapshot_ = snapshot_;
+        hasLastValid_ = true;
+            updateFromSnapshot (snapshot_);
 }
 
 void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
@@ -260,16 +468,12 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         return;
     
     // CRITICAL: Synchronize RTADisplay mode BEFORE any data feeding
-    // This ensures RTADisplay is in the correct mode for the data we're about to send
-    // ALWAYS call setViewMode (even if mode hasn't changed) to ensure mode is synchronized
+    // UI mode is authoritative - ensure RTADisplay always matches
     const int rtaMode = toRtaMode (currentMode_);
     rtaDisplay.setViewMode (rtaMode);
 #if JUCE_DEBUG
     lastSentRtaMode_ = rtaMode;
     assertModeSync();
-    // Force update RTADisplay debug info to match actual mode
-    // Note: RTADisplay's debug overlay uses debugViewMode, but rendering uses state.viewMode
-    // The debug overlay may be stale, but rendering should work correctly
 #endif
     
     // ALWAYS call setFftMeta when snapshot has valid meta (required before first data frame)
@@ -420,25 +624,88 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         
         case Mode::BAND:
         {
-            // BANDS mode: do NOT feed FFT data
-            // Snapshot only has FFT data, bands not wired yet
+            // BANDS mode: Convert FFT bins to 1/3-octave bands
+            if (snapshot.numBins <= 0 || snapshot.fftSize <= 0 || snapshot.sampleRate <= 0.0)
+            {
+                rtaDisplay.setNoData ("Invalid snapshot for BANDS");
+                break;
+            }
+            
+            // Initialize band centers if needed (band centers are independent of FFT size)
+            if (bandCentersHz_.empty())
+            {
+                bandCentersHz_ = generateThirdOctaveBands();
+            }
+            
+            // CRITICAL: Always set band centers before setting band data (ensures size matching)
+            rtaDisplay.setBandCenters (bandCentersHz_);
+            
+            // Convert FFT bins to bands
+            convertFFTToBands (snapshot, bandsDb_, bandsPeakDb_);
+            
+            // CRITICAL: Ensure sizes match exactly (bandCentersHz.size() == bandsDb.size() == bandsPeakDb.size())
+            jassert (bandCentersHz_.size() == bandsDb_.size());
+            jassert (bandsDb_.size() == bandsPeakDb_.size());
+            
+            // Feed RTADisplay with band data
+            const bool usePeaks = !bandsPeakDb_.empty() && bandsPeakDb_.size() == bandsDb_.size() && bandsDb_.size() == bandCentersHz_.size();
+            rtaDisplay.setBandData (bandsDb_, usePeaks ? &bandsPeakDb_ : nullptr);
+            
 #if JUCE_DEBUG
-            dropReason_ = "NO DATA: BANDS not wired";
+            // Debug logging (once per second)
+            bandsFedCount_++;
+            const auto now = juce::Time::getCurrentTime();
+            if (now.toMilliseconds() - lastDebugLogTime_.toMilliseconds() >= 1000)
+            {
+                float minDb = bandsDb_.empty() ? -120.0f : bandsDb_[0];
+                float maxDb = bandsDb_.empty() ? -120.0f : bandsDb_[0];
+                for (const float db : bandsDb_)
+                {
+                    minDb = juce::jmin (minDb, db);
+                    maxDb = juce::jmax (maxDb, db);
+                }
+                DBG ("MODE=BANDS fedCount=" << bandsFedCount_ << " min=" << minDb << "dB max=" << maxDb << "dB");
+                lastDebugLogTime_ = now;
+            }
+            jassert (toRtaMode (currentMode_) == 2);  // Assert we're calling the matching setter
 #endif
-            rtaDisplay.setNoData ("BANDS not wired");
-            rtaDisplay.repaint();
             break;
         }
         
         case Mode::LOG:
         {
-            // LOG mode: do NOT feed FFT data
-            // Snapshot only has FFT data, log not wired yet
+            // LOG mode: Convert FFT bins to log-spaced bins
+            if (snapshot.numBins <= 0 || snapshot.fftSize <= 0 || snapshot.sampleRate <= 0.0)
+            {
+                rtaDisplay.setNoData ("Invalid snapshot for LOG");
+                break;
+            }
+            
+            // Convert FFT bins to log-spaced bins
+            convertFFTToLog (snapshot, logDb_, logPeakDb_);
+            
+            // Feed RTADisplay with log data
+            const bool usePeaks = !logPeakDb_.empty() && logPeakDb_.size() == logDb_.size();
+            rtaDisplay.setLogData (logDb_, usePeaks ? &logPeakDb_ : nullptr);
+            
 #if JUCE_DEBUG
-            dropReason_ = "NO DATA: LOG not wired";
+            // Debug logging (once per second)
+            logFedCount_++;
+            const auto now = juce::Time::getCurrentTime();
+            if (now.toMilliseconds() - lastDebugLogTime_.toMilliseconds() >= 1000)
+            {
+                float minDb = logDb_.empty() ? -120.0f : logDb_[0];
+                float maxDb = logDb_.empty() ? -120.0f : logDb_[0];
+                for (const float db : logDb_)
+                {
+                    minDb = juce::jmin (minDb, db);
+                    maxDb = juce::jmax (maxDb, db);
+                }
+                DBG ("MODE=LOG fedCount=" << logFedCount_ << " min=" << minDb << "dB max=" << maxDb << "dB");
+                lastDebugLogTime_ = now;
+            }
+            jassert (toRtaMode (currentMode_) == 1);  // Assert we're calling the matching setter
 #endif
-            rtaDisplay.setNoData ("LOG not wired");
-            rtaDisplay.repaint();
             break;
         }
         

@@ -53,6 +53,20 @@ public:
     /** Set no-data state (call when data is unavailable) */
     void setNoData (const juce::String& reason);
     
+    /** Set display gain offset (UI-only, affects display rendering, not DSP) */
+    void setDisplayGainDb (float db);
+    
+    /** Tilt mode for frequency compensation */
+    enum class TiltMode
+    {
+        Flat = 0,  // 0 dB/oct
+        Pink = 1,  // +3 dB/oct (compensate pink noise downward slope)
+        White = 2  // -3 dB/oct (compensate white noise upward slope)
+    };
+    
+    /** Set tilt mode (UI-only, affects display rendering, not DSP) */
+    void setTiltMode (TiltMode mode);
+    
     /** Check structural generation and clear cache if changed (call before pulling data) */
     void checkStructuralGeneration (uint32_t currentGen);
 
@@ -126,6 +140,10 @@ private:
     float freqToX (float freqHz, const RenderState& s) const;
     // Helper: compute y position from dB
     float dbToY (float db, const RenderState& s) const;
+    // Helper: compute y position from dB with frequency-dependent compensation (for FFT mode)
+    float dbToYWithCompensation (float db, float freqHz, const RenderState& s) const;
+    // Helper: compute tilt compensation in dB for a given frequency
+    float computeTiltDb (float freqHz) const;
     // Helper: find nearest log band index from x position
     int findNearestLogBand (float x, const RenderState& s) const;
 
@@ -148,6 +166,12 @@ private:
 
     // Hover state
     int hoveredBandIndex = -1;
+    
+    // Display gain offset (UI-only, affects rendering, not DSP)
+    float displayGainDb = 0.0f;
+    
+    // Tilt mode for frequency compensation (UI-only, affects rendering, not DSP)
+    TiltMode tiltMode = TiltMode::Flat;
     
     // Structural generation tracking (to detect structural changes)
     uint32_t lastStructuralGen = 0;

@@ -18,8 +18,12 @@ void AnalyzerEngine::prepare (double sampleRate, int samplesPerBlock)
     // Initialize FFT size (use currentFFTSize, default 2048)
     initializeFFT (currentFFTSize);
     
-    // Reset published snapshot
-    published_.sequence.store (0, std::memory_order_relaxed);
+    // CRITICAL: Keep sequence monotonic - do NOT reset to 0 (prevents UI "blink" detection issues)
+    // Only initialize to 1 if this is the very first prepare (sequence is 0)
+    if (published_.sequence.load (std::memory_order_relaxed) == 0)
+    {
+        published_.sequence.store (1, std::memory_order_relaxed);  // Start at 1, not 0
+    }
     published_.data.isValid = false;
     
     // Initialize smoothing
@@ -45,15 +49,12 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     const int numBins = fftSize / 2 + 1;
     smoothedMagnitude.resize (static_cast<size_t> (numBins), 0.0f);
     peakHold.resize (static_cast<size_t> (numBins), kDbFloor);
-    peakHoldCounter.resize (static_cast<size_t> (numBins), 0);
     
     // Resize per-frame computation buffers (eliminates allocations in computeFFT)
     magnitudes_.resize (static_cast<size_t> (numBins), 0.0f);
     dbValues_.resize (static_cast<size_t> (numBins), 0.0f);
+    dbRaw_.resize (static_cast<size_t> (numBins), 0.0f);
     
-    // Set publish throttling for large FFT sizes (8192 is expensive, reduce UI update rate)
-    publishThrottleCounter_ = 0;
-    publishThrottleDivisor_ = (fftSize >= 8192) ? 2 : 1;  // Publish every 2nd frame for 8192
     
     // Initialize window (Hann)
     const float pi = juce::MathConstants<float>::pi;
@@ -69,10 +70,6 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     std::fill (fftOutput.begin(), fftOutput.end(), 0.0f);
     std::fill (smoothedMagnitude.begin(), smoothedMagnitude.end(), 0.0f);
     std::fill (peakHold.begin(), peakHold.end(), kDbFloor);
-    std::fill (peakHoldCounter.begin(), peakHoldCounter.end(), 0);
-    
-    // Initialize published snapshot arrays to floor value
-    constexpr float dbFloor = -120.0f;
     
     // Safety guard: ensure numBins doesn't exceed array capacity
     jassert (numBins <= static_cast<int> (published_.data.fftDb.size()));
@@ -80,15 +77,10 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     
     // CRITICAL: Mark snapshot as invalid on FFT size change to prevent "blink to floor"
     // Only publish valid snapshots after first real FFT computation
+    // Do NOT fill arrays to floor here - UI will hold last valid frame
     published_.data.isValid = false;
     published_.data.fftSize = fftSize;
     published_.data.numBins = numBins;
-    
-    // Initialize arrays safely using copyBins to prevent OOB
-    const int maxBins = static_cast<int> (published_.data.fftDb.size());
-    const int copyBins = juce::jmin (numBins, maxBins);
-    std::fill (published_.data.fftDb.begin(), published_.data.fftDb.begin() + copyBins, dbFloor);
-    std::fill (published_.data.fftPeakDb.begin(), published_.data.fftPeakDb.begin() + copyBins, dbFloor);
 }
 
 void AnalyzerEngine::reset()
@@ -102,9 +94,9 @@ void AnalyzerEngine::reset()
     fifoBuffer.clear();
     smoothedMagnitude.clear();
     peakHold.clear();
-    peakHoldCounter.clear();
     magnitudes_.clear();
     dbValues_.clear();
+    dbRaw_.clear();
 }
 
 void AnalyzerEngine::processBlock (const juce::AudioBuffer<float>& buffer)
@@ -183,11 +175,15 @@ void AnalyzerEngine::computeFFT()
         smoothedMagnitude[i] = smoothingCoeff * smoothedMagnitude[i] + (1.0f - smoothingCoeff) * magnitudes_[i];
     }
     
-    // Convert to dB (reuse member buffer, no allocation)
+    // Convert smoothed magnitude to dB for display (reuse member buffer, no allocation)
     convertToDb (smoothedMagnitude.data(), dbValues_.data(), numBins);
     
-    // Update peak hold: always track new peaks, only decay when hold is disabled
-    updatePeakHold (dbValues_.data(), peakHold.data(), peakHoldCounter.data(), numBins);
+    // Convert raw (unsmoothed) magnitude to dB for peak tracking (reuse member buffer, no allocation)
+    // Peaks should track raw FFT, not smoothed display
+    convertToDb (magnitudes_.data(), dbRaw_.data(), numBins);
+    
+    // Update peak hold: tracks raw dB, allows freeze
+    updatePeakHold (dbRaw_.data(), peakHold.data(), numBins);
     
     // CRITICAL: numBins must equal expectedBins (fftSize/2 + 1)
     const int expectedBins = currentFFTSize / 2 + 1;
@@ -239,14 +235,10 @@ void AnalyzerEngine::computeFFT()
     }
 #endif
     
-    // Publish snapshot with throttling for large FFT sizes (audio thread, lock-free)
-    // For 8192, publish every 2nd frame to reduce UI update load and prevent jitter
-    publishThrottleCounter_++;
-    if (publishThrottleCounter_ >= publishThrottleDivisor_)
-    {
-        publishThrottleCounter_ = 0;
-        publishSnapshot (snapshot);
-    }
+    // Publish snapshot (audio thread, lock-free)
+    // Throttling temporarily disabled to restore smoothness - publish every frame
+    // UI load issues should be addressed by reducing UI timer rate if needed
+    publishSnapshot (snapshot);
 }
 
 void AnalyzerEngine::applyWindow()
@@ -278,60 +270,52 @@ void AnalyzerEngine::convertToDb (const float* magnitudes, float* dbOut, int num
     }
 }
 
-void AnalyzerEngine::updatePeakHold (const float* dbIn, float* peakOut, int* counters, int numBins)
+void AnalyzerEngine::updatePeakHold (const float* dbRawIn, float* peakOut, int numBins)
 {
+    if (!peakHoldEnabled_)
+    {
+        // Clear peaks to floor when disabled
+        std::fill (peakOut, peakOut + numBins, kDbFloor);
+        return;
+    }
+    
     // Calculate decay per frame (for audio thread: decay per FFT frame = (decayDbPerSec * hopSize) / sampleRate)
     const float decayPerFrame = (peakDecayDbPerSec * static_cast<float> (currentHopSize)) / static_cast<float> (currentSampleRate);
     
     for (int i = 0; i < numBins; ++i)
     {
         // Always update to new louder peaks (peak hold tracks maxima)
-        if (dbIn[i] > peakOut[i])
+        // Hold checkbox freezes decay only, but new higher peaks must still update
+        if (dbRawIn[i] > peakOut[i])
         {
-            peakOut[i] = dbIn[i];
+            peakOut[i] = dbRawIn[i];  // Update to new higher peak
         }
         
-        // Only decay when hold is disabled
-        if (!holdEnabled)
+        // Apply decay only if not frozen
+        if (!freezePeaks_)
         {
             peakOut[i] = juce::jmax (kDbFloor, peakOut[i] - decayPerFrame);
         }
+        // If frozen, keep peak value (no decay)
     }
-    
-    juce::ignoreUnused (counters);  // Counters not used in current implementation
 }
 
 void AnalyzerEngine::setFftSize (int fftSize)
 {
     // Validate FFT size (must be power of 2, within range)
-    // Clamp minimum to 2048 for meaningful sub-50 Hz resolution
+    // Do NOT clamp 1024 to 2048 - user explicitly chose 1024, respect it
     int validSize = 2048;
-    if (fftSize == 2048 || fftSize == 4096 || fftSize == 8192)
+    if (fftSize == 1024 || fftSize == 2048 || fftSize == 4096 || fftSize == 8192)
         validSize = fftSize;
-    else if (fftSize == 1024)
-    {
-        // Allow 1024 but acknowledge low-end limitation (expected physics, not a bug)
-        validSize = 1024;
-#if JUCE_DEBUG
-        static bool logged1024 = false;
-        if (!logged1024)
-        {
-            const double binWidthHz = (currentSampleRate > 0.0) ? (currentSampleRate / 1024.0) : 46.875;
-            DBG ("FFT 1024 @" << currentSampleRate << "Hz => bin width ~" << binWidthHz 
-                 << " Hz; low-end resolution limited (expected physics).");
-            logged1024 = true;
-        }
-#endif
-    }
     else if (fftSize < 1024)
-        validSize = 2048;  // Clamp to minimum
+        validSize = 1024;  // Clamp to minimum 1024 (not 2048)
     else if (fftSize > 8192)
         validSize = 8192;
     else
     {
         // Round to nearest power of 2
         validSize = 1 << static_cast<int> (std::ceil (std::log2 (fftSize)));
-        validSize = juce::jlimit (2048, 8192, validSize);  // Clamp to 2048 minimum
+        validSize = juce::jlimit (1024, 8192, validSize);  // Clamp to 1024 minimum (not 2048)
     }
     
     if (validSize != currentFFTSize && prepared)
@@ -344,29 +328,21 @@ void AnalyzerEngine::setFftSize (int fftSize)
         updateSmoothingCoeff (averagingMs_, currentSampleRate);
     }
     
-    // CRITICAL: Resize published snapshot FFT buffers when FFT size changes
-    // This ensures processBlock() can write data to correctly-sized buffers
+    // CRITICAL: Mark snapshot as invalid on FFT size change to prevent "blink to floor"
+    // Only publish valid snapshots after first real FFT computation
+    // Do NOT fill arrays to floor here - UI will hold last valid frame
     if (prepared)
     {
         const int numBins = validSize / 2 + 1;
-        constexpr float dbFloor = -120.0f;
         
         // Safety guard: ensure numBins doesn't exceed array capacity
         jassert (numBins <= static_cast<int> (published_.data.fftDb.size()));
         jassert (numBins <= static_cast<int> (published_.data.fftPeakDb.size()));
         
-        // CRITICAL: Mark snapshot as invalid on FFT size change to prevent "blink to floor"
-        // Only publish valid snapshots after first real FFT computation
         published_.data.isValid = false;
         published_.data.fftSize = validSize;
         published_.data.sampleRate = currentSampleRate;
         published_.data.numBins = numBins;
-        
-        // Initialize arrays safely using copyBins to prevent OOB
-        const int maxBins = static_cast<int> (published_.data.fftDb.size());
-        const int copyBins = juce::jmin (numBins, maxBins);
-        std::fill (published_.data.fftDb.begin(), published_.data.fftDb.begin() + copyBins, dbFloor);
-        std::fill (published_.data.fftPeakDb.begin(), published_.data.fftPeakDb.begin() + copyBins, dbFloor);
     }
 }
 
@@ -376,9 +352,19 @@ void AnalyzerEngine::setAveragingMs (float averagingMs)
     updateSmoothingCoeff (averagingMs, currentSampleRate);
 }
 
+void AnalyzerEngine::setPeakHoldEnabled (bool enabled)
+{
+    peakHoldEnabled_ = enabled;
+    if (!enabled)
+    {
+        // Clear peaks when disabled
+        std::fill (peakHold.begin(), peakHold.end(), kDbFloor);
+    }
+}
+
 void AnalyzerEngine::setHold (bool hold)
 {
-    holdEnabled = hold;
+    freezePeaks_ = hold;  // Freeze means no decay
 }
 
 void AnalyzerEngine::setPeakDecayDbPerSec (float decayDbPerSec)
@@ -395,16 +381,24 @@ void AnalyzerEngine::updateSmoothingCoeff (float averagingMs, double sampleRate)
         const double tauSec = juce::jmax (1.0, static_cast<double> (averagingMs)) / 1000.0;  // Clamp min 1ms
         const double hopSec = static_cast<double> (currentHopSize) / sampleRate;
         smoothingCoeff = static_cast<float> (std::exp (-hopSec / tauSec));
-        smoothingCoeff = juce::jlimit (0.0f, 0.999f, smoothingCoeff);  // Clamp to valid range
+        smoothingCoeff = juce::jlimit (0.0f, 0.995f, smoothingCoeff);  // Clamp to [0.0, 0.995] (avoid stuck smoothing)
     }
     else
     {
-        smoothingCoeff = 0.0f;  // No smoothing (instantaneous response)
+        smoothingCoeff = 0.0f;  // No smoothing (instantaneous response) when averagingMs <= 0
     }
 }
 
 void AnalyzerEngine::publishSnapshot (const AnalyzerSnapshot& source)
 {
+    // CRITICAL: Never publish invalid or "floor-only" snapshots
+    // Only publish valid snapshots with actual FFT data
+    if (!source.isValid || source.numBins <= 0 || source.numBins > static_cast<int> (AnalyzerSnapshot::kMaxFFTBins))
+    {
+        // Do not publish invalid snapshot - UI will hold last valid frame
+        return;
+    }
+    
     // Copy ALL fields into published snapshot (deep copy arrays)
     published_.data.isValid = source.isValid;
     published_.data.numBins = source.numBins;
@@ -430,7 +424,9 @@ void AnalyzerEngine::publishSnapshot (const AnalyzerSnapshot& source)
     }
     
     // Increment sequence AFTER data copy completes (release fence ensures visibility)
-    const uint32_t next = published_.sequence.load (std::memory_order_relaxed) + 1;
+    // CRITICAL: Keep sequence monotonic - never reset to 0
+    const uint32_t currentSeq = published_.sequence.load (std::memory_order_relaxed);
+    const uint32_t next = (currentSeq == 0) ? 1 : (currentSeq + 1);  // Ensure we never stay at 0
     published_.sequence.store (next, std::memory_order_release);
 }
 
@@ -439,43 +435,52 @@ bool AnalyzerEngine::getLatestSnapshot (AnalyzerSnapshot& dest) const
     if (!prepared)
         return false;
     
-    // Two-read stability check (lock-free, avoids torn reads)
-    const uint32_t seq1 = published_.sequence.load (std::memory_order_acquire);
-    
-    if (seq1 == 0)
-        return false;  // No data published yet
-    
-    // Copy published data into destination
-    dest.isValid = published_.data.isValid;
-    dest.numBins = published_.data.numBins;
-    dest.sampleRate = published_.data.sampleRate;
-    dest.fftSize = published_.data.fftSize;
-    dest.displayBottomDb = published_.data.displayBottomDb;
-    dest.displayTopDb = published_.data.displayTopDb;
-    
-    // Deep copy arrays
-    const int numBins = published_.data.numBins;
-    
-    // Safety guard: ensure numBins doesn't exceed array capacity
-    jassert (numBins <= static_cast<int> (dest.fftDb.size()));
-    jassert (numBins <= static_cast<int> (dest.fftPeakDb.size()));
-    jassert (numBins <= static_cast<int> (published_.data.fftDb.size()));
-    jassert (numBins <= static_cast<int> (published_.data.fftPeakDb.size()));
-    
-    const int copyBins = juce::jmin (numBins, static_cast<int> (dest.fftDb.size()));
-    for (int i = 0; i < copyBins; ++i)
+    // Retry loop to handle seqlock-style reads: if sequence changes during copy,
+    // retry up to 3 times to catch the next stable frame. This prevents dropped
+    // frames that cause UI stutter when the timer only calls once per tick.
+    for (int attempt = 0; attempt < 3; ++attempt)
     {
-        dest.fftDb[i] = published_.data.fftDb[i];
-        dest.fftPeakDb[i] = published_.data.fftPeakDb[i];
+        // First read: get sequence (acquire barrier ensures we see published data)
+        const uint32_t seq1 = published_.sequence.load (std::memory_order_acquire);
+        
+        if (seq1 == 0)
+            return false;  // No data published yet
+        
+        // Copy published data into destination
+        dest.isValid = published_.data.isValid;
+        dest.numBins = published_.data.numBins;
+        dest.sampleRate = published_.data.sampleRate;
+        dest.fftSize = published_.data.fftSize;
+        dest.displayBottomDb = published_.data.displayBottomDb;
+        dest.displayTopDb = published_.data.displayTopDb;
+        
+        // Deep copy arrays
+        const int numBins = published_.data.numBins;
+        
+        // Safety guard: ensure numBins doesn't exceed array capacity
+        jassert (numBins <= static_cast<int> (dest.fftDb.size()));
+        jassert (numBins <= static_cast<int> (dest.fftPeakDb.size()));
+        jassert (numBins <= static_cast<int> (published_.data.fftDb.size()));
+        jassert (numBins <= static_cast<int> (published_.data.fftPeakDb.size()));
+        
+        const int copyBins = juce::jmin (numBins, static_cast<int> (dest.fftDb.size()));
+        for (int i = 0; i < copyBins; ++i)
+        {
+            dest.fftDb[i] = published_.data.fftDb[i];
+            dest.fftPeakDb[i] = published_.data.fftPeakDb[i];
+        }
+        
+        // Second read to verify stability
+        const uint32_t seq2 = published_.sequence.load (std::memory_order_acquire);
+        
+        // Return true only if sequence didn't change during copy (stable read)
+        if (seq1 == seq2 && seq1 != 0)
+            return true;
+        
+        // Sequence changed during copy (torn read) - retry to catch next stable frame
+        // Continue loop to retry
     }
     
-    // Second read to verify stability
-    const uint32_t seq2 = published_.sequence.load (std::memory_order_acquire);
-    
-    // Return true only if sequence didn't change during copy (stable read)
-    if (seq1 == seq2 && seq1 != 0)
-        return true;
-    
-    // Sequence changed during copy (torn read), caller can try again next timer tick
+    // After retries, return false (sequence kept changing, likely high update rate)
     return false;
 }

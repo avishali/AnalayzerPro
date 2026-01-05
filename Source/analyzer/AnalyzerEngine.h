@@ -36,7 +36,8 @@ public:
     /** Update parameters from APVTS (call from UI thread or parameter change callback) */
     void setFftSize (int fftSize);
     void setAveragingMs (float averagingMs);
-    void setHold (bool hold);
+    void setPeakHoldEnabled (bool enabled);
+    void setHold (bool hold);  // Freeze peaks (no decay when enabled)
     void setPeakDecayDbPerSec (float decayDbPerSec);
     
 private:
@@ -61,23 +62,21 @@ private:
     double currentSampleRate = 44100.0;
     bool prepared = false;
     
-    // Publish throttling for large FFT sizes (reduce UI update rate to prevent jitter)
-    int publishThrottleCounter_ = 0;
-    int publishThrottleDivisor_ = 1;  // Publish every Nth FFT frame (1 = every frame, 2 = every 2nd, etc.)
     
     // Smoothing and peak hold
     std::vector<float> smoothedMagnitude;
     std::vector<float> peakHold;
-    std::vector<int> peakHoldCounter;
     
     // Per-frame computation buffers (resized in initializeFFT, reused to avoid allocations)
     std::vector<float> magnitudes_;
     std::vector<float> dbValues_;
+    std::vector<float> dbRaw_;  // Raw (unsmoothed) dB for peak tracking
     
     float smoothingCoeff = 0.9f;  // EMA retention coefficient (derived from averagingMs)
     float averagingMs_ = 100.0f;  // Current averaging time (ms) for recalculation after FFT size changes
     float peakDecayDbPerSec = 1.0f;
-    bool holdEnabled = false;
+    bool peakHoldEnabled_ = true;  // Whether peaks overlay is displayed and tracked
+    bool freezePeaks_ = false;      // Freeze peaks (no decay when enabled)
     
     void initializeFFT (int fftSize);
     void updateSmoothingCoeff (float averagingMs, double sampleRate);
@@ -85,7 +84,7 @@ private:
     void computeFFT();
     void applyWindow();
     void convertToDb (const float* magnitudes, float* dbOut, int numBins);
-    void updatePeakHold (const float* dbIn, float* peakOut, int* counters, int numBins);
+    void updatePeakHold (const float* dbRawIn, float* peakOut, int numBins);
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AnalyzerEngine)
 };

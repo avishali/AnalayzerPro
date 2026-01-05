@@ -129,6 +129,72 @@ void RTADisplay::setNoData (const juce::String& reason)
     repaint();
 }
 
+void RTADisplay::setDisplayGainDb (float db)
+{
+    displayGainDb = juce::jlimit (-24.0f, 24.0f, db);
+#if JUCE_DEBUG
+    DBG ("DisplayGain=" << displayGainDb << "dB");
+#endif
+    repaint();
+}
+
+void RTADisplay::setTiltMode (TiltMode mode)
+{
+    tiltMode = mode;
+    repaint();
+}
+
+float RTADisplay::computeTiltDb (float freqHz) const
+{
+    // For DC (i==0) or very low frequencies, no tilt
+    if (freqHz <= 0.0f)
+        return 0.0f;
+    
+    // Clamp frequency to minimum before log2
+    const float clampedFreq = juce::jmax (1.0f, freqHz);
+    
+    // Reference frequency: 1000 Hz
+    constexpr float f0 = 1000.0f;
+    
+    // Compute octaves from reference
+    const float octaves = std::log2 (clampedFreq / f0);
+    
+    // Apply tilt based on mode
+    float slopeDbPerOct = 0.0f;
+    switch (tiltMode)
+    {
+        case TiltMode::Flat:
+            slopeDbPerOct = 0.0f;
+            break;
+        case TiltMode::Pink:
+            // Pink noise has -3 dB/oct slope, so apply +3 dB/oct compensation to flatten it
+            slopeDbPerOct = +3.0f;
+            break;
+        case TiltMode::White:
+            // White noise is flat in power/Hz, but apply -3 dB/oct for perceptual compensation
+            slopeDbPerOct = -3.0f;
+            break;
+    }
+    
+    return slopeDbPerOct * octaves;
+}
+
+float RTADisplay::dbToYWithCompensation (float db, float freqHz, const RenderState& s) const
+{
+    // Apply display gain and tilt compensation
+    const float tiltDb = computeTiltDb (freqHz);
+    const float dbWithCompensation = db + displayGainDb + tiltDb;
+    
+    // Clamp to display range
+    const float clampedDb = juce::jlimit (s.bottomDb, s.topDb, dbWithCompensation);
+    
+    const float range = s.topDb - s.bottomDb;
+    if (range <= 0.0f)
+        return plotAreaTop;
+    const float normalized = (s.topDb - clampedDb) / range;
+    return plotAreaTop + normalized * plotAreaHeight;
+}
+
 void RTADisplay::checkStructuralGeneration (uint32_t currentGen)
 {
     if (currentGen != lastStructuralGen)
@@ -301,10 +367,15 @@ float RTADisplay::freqToX (float freqHz, const RenderState& s) const
 
 float RTADisplay::dbToY (float db, const RenderState& s) const
 {
+    // Apply display gain offset (UI-only, affects rendering, not DSP)
+    const float dbWithGain = db + displayGainDb;
+    // Clamp to display range
+    const float clampedDb = juce::jlimit (s.bottomDb, s.topDb, dbWithGain);
+    
     const float range = s.topDb - s.bottomDb;
     if (range <= 0.0f)
         return plotAreaTop;
-    const float normalized = (s.topDb - db) / range;
+    const float normalized = (s.topDb - clampedDb) / range;
     return plotAreaTop + normalized * plotAreaHeight;  // Uses member variables for geometry
 }
 
@@ -602,7 +673,8 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s)
     g.setColour (juce::Colours::cyan.withAlpha (0.7f));
     for (size_t i = 0; i < s.bandsDb.size() && i < bandGeometry.size(); ++i)
     {
-        const float db = juce::jlimit (s.bottomDb, s.topDb, s.bandsDb[i]);
+        // Apply display gain in dbToY, so just pass raw dB (clamping happens in dbToY)
+        const float db = s.bandsDb[i];
         const float y = dbToY (db, s);
         const float bottomY = plotAreaTop + plotAreaHeight;
 
@@ -624,7 +696,8 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s)
 
         for (size_t i = 0; i < s.bandsPeakDb.size() && i < bandGeometry.size(); ++i)
         {
-            const float db = juce::jlimit (s.bottomDb, s.topDb, s.bandsPeakDb[i]);
+            // Apply display gain in dbToY, so just pass raw dB (clamping happens in dbToY)
+            const float db = s.bandsPeakDb[i];
             const float x = bandGeometry[i].xCenter;
             const float y = dbToY (db, s);
 
@@ -720,7 +793,8 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s)
         const float xL = freqToX (fL, s);
         const float xR = freqToX (fR, s);
         
-        const float db = juce::jlimit (s.bottomDb, s.topDb, s.logDb[i]);
+        // Apply display gain in dbToY, so just pass raw dB (clamping happens in dbToY)
+        const float db = s.logDb[i];
         const float y = dbToY (db, s);
         const float bottomY = plotAreaTop + plotAreaHeight;
 
@@ -742,7 +816,8 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s)
             // Compute center frequency from index
             const float centerFreq = computeLogFreqFromIndex (i, numBands, s.minHz, s.maxHz);
             const float x = freqToX (centerFreq, s);
-            const float db = juce::jlimit (s.bottomDb, s.topDb, s.logPeakDb[i]);
+            // Apply display gain in dbToY, so just pass raw dB (clamping happens in dbToY)
+            const float db = s.logPeakDb[i];
             const float y = dbToY (db, s);
 
             if (!pathStarted)
@@ -812,8 +887,9 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s)
             continue;
 
         const float x = freqToX (freq, s);  // B5: Use log mapping for FFT (matches grid)
-        const float db = juce::jlimit (s.bottomDb, s.topDb, s.fftDb[i]);  // B5: Clamp dB to range
-        const float y = dbToY (db, s);
+        // Apply display gain and tilt compensation (frequency-dependent)
+        const float db = s.fftDb[i];
+        const float y = dbToYWithCompensation (db, freq, s);
 
         if (!pathStarted)
         {
@@ -843,8 +919,9 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s)
                 continue;
 
             const float x = freqToX (freq, s);  // B5: Use log mapping for FFT (matches grid)
-            const float db = juce::jlimit (s.bottomDb, s.topDb, s.fftPeakDb[i]);  // B5: Clamp dB to range
-            const float y = dbToY (db, s);
+            // Apply display gain and tilt compensation (frequency-dependent)
+            const float db = s.fftPeakDb[i];
+            const float y = dbToYWithCompensation (db, freq, s);
 
             if (!pathStarted)
             {

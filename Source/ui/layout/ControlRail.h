@@ -41,6 +41,10 @@ private:
     juce::ToggleButton holdButton;
     juce::Label peakDecayLabel;
     juce::Slider peakDecaySlider;
+    juce::Label displayGainLabel;
+    juce::Slider displayGainSlider;
+    juce::Label tiltLabel;
+    juce::ComboBox tiltCombo;
     
     // Display section (placeholder)
     juce::Label placeholderLabel3;

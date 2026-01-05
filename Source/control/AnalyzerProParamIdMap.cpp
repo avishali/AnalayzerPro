@@ -11,6 +11,8 @@ ap::control::ParamIdMap ap::control::makeDefaultParamIdMap()
     m[ap::control::ControlId::AnalyzerAveraging] = "Averaging";
     m[ap::control::ControlId::AnalyzerHold] = "Hold";
     m[ap::control::ControlId::AnalyzerPeakDecay] = "PeakDecay";
+    m[ap::control::ControlId::AnalyzerDisplayGain] = "DisplayGain";
+    m[ap::control::ControlId::AnalyzerTilt] = "Tilt";
     
     return [m](ap::control::ControlId id) -> juce::String
     {

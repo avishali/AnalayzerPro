@@ -109,6 +109,30 @@ ControlRail::ControlRail()
     peakDecaySlider.setRange (0.0, 10.0, 0.1);
     peakDecaySlider.setValue (1.0, juce::dontSendNotification);
     addAndMakeVisible (peakDecaySlider);
+    
+    displayGainLabel.setText ("Display Gain", juce::dontSendNotification);
+    displayGainLabel.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
+    displayGainLabel.setJustificationType (juce::Justification::centredLeft);
+    displayGainLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    addAndMakeVisible (displayGainLabel);
+    
+    displayGainSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    displayGainSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 40, 16);
+    displayGainSlider.setRange (-24.0, 24.0, 0.5);
+    displayGainSlider.setValue (0.0, juce::dontSendNotification);
+    addAndMakeVisible (displayGainSlider);
+    
+    tiltLabel.setText ("Tilt", juce::dontSendNotification);
+    tiltLabel.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
+    tiltLabel.setJustificationType (juce::Justification::centredLeft);
+    tiltLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    addAndMakeVisible (tiltLabel);
+    
+    tiltCombo.addItem ("Flat", 1);
+    tiltCombo.addItem ("Pink", 2);
+    tiltCombo.addItem ("White", 3);
+    tiltCombo.setSelectedId (1, juce::dontSendNotification);  // Default: Flat
+    addAndMakeVisible (tiltCombo);
 }
 
 ControlRail::~ControlRail() = default;
@@ -125,6 +149,8 @@ void ControlRail::setControlBinder (AnalyzerPro::ControlBinder& binder)
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerAveraging, averagingCombo);
         controlBinder->bindToggle (AnalyzerPro::ControlId::AnalyzerHold, holdButton);
         controlBinder->bindSlider (AnalyzerPro::ControlId::AnalyzerPeakDecay, peakDecaySlider);
+        controlBinder->bindSlider (AnalyzerPro::ControlId::AnalyzerDisplayGain, displayGainSlider);
+        controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerTilt, tiltCombo);
     }
 }
 
@@ -184,6 +210,12 @@ void ControlRail::resized()
     peakDecayLabel.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
     y += secondaryHeight;
     peakDecaySlider.setBounds (bounds.getX(), y, bounds.getWidth(), 18);
+    y += 18 + 4;
+    
+    // Display Gain
+    displayGainLabel.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
+    y += secondaryHeight;
+    displayGainSlider.setBounds (bounds.getX(), y, bounds.getWidth(), 18);
     y += 18 + sectionSpacing;
 
     // Section 3: Display
