@@ -23,13 +23,12 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
 
+    /** Set display mode (read-only mirror - reflects current mode from right-side control) */
     void setDisplayMode (DisplayMode m);
-
-    std::function<void(DisplayMode)> onDisplayModeChanged;
 
 private:
     juce::Label titleLabel;
-    juce::ComboBox modeBox;
+    juce::Label modeLabel;  // Read-only label showing current mode (replaces interactive modeBox)
     juce::TextButton presetButton;
     juce::TextButton saveButton;
     juce::TextButton menuButton;

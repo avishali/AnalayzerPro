@@ -1,5 +1,6 @@
 #include "MainView.h"
 #include "../PluginProcessor.h"
+#include "analyzer/rta1_import/RTADisplay.h"
 
 //==============================================================================
 MainView::MainView (AnalayzerProAudioProcessor& p, juce::AudioProcessorValueTreeState* apvts)
@@ -25,29 +26,16 @@ MainView::MainView (AnalayzerProAudioProcessor& p, juce::AudioProcessorValueTree
         apvts->addParameterListener ("Averaging", this);
         apvts->addParameterListener ("Hold", this);
         apvts->addParameterListener ("PeakDecay", this);
+        apvts->addParameterListener ("DisplayGain", this);
+        apvts->addParameterListener ("Tilt", this);
     }
 
-    // Wire HeaderBar mode selector to AnalyzerDisplayView
-    header_.onDisplayModeChanged = [this](HeaderBar::DisplayMode m)
-    {
-        // Map HeaderBar::DisplayMode to AnalyzerDisplayView::Mode
-        AnalyzerDisplayView::Mode viewMode = AnalyzerDisplayView::Mode::FFT;
-        switch (m)
-        {
-            case HeaderBar::DisplayMode::FFT:
-                viewMode = AnalyzerDisplayView::Mode::FFT;
-                break;
-            case HeaderBar::DisplayMode::Band:
-                viewMode = AnalyzerDisplayView::Mode::BAND;
-                break;
-            case HeaderBar::DisplayMode::Log:
-                viewMode = AnalyzerDisplayView::Mode::LOG;
-                break;
-        }
-        analyzerView_.setMode (viewMode);
-    };
-
-    // Set default mode to FFT
+    // HeaderBar mode label is now read-only (mirror only)
+    // Right-side Mode control is the single source of truth
+    // Set initial header label to match default mode
+    header_.setDisplayMode (HeaderBar::DisplayMode::FFT);
+    
+    // Set default mode to FFT (right-side control will update header via parameterChanged)
     analyzerView_.setMode (AnalyzerDisplayView::Mode::FFT);
 
     setSize (800, 600);
@@ -73,10 +61,9 @@ void MainView::shutdown()
         apvts_->removeParameterListener ("Averaging", this);
         apvts_->removeParameterListener ("Hold", this);
         apvts_->removeParameterListener ("PeakDecay", this);
+        apvts_->removeParameterListener ("DisplayGain", this);
+        apvts_->removeParameterListener ("Tilt", this);
     }
-    
-    // Clear lambda callbacks that capture 'this'
-    header_.onDisplayModeChanged = nullptr;
     
     // Shutdown child views that have timers/listeners
     analyzerView_.shutdown();
@@ -91,25 +78,49 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     // Handle parameter changes on UI thread (safe to call AnalyzerEngine setters)
     if (parameterID == "Mode")
     {
+        // Right-side Mode control is the single source of truth
         // Convert choice index to AnalyzerDisplayView::Mode (FFT=0, BANDS=1, LOG=2)
         const int index = juce::roundToInt (newValue);
         AnalyzerDisplayView::Mode viewMode = AnalyzerDisplayView::Mode::FFT;
+        HeaderBar::DisplayMode headerMode = HeaderBar::DisplayMode::FFT;
         switch (index)
         {
             case 0:
                 viewMode = AnalyzerDisplayView::Mode::FFT;
+                headerMode = HeaderBar::DisplayMode::FFT;
                 break;
             case 1:
                 viewMode = AnalyzerDisplayView::Mode::BAND;
+                headerMode = HeaderBar::DisplayMode::Band;
                 break;
             case 2:
                 viewMode = AnalyzerDisplayView::Mode::LOG;
+                headerMode = HeaderBar::DisplayMode::Log;
                 break;
             default:
                 viewMode = AnalyzerDisplayView::Mode::FFT;
+                headerMode = HeaderBar::DisplayMode::FFT;
                 break;
         }
+        
+        // Update analyzer view (authoritative)
         analyzerView_.setMode (viewMode);
+        
+        // Sync header label (read-only mirror)
+        header_.setDisplayMode (headerMode);
+        
+#if JUCE_DEBUG
+        // Assertion: Verify mode sync
+        const AnalyzerDisplayView::Mode currentMode = analyzerView_.getMode();
+        const int expectedIndex = (currentMode == AnalyzerDisplayView::Mode::FFT) ? 0
+                                : (currentMode == AnalyzerDisplayView::Mode::BAND) ? 1 : 2;
+        if (expectedIndex != index)
+        {
+            DBG ("MODE SYNC ERROR: Right-side control index=" << index 
+                 << " but AnalyzerDisplayView mode=" << (currentMode == AnalyzerDisplayView::Mode::FFT ? "FFT" : (currentMode == AnalyzerDisplayView::Mode::BAND ? "BANDS" : "LOG")));
+            jassertfalse;
+        }
+#endif
     }
     else if (parameterID == "FftSize")
     {
@@ -135,6 +146,34 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     else if (parameterID == "PeakDecay")
     {
         audioProcessor.getAnalyzerEngine().setPeakDecayDbPerSec (newValue);
+    }
+    else if (parameterID == "DisplayGain")
+    {
+        // Display gain is UI-only, applied to RTADisplay (not AnalyzerEngine)
+        analyzerView_.getRTADisplay().setDisplayGainDb (newValue);
+    }
+    else if (parameterID == "Tilt")
+    {
+        // Tilt is UI-only, applied to RTADisplay (not AnalyzerEngine)
+        // Convert choice index to TiltMode (Flat=0, Pink=1, White=2)
+        const int index = juce::roundToInt (newValue);
+        RTADisplay::TiltMode tiltMode = RTADisplay::TiltMode::Flat;
+        switch (index)
+        {
+            case 0:
+                tiltMode = RTADisplay::TiltMode::Flat;
+                break;
+            case 1:
+                tiltMode = RTADisplay::TiltMode::Pink;
+                break;
+            case 2:
+                tiltMode = RTADisplay::TiltMode::White;
+                break;
+            default:
+                tiltMode = RTADisplay::TiltMode::Flat;
+                break;
+        }
+        analyzerView_.getRTADisplay().setTiltMode (tiltMode);
     }
 }
 

@@ -393,6 +393,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
         1.0f,  // Default: 1.0 dB/sec
         "Peak Decay (dB/s)"));
     
+    // Analyzer Display Gain (-24..+24 dB, default 0.0 dB, step 0.5 dB)
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "DisplayGain", "Display Gain",
+        juce::NormalisableRange<float> (-24.0f, 24.0f, 0.5f),
+        0.0f,  // Default: 0.0 dB
+        "Display Gain (dB)"));
+    
+    // Analyzer Tilt (choice: Flat=0, Pink=1, White=2)
+    params.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "Tilt", "Tilt",
+        juce::StringArray { "Flat", "Pink", "White" },
+        0,  // Default: Flat (index 0)
+        "Tilt"));
+    
     return { params.begin(), params.end() };
 }
 
