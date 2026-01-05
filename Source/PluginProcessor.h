@@ -1,19 +1,23 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <atomic>
 #include "parameters/Parameters.h"
+#include "analyzer/AnalyzerEngine.h"
 
 //==============================================================================
 /**
-    Audio Processor Template.
-    Replace this with your plugin's audio processing logic.
+    Audio Processor for AnalyzerPro plugin.
+    Effect plugin with stereo input/output buses (or mono if selected).
+    Analyzes audio input and displays FFT/BANDS/LOG spectrum.
 */
-class PluginTemplateAudioProcessor : public juce::AudioProcessor
+class AnalayzerProAudioProcessor : public juce::AudioProcessor,
+                                    public juce::AudioProcessorValueTreeState::Listener
 {
 public:
     //==============================================================================
-    PluginTemplateAudioProcessor();
-    ~PluginTemplateAudioProcessor() override;
+    AnalayzerProAudioProcessor();
+    ~AnalayzerProAudioProcessor() override;
 
     //==============================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -46,14 +50,42 @@ public:
     //==============================================================================
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
+    
+    //==============================================================================
+    void parameterChanged (const juce::String& parameterID, float newValue) override;
 
     //==============================================================================
     Parameters& getParameters() { return parameters; }
     const Parameters& getParameters() const { return parameters; }
 
+    //==============================================================================
+    AnalyzerEngine& getAnalyzerEngine() noexcept { return analyzerEngine; }
+    const AnalyzerEngine& getAnalyzerEngine() const noexcept { return analyzerEngine; }
+
+    //==============================================================================
+    juce::AudioProcessorValueTreeState& getAPVTS() noexcept { return apvts; }
+    const juce::AudioProcessorValueTreeState& getAPVTS() const noexcept { return apvts; }
+    
+    //==============================================================================
+    // TEMP ROUTING PROBE: remove after FFT confirmed.
+    /** Get input RMS level in dB (for debug overlay) */
+    float getUiInputRmsDb() const noexcept;
+    /** Get input peak level in dB (for debug overlay) */
+    float getUiInputPeakDb() const noexcept;
+    /** Get number of input channels (for debug overlay) */
+    int getUiNumCh() const noexcept;
+
 private:
     //==============================================================================
     Parameters parameters;
+    AnalyzerEngine analyzerEngine;
+    
+    // APVTS for analyzer controls
+    juce::AudioProcessorValueTreeState apvts;
+    
+    // Parameter creation helper
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginTemplateAudioProcessor)
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AnalayzerProAudioProcessor)
 };

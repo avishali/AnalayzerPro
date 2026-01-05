@@ -1,0 +1,862 @@
+#include "RTADisplay.h"
+#include <cmath>
+#include <type_traits>
+#include <cstdint>
+#include <cmath>
+#include <algorithm>
+#include <limits>
+#include <juce_gui_basics/juce_gui_basics.h>
+
+//==============================================================================
+RTADisplay::RTADisplay()
+{
+    labelFont = juce::Font (juce::FontOptions().withHeight (12.0f));
+    smallFont = juce::Font (juce::FontOptions().withHeight (10.0f));
+    // Initialize state with defaults
+    state.minHz = 20.0f;
+    state.maxHz = 20000.0f;
+    state.topDb = 0.0f;
+    state.bottomDb = -90.0f;
+    // Initialize coordinate mapping factors
+    logMinFreq = std::log10 (state.minHz);
+    logFreqRange = std::log10 (state.maxHz) - logMinFreq;
+    dbRange = state.topDb - state.bottomDb;
+}
+
+RTADisplay::~RTADisplay() = default;
+
+//==============================================================================
+void RTADisplay::setBandData (const std::vector<float>& currentDb, const std::vector<float>* peakDbNullable)
+{
+    // B1: Every setter updates state fields and calls repaint()
+    state.bandsDb = currentDb;
+    if (peakDbNullable != nullptr)
+        state.bandsPeakDb = *peakDbNullable;
+    else
+        state.bandsPeakDb.clear();
+    state.status = DataStatus::Ok;
+    repaint();
+}
+
+void RTADisplay::setViewMode (int mode)
+{
+    if (state.viewMode != mode)
+    {
+        state.viewMode = mode;
+        geometryValid = false;
+        hoveredBandIndex = -1;  // A3: Clear hover on view change
+        repaint();
+    }
+}
+
+void RTADisplay::setFFTData (const std::vector<float>& fftBinsDb, const std::vector<float>* peakBinsDbNullable)
+{
+    // B1: Every setter updates state fields and calls repaint()
+    state.fftDb = fftBinsDb;
+    if (peakBinsDbNullable != nullptr)
+        state.fftPeakDb = *peakBinsDbNullable;
+    else
+        state.fftPeakDb.clear();
+    state.status = DataStatus::Ok;
+    repaint();
+}
+
+void RTADisplay::setLogData (const std::vector<float>& logBandsDb, const std::vector<float>* peakBandsDbNullable)
+{
+    // B1: Every setter updates state fields and calls repaint()
+    // B4: No logCentersHz stored - will compute from index on-the-fly in paint
+    state.logDb = logBandsDb;
+    if (peakBandsDbNullable != nullptr)
+        state.logPeakDb = *peakBandsDbNullable;
+    else
+        state.logPeakDb.clear();
+    state.status = DataStatus::Ok;
+    repaint();
+}
+
+void RTADisplay::setBandCenters (const std::vector<float>& centersHz)
+{
+    // B1: Every setter updates state fields and calls repaint()
+    // B7: updateGeometry() called from setter (message thread), not from paint
+    state.bandCentersHz = centersHz;
+    geometryValid = false;  // A3: Mark geometry dirty
+    hoveredBandIndex = -1;  // A3: Clear hover on centers change
+    updateGeometry();  // B7: Allowed here (message thread)
+    repaint();
+}
+
+// B4: setLogCenters() removed - log centers computed on-the-fly from index
+// This method is no longer needed, but kept for API compatibility (no-op)
+void RTADisplay::setLogCenters (const std::vector<float>&)
+{
+    // B4: Log mode computes centers on-the-fly, no storage needed
+    // No-op for API compatibility
+}
+
+void RTADisplay::setFftMeta (double sampleRate, int fftSize)
+{
+    // B1: Every setter updates state
+    state.sampleRate = sampleRate;
+    state.fftSize = fftSize;
+    repaint();
+}
+
+void RTADisplay::setFrequencyRange (float minHz, float maxHz)
+{
+    // B1: Every setter updates state
+    state.minHz = minHz;
+    state.maxHz = maxHz;
+    logMinFreq = std::log10 (state.minHz);
+    logFreqRange = std::log10 (state.maxHz) - logMinFreq;
+    geometryValid = false;
+    repaint();
+}
+
+void RTADisplay::setDbRange (float top, float bottom)
+{
+    // B1: Every setter updates state
+    state.topDb = top;
+    state.bottomDb = bottom;
+    dbRange = state.topDb - state.bottomDb;
+    repaint();
+}
+
+void RTADisplay::setNoData (const juce::String& reason)
+{
+    // B1: Every setter updates state
+    state.status = DataStatus::NoData;
+    state.noDataReason = reason;
+    repaint();
+}
+
+void RTADisplay::checkStructuralGeneration (uint32_t currentGen)
+{
+    if (currentGen != lastStructuralGen)
+    {
+        lastStructuralGen = currentGen;
+        // Clear cached state on structural change
+        hoveredBandIndex = -1;
+        geometryValid = false;
+        bandGeometry.clear();
+        // Clear state data arrays to force re-validation
+        state.bandsDb.clear();
+        state.bandsPeakDb.clear();
+        state.bandCentersHz.clear();
+        state.logDb.clear();
+        state.logPeakDb.clear();
+        state.fftDb.clear();
+        state.fftPeakDb.clear();
+        // Set NoData status
+        state.status = DataStatus::NoData;
+        state.noDataReason = "structural change";
+        repaint();
+    }
+}
+
+#if JUCE_DEBUG
+void RTADisplay::setDebugInfo (int viewMode, size_t fftSize, size_t logSize, size_t bandsSize,
+                                bool fftValid, bool logValid, bool bandsValid, uint32_t structuralGen,
+                                int bandMode, float minDb, float maxDb, float peakMinDb, float peakMaxDb)
+{
+    debugViewMode = viewMode;
+    debugFFTSize = fftSize;
+    debugLogSize = logSize;
+    debugBandsSize = bandsSize;
+    debugFFTValid = fftValid;
+    debugLogValid = logValid;
+    debugBandsValid = bandsValid;
+    debugStructuralGen = structuralGen;
+    debugBandMode = bandMode;
+    debugMinDb = minDb;
+    debugMaxDb = maxDb;
+    debugPeakMinDb = peakMinDb;
+    debugPeakMaxDb = peakMaxDb;
+}
+#endif
+
+//==============================================================================
+void RTADisplay::resized()
+{
+    updateGeometry();
+}
+
+void RTADisplay::updateGeometry()
+{
+    // B2: Geometry cache derived only from state + component bounds, never mutated in paint
+    // B7: Never called from paint - only from resized() and setBandCenters()
+    
+    auto bounds = getLocalBounds().toFloat();
+    
+    // Reserve space for labels
+    const float leftMargin = 50.0f;
+    const float rightMargin = 10.0f;
+    const float topMargin = 10.0f;
+    const float bottomMargin = 30.0f;
+
+    plotAreaLeft = leftMargin;
+    plotAreaTop = topMargin;
+    plotAreaWidth = bounds.getWidth() - leftMargin - rightMargin;
+    plotAreaHeight = bounds.getHeight() - topMargin - bottomMargin;
+
+    // B2: Guardrails - if bounds too small, clear geometry
+    if (plotAreaWidth <= 1.0f || plotAreaHeight <= 1.0f)
+    {
+        bandGeometry.clear();
+        geometryValid = false;
+        return;
+    }
+
+    // B2: Update band geometry - only read from state.bandCentersHz
+    if (state.bandCentersHz.empty())
+    {
+        bandGeometry.clear();
+        geometryValid = true;  // Valid but empty
+        return;
+    }
+    
+    bandGeometry.resize (state.bandCentersHz.size());
+
+    for (size_t i = 0; i < state.bandCentersHz.size(); ++i)
+    {
+        const float centerFreq = state.bandCentersHz[i];
+        float xCenter = frequencyToX (centerFreq);  // Uses member variables (logMinFreq, logFreqRange, etc.)
+
+        // Compute band width from adjacent bands or use fixed ratio
+        float xLeft, xRight;
+        if (i == 0)
+        {
+            // First band: use next band or fixed width
+            if (state.bandCentersHz.size() > 1)
+            {
+                const float nextCenter = frequencyToX (state.bandCentersHz[1]);
+                const float width = (nextCenter - xCenter) * 0.5f;
+                xLeft = xCenter - width;
+                xRight = xCenter + width;
+            }
+            else
+            {
+                xLeft = xCenter - 5.0f;
+                xRight = xCenter + 5.0f;
+            }
+        }
+        else if (i == state.bandCentersHz.size() - 1)
+        {
+            // Last band: use previous band
+            const float prevCenter = frequencyToX (state.bandCentersHz[i - 1]);
+            const float width = (xCenter - prevCenter) * 0.5f;
+            xLeft = xCenter - width;
+            xRight = xCenter + width;
+        }
+        else
+        {
+            // Middle bands: use adjacent centers
+            const float prevCenter = frequencyToX (state.bandCentersHz[i - 1]);
+            const float nextCenter = frequencyToX (state.bandCentersHz[i + 1]);
+            xLeft = (prevCenter + xCenter) * 0.5f;
+            xRight = (xCenter + nextCenter) * 0.5f;
+        }
+
+        // Clamp to plot area
+        xLeft = juce::jmax (plotAreaLeft, xLeft);
+        xRight = juce::jmin (plotAreaLeft + plotAreaWidth, xRight);
+
+        bandGeometry[i].xCenter = xCenter;
+        bandGeometry[i].xLeft = xLeft;
+        bandGeometry[i].xRight = xRight;
+    }
+
+    geometryValid = true;
+}
+
+//==============================================================================
+float RTADisplay::frequencyToX (float freqHz) const
+{
+    // B2: Guardrails - handle invalid log ranges
+    if (freqHz <= 0.0f || logFreqRange <= 0.0f)
+        return plotAreaLeft;
+    
+    const float logFreq = std::log10 (freqHz);
+    const float normalized = (logFreq - logMinFreq) / logFreqRange;
+    return plotAreaLeft + normalized * plotAreaWidth;
+}
+
+//==============================================================================
+// Helper functions for paint methods (use RenderState for data, member vars for geometry)
+float RTADisplay::freqToX (float freqHz, const RenderState& s) const
+{
+    // B2: Guardrails - handle invalid log ranges
+    if (freqHz <= 0.0f || s.maxHz <= s.minHz || s.minHz <= 0.0f)
+        return plotAreaLeft;
+    
+    const float logMin = std::log10 (s.minHz);
+    const float logMax = std::log10 (s.maxHz);
+    const float logRange = logMax - logMin;
+    if (logRange <= 0.0f)
+        return plotAreaLeft;
+    
+    const float logFreq = std::log10 (freqHz);
+    const float normalized = (logFreq - logMin) / logRange;
+    return plotAreaLeft + normalized * plotAreaWidth;  // Uses member variables for geometry
+}
+
+float RTADisplay::dbToY (float db, const RenderState& s) const
+{
+    const float range = s.topDb - s.bottomDb;
+    if (range <= 0.0f)
+        return plotAreaTop;
+    const float normalized = (s.topDb - db) / range;
+    return plotAreaTop + normalized * plotAreaHeight;  // Uses member variables for geometry
+}
+
+float RTADisplay::computeLogFreqFromIndex (int index, int numBands, float minHz, float maxHz) const
+{
+    // B4: Compute log frequency from index (for log mode rendering)
+    if (numBands <= 0 || index < 0 || index >= numBands)
+        return minHz;
+    
+    const float logMin = std::log10 (minHz);
+    const float logMax = std::log10 (maxHz);
+    const float logRange = logMax - logMin;
+    const float logPos = logMin + (static_cast<float> (index) + 0.5f) / static_cast<float> (numBands) * logRange;
+    return std::pow (10.0f, logPos);
+}
+
+int RTADisplay::findNearestLogBand (float x, const RenderState& s) const
+{
+    // B6: Find nearest log band index from x position
+    if (x < plotAreaLeft || x > plotAreaLeft + plotAreaWidth || s.logDb.empty())
+        return -1;
+    
+    const float logMin = std::log10 (s.minHz);
+    const float logMax = std::log10 (s.maxHz);
+    const float logRange = logMax - logMin;
+    if (logRange <= 0.0f)
+        return -1;
+    
+    // Inverse mapping: x -> normalized -> log position -> index
+    const float normalized = (x - plotAreaLeft) / plotAreaWidth;
+    const float logPos = logMin + normalized * logRange;
+    
+    // Map log position directly to index (no need to compute freq)
+    const float normFromFreq = (logPos - logMin) / logRange;
+    const int numBands = static_cast<int> (s.logDb.size());
+    const int idx = juce::jlimit (0, numBands - 1, static_cast<int> (normFromFreq * numBands));
+    
+    return idx;
+}
+
+int RTADisplay::findNearestBand (float x) const
+{
+    // B6: Only used for Bands mode - uses bandGeometry
+    if (!geometryValid || bandGeometry.empty())
+        return -1;
+
+    int nearest = -1;
+    float minDist = std::numeric_limits<float>::max();
+
+    for (size_t i = 0; i < bandGeometry.size(); ++i)
+    {
+        const float dist = std::abs (x - bandGeometry[i].xCenter);
+        if (dist < minDist)
+        {
+            minDist = dist;
+            nearest = static_cast<int> (i);
+        }
+    }
+
+    return nearest;
+}
+
+//==============================================================================
+void RTADisplay::mouseMove (const juce::MouseEvent& e)
+{
+    // B6: Make mouseMove safe and mode-aware without relying on bandGeometry in modes that don't have it
+    const float x = static_cast<float> (e.x);
+    int newHovered = -1;
+    
+    if (state.viewMode == 2)  // Bands mode
+    {
+        // Only use bandGeometry + state.bandCentersHz for Bands mode
+        if (!geometryValid || bandGeometry.empty() || state.bandsDb.empty() || state.bandCentersHz.empty() ||
+            state.bandsDb.size() != state.bandCentersHz.size() || bandGeometry.size() != state.bandCentersHz.size())
+        {
+            hoveredBandIndex = -1;
+            return;
+        }
+        
+        // Find nearest band using geometry
+        newHovered = findNearestBand (x);
+        newHovered = juce::jlimit (-1, static_cast<int> (state.bandsDb.size()) - 1, newHovered);
+    }
+    else if (state.viewMode == 1)  // Log mode
+    {
+        // B6: For Log mode, compute hovered index from x using inverse log mapping
+        if (state.logDb.empty())
+        {
+            hoveredBandIndex = -1;
+            return;
+        }
+        
+        newHovered = findNearestLogBand (x, state);
+    }
+    else  // FFT mode (viewMode == 0)
+    {
+        // B6: For FFT mode: either disable hover (set hovered=-1) or map to nearest freq/bin (optional)
+        // For now, disable hover in FFT mode
+        newHovered = -1;
+    }
+    
+    if (newHovered != hoveredBandIndex)
+    {
+        hoveredBandIndex = newHovered;
+        repaint();
+    }
+}
+
+void RTADisplay::mouseExit (const juce::MouseEvent&)
+{
+    if (hoveredBandIndex >= 0)
+    {
+        hoveredBandIndex = -1;
+        repaint();
+    }
+}
+
+//==============================================================================
+void RTADisplay::paint (juce::Graphics& g)
+{
+    // B3: Use local references to state (NO mutations)
+    const auto& s = state;
+    
+    // Background
+    g.fillAll (juce::Colours::black);
+
+    // Draw grid (always draw grid)
+    drawGrid (g, s);
+
+    // If no data, show message and return
+    if (s.status == DataStatus::NoData)
+    {
+        g.setColour (juce::Colours::yellow);
+        g.setFont (smallFont);
+        const juce::String message = "NO DATA: " + s.noDataReason;
+        g.drawText (message, getLocalBounds(), juce::Justification::centred);
+        return;
+    }
+
+    // B3: Render based on view mode using local references (NO state mutations)
+    if (s.viewMode == 2)  // Bands mode
+    {
+        // Validate sizes before painting
+        if (s.bandsDb.empty() || s.bandCentersHz.empty() || 
+            s.bandsDb.size() != s.bandCentersHz.size())
+        {
+            g.setColour (juce::Colours::yellow);
+            g.setFont (smallFont);
+            g.drawText ("NO DATA: BANDS size mismatch", getLocalBounds(), juce::Justification::centred);
+            return;
+        }
+        paintBandsMode (g, s);
+    }
+    else if (s.viewMode == 1)  // Log mode
+    {
+        // Validate log data exists
+        if (s.logDb.empty())
+        {
+            g.setColour (juce::Colours::yellow);
+            g.setFont (smallFont);
+            g.drawText ("NO DATA: LOG empty", getLocalBounds(), juce::Justification::centred);
+            return;
+        }
+        paintLogMode (g, s);
+    }
+    else  // FFT mode (viewMode == 0)
+    {
+        // Validate FFT data exists
+        if (s.fftDb.empty())
+        {
+            g.setColour (juce::Colours::yellow);
+            g.setFont (smallFont);
+            g.drawText ("NO DATA: FFT empty", getLocalBounds(), juce::Justification::centred);
+            return;
+        }
+        paintFFTMode (g, s);
+    }
+
+#if JUCE_DEBUG
+    // Draw debug overlay (top-left corner)
+    juce::String modeStr = (debugViewMode == 0) ? "FFT" : ((debugViewMode == 1) ? "LOG" : "BANDS");
+    juce::String bandModeStr = (debugBandMode == 0) ? "1/3 Oct" : "1 Oct";
+    juce::String debugText;
+    debugText += "Mode: " + modeStr;
+    if (debugViewMode == 2)
+        debugText += " (" + bandModeStr + ")";
+    debugText += "\n";
+    debugText += "Gen: " + juce::String (debugStructuralGen) + "\n";
+    debugText += "FFT: " + juce::String (debugFFTSize) + " " + (debugFFTValid ? "ok" : "X") + "\n";
+    debugText += "LOG: " + juce::String (debugLogSize) + " " + (debugLogValid ? "ok" : "X") + "\n";
+    debugText += "BANDS: " + juce::String (debugBandsSize) + " " + (debugBandsValid ? "ok" : "X");
+    if (debugViewMode == 2 && debugBandsSize > 0)
+    {
+        debugText += "\n";
+        debugText += "dB: " + juce::String (debugMinDb, 1) + " to " + juce::String (debugMaxDb, 1);
+        if (debugPeakMaxDb > debugMinDb)
+            debugText += "\nPeak: " + juce::String (debugPeakMinDb, 1) + " to " + juce::String (debugPeakMaxDb, 1);
+    }
+    
+    g.setColour (juce::Colours::yellow.withAlpha (0.8f));
+    g.setFont (smallFont);
+    const int textWidth = 180;
+    const int textHeight = 140;
+    const int margin = 10;
+    g.drawText (debugText,
+                margin, margin,
+                textWidth, textHeight,
+                juce::Justification::topLeft);
+#endif
+}
+
+// Helper functions defined above (freqToX, dbToY, computeLogFreqFromIndex, findNearestLogBand)
+
+//==============================================================================
+void RTADisplay::drawGrid (juce::Graphics& g, const RenderState& s)
+{
+    // B3: Pure function - uses only state reference, no member mutations
+    // Draw dB grid lines
+    g.setColour (juce::Colours::grey.withAlpha (0.3f));
+    for (int db = static_cast<int> (s.topDb); db >= static_cast<int> (s.bottomDb); db -= 6)
+    {
+        const float y = dbToY (static_cast<float> (db), s);
+        if (y >= plotAreaTop && y <= plotAreaTop + plotAreaHeight)
+        {
+            const bool isMajor = (db % 12 == 0);
+            g.setColour (isMajor ? juce::Colours::grey.withAlpha (0.5f) : juce::Colours::grey.withAlpha (0.2f));
+            g.drawHorizontalLine (static_cast<int> (y), plotAreaLeft, plotAreaLeft + plotAreaWidth);
+
+            // Label major lines
+            if (isMajor)
+            {
+                g.setColour (juce::Colours::lightgrey);
+                g.setFont (smallFont);
+                g.drawText (juce::String (db) + " dB",
+                           static_cast<int> (plotAreaLeft - 45),
+                           static_cast<int> (y - 7),
+                           40, 14,
+                           juce::Justification::centredRight);
+            }
+        }
+    }
+
+    // Draw frequency grid lines (log spacing)
+    const float freqGridPoints[] = { 20.0f, 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f, 20000.0f };
+    g.setColour (juce::Colours::grey.withAlpha (0.3f));
+    for (float freq : freqGridPoints)
+    {
+        if (freq >= s.minHz && freq <= s.maxHz)
+        {
+            const float x = freqToX (freq, s);
+            g.drawVerticalLine (static_cast<int> (x), plotAreaTop, plotAreaTop + plotAreaHeight);
+
+            // Label at bottom
+            g.setColour (juce::Colours::lightgrey);
+            g.setFont (smallFont);
+            juce::String label;
+            if (freq >= 1000.0f)
+                label = juce::String (freq / 1000.0f, 1) + "k";
+            else
+                label = juce::String (static_cast<int> (freq));
+            g.drawText (label,
+                       static_cast<int> (x - 20),
+                       static_cast<int> (plotAreaTop + plotAreaHeight + 2),
+                       40, 14,
+                       juce::Justification::centred);
+        }
+    }
+}
+
+//==============================================================================
+void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s)
+{
+    // B3: Pure function - uses only state reference, no member mutations
+    // B7: Never calls updateGeometry() from paint
+    if (!geometryValid || s.bandCentersHz.empty() || s.bandsDb.empty())
+        return;
+    
+    // Check size mismatch
+    if (s.bandsDb.size() != s.bandCentersHz.size() || 
+        bandGeometry.size() != s.bandCentersHz.size())
+        return;
+    
+    // B3: Decide locally if peaks should be drawn (no state mutation)
+    const bool hasPeaks = (s.bandsPeakDb.size() == s.bandsDb.size() && !s.bandsPeakDb.empty());
+    
+    // Draw thin vertical markers at each band center frequency (subtle)
+    g.setColour (juce::Colours::grey.withAlpha (0.2f));
+    for (size_t i = 0; i < s.bandCentersHz.size() && i < bandGeometry.size(); ++i)
+    {
+        const float x = bandGeometry[i].xCenter;
+        g.drawVerticalLine (static_cast<int> (x), plotAreaTop, plotAreaTop + plotAreaHeight);
+    }
+
+    // Draw band bars
+    g.setColour (juce::Colours::cyan.withAlpha (0.7f));
+    for (size_t i = 0; i < s.bandsDb.size() && i < bandGeometry.size(); ++i)
+    {
+        const float db = juce::jlimit (s.bottomDb, s.topDb, s.bandsDb[i]);
+        const float y = dbToY (db, s);
+        const float bottomY = plotAreaTop + plotAreaHeight;
+
+        if (y < bottomY)
+        {
+            g.fillRect (bandGeometry[i].xLeft,
+                       y,
+                       bandGeometry[i].xRight - bandGeometry[i].xLeft,
+                       bottomY - y);
+        }
+    }
+
+    // Draw peak trace (using local hasPeaks boolean, NO state mutation)
+    if (hasPeaks)
+    {
+        g.setColour (juce::Colours::yellow.withAlpha (0.8f));
+        juce::Path peakPath;
+        bool pathStarted = false;
+
+        for (size_t i = 0; i < s.bandsPeakDb.size() && i < bandGeometry.size(); ++i)
+        {
+            const float db = juce::jlimit (s.bottomDb, s.topDb, s.bandsPeakDb[i]);
+            const float x = bandGeometry[i].xCenter;
+            const float y = dbToY (db, s);
+
+            if (!pathStarted)
+            {
+                peakPath.startNewSubPath (x, y);
+                pathStarted = true;
+            }
+            else
+            {
+                peakPath.lineTo (x, y);
+            }
+        }
+
+        g.strokePath (peakPath, juce::PathStrokeType (1.5f));
+    }
+
+    // Draw cursor and readout (with defensive bounds checking)
+    if (hoveredBandIndex >= 0 
+        && hoveredBandIndex < static_cast<int> (s.bandsDb.size()) 
+        && hoveredBandIndex < static_cast<int> (bandGeometry.size())
+        && hoveredBandIndex < static_cast<int> (s.bandCentersHz.size()))
+    {
+        const int safeIndex = hoveredBandIndex;
+        const float x = bandGeometry[safeIndex].xCenter;
+        const float currentDb = s.bandsDb[safeIndex];
+        const float peakDb = (hasPeaks && safeIndex < static_cast<int> (s.bandsPeakDb.size()))
+            ? s.bandsPeakDb[safeIndex] : -1000.0f;
+        const float centerFreq = s.bandCentersHz[safeIndex];
+
+        // Vertical cursor line
+        g.setColour (juce::Colours::white.withAlpha (0.5f));
+        g.drawVerticalLine (static_cast<int> (x), plotAreaTop, plotAreaTop + plotAreaHeight);
+
+        // Tooltip box
+        const float tooltipX = juce::jmin (x + 10.0f, plotAreaLeft + plotAreaWidth - 120.0f);
+        const float tooltipY = plotAreaTop + 10.0f;
+        const float tooltipW = 110.0f;
+        const float tooltipH = hasPeaks ? 50.0f : 35.0f;
+
+        g.setColour (juce::Colours::black.withAlpha (0.8f));
+        g.fillRoundedRectangle (tooltipX, tooltipY, tooltipW, tooltipH, 4.0f);
+        g.setColour (juce::Colours::white);
+        g.drawRoundedRectangle (tooltipX, tooltipY, tooltipW, tooltipH, 4.0f, 1.0f);
+
+        g.setFont (smallFont);
+        g.setColour (juce::Colours::white);
+
+        // Format frequency
+        juce::String freqStr;
+        if (centerFreq >= 1000.0f)
+            freqStr = juce::String (centerFreq / 1000.0f, 2) + " kHz";
+        else
+            freqStr = juce::String (centerFreq, 1) + " Hz";
+
+        g.drawText ("Fc: " + freqStr, static_cast<int> (tooltipX + 5), static_cast<int> (tooltipY + 5), 100, 12, juce::Justification::left);
+        g.drawText ("Cur: " + juce::String (currentDb, 1) + " dB", static_cast<int> (tooltipX + 5), static_cast<int> (tooltipY + 18), 100, 12, juce::Justification::left);
+        
+        if (hasPeaks && peakDb > s.bottomDb)
+            g.drawText ("Peak: " + juce::String (peakDb, 1) + " dB", static_cast<int> (tooltipX + 5), static_cast<int> (tooltipY + 31), 100, 12, juce::Justification::left);
+    }
+}
+
+//==============================================================================
+void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s)
+{
+    // B3: Pure function - uses only state reference, no member mutations
+    // B4: Compute log centers on-the-fly from index (no logCentersHz storage)
+    // B7: Never calls updateGeometry() from paint
+    
+    if (s.logDb.empty())
+        return;
+    
+    const int numBands = static_cast<int> (s.logDb.size());
+    const float logMin = std::log10 (s.minHz);
+    const float logMax = std::log10 (s.maxHz);
+    const float logRange = logMax - logMin;
+    
+    // B3: Decide locally if peaks should be drawn (no state mutation)
+    const bool hasPeaks = (s.logPeakDb.size() == s.logDb.size() && !s.logPeakDb.empty());
+    
+    // B4: Draw band bars - compute x positions from index on-the-fly
+    g.setColour (juce::Colours::cyan.withAlpha (0.7f));
+    for (int i = 0; i < numBands; ++i)
+    {
+        // Compute left/right boundaries in log space
+        const float logPosLow = logMin + (logRange * static_cast<float> (i)) / static_cast<float> (numBands);
+        const float logPosHigh = logMin + (logRange * static_cast<float> (i + 1)) / static_cast<float> (numBands);
+        const float fL = std::pow (10.0f, logPosLow);
+        const float fR = std::pow (10.0f, logPosHigh);
+        
+        // Map to x coordinates
+        const float xL = freqToX (fL, s);
+        const float xR = freqToX (fR, s);
+        
+        const float db = juce::jlimit (s.bottomDb, s.topDb, s.logDb[i]);
+        const float y = dbToY (db, s);
+        const float bottomY = plotAreaTop + plotAreaHeight;
+
+        if (y < bottomY && xR > xL)
+        {
+            g.fillRect (xL, y, xR - xL, bottomY - y);
+        }
+    }
+
+    // B4: Draw peak trace - compute centers from index on-the-fly
+    if (hasPeaks)
+    {
+        g.setColour (juce::Colours::yellow.withAlpha (0.8f));
+        juce::Path peakPath;
+        bool pathStarted = false;
+
+        for (int i = 0; i < numBands; ++i)
+        {
+            // Compute center frequency from index
+            const float centerFreq = computeLogFreqFromIndex (i, numBands, s.minHz, s.maxHz);
+            const float x = freqToX (centerFreq, s);
+            const float db = juce::jlimit (s.bottomDb, s.topDb, s.logPeakDb[i]);
+            const float y = dbToY (db, s);
+
+            if (!pathStarted)
+            {
+                peakPath.startNewSubPath (x, y);
+                pathStarted = true;
+            }
+            else
+            {
+                peakPath.lineTo (x, y);
+            }
+        }
+
+        g.strokePath (peakPath, juce::PathStrokeType (1.5f));
+    }
+    
+    // B6: Cursor support in log mode (optional - can be added later if needed)
+    // For now, log mode hover is disabled (hoveredBandIndex handled in mouseMove)
+}
+
+//==============================================================================
+void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s)
+{
+    // B3: Pure function - uses only state reference, no member mutations
+    // B5: FFT mode uses log mapping to match grid scale
+    // B7: Never calls updateGeometry() from paint
+    
+    if (s.fftDb.empty() || s.fftSize <= 0 || s.sampleRate <= 0.0)
+        return;
+
+    // B3: Decide locally if peaks should be drawn (no state mutation)
+    const bool hasPeaks = (s.fftPeakDb.size() == s.fftDb.size() && !s.fftPeakDb.empty());
+
+    // B5: Draw FFT spectrum as polyline using log mapping (matches grid)
+    g.setColour (juce::Colours::cyan.withAlpha (0.7f));
+    juce::Path spectrumPath;
+    bool pathStarted = false;
+
+    const int numBins = static_cast<int> (s.fftDb.size());
+    // Calculate frequency per bin: binHz = i * (sampleRate / fftSize)
+    const double binWidthHz = s.sampleRate / static_cast<double> (s.fftSize);
+
+#if JUCE_DEBUG
+    // Compute min/max for debug overlay (throttled logging)
+    static uint64_t lastMinMaxLogMs = 0;
+    const uint64_t nowMs = static_cast<uint64_t> (juce::Time::getMillisecondCounterHiRes());
+    if (nowMs - lastMinMaxLogMs > 1000 && !s.fftDb.empty())  // Once per second
+    {
+        float minDb = s.fftDb[0];
+        float maxDb = s.fftDb[0];
+        for (float db : s.fftDb)
+        {
+            minDb = juce::jmin (minDb, db);
+            maxDb = juce::jmax (maxDb, db);
+        }
+        DBG ("FFT range: min=" + juce::String (minDb, 1) + " dB max=" + juce::String (maxDb, 1) + " dB");
+        lastMinMaxLogMs = nowMs;
+    }
+#endif
+
+    for (int i = 0; i < numBins; ++i)
+    {
+        // Calculate actual frequency for this bin: binHz = i * (sampleRate / fftSize)
+        const float freq = static_cast<float> (i * binWidthHz);
+        // B5: Skip bins outside [minHz..maxHz]
+        if (freq < s.minHz || freq > s.maxHz)
+            continue;
+
+        const float x = freqToX (freq, s);  // B5: Use log mapping for FFT (matches grid)
+        const float db = juce::jlimit (s.bottomDb, s.topDb, s.fftDb[i]);  // B5: Clamp dB to range
+        const float y = dbToY (db, s);
+
+        if (!pathStarted)
+        {
+            spectrumPath.startNewSubPath (x, y);
+            pathStarted = true;
+        }
+        else
+        {
+            spectrumPath.lineTo (x, y);
+        }
+    }
+
+    g.strokePath (spectrumPath, juce::PathStrokeType (1.5f));
+
+    // B5: Draw peak trace if available (using local hasPeaks boolean, NO state mutation)
+    if (hasPeaks)
+    {
+        g.setColour (juce::Colours::yellow.withAlpha (0.8f));
+        juce::Path peakPath;
+        pathStarted = false;
+
+        for (int i = 0; i < numBins; ++i)
+        {
+            // Calculate actual frequency for this bin: binHz = i * (sampleRate / fftSize)
+            const float freq = static_cast<float> (i * binWidthHz);
+            if (freq < s.minHz || freq > s.maxHz)
+                continue;
+
+            const float x = freqToX (freq, s);  // B5: Use log mapping for FFT (matches grid)
+            const float db = juce::jlimit (s.bottomDb, s.topDb, s.fftPeakDb[i]);  // B5: Clamp dB to range
+            const float y = dbToY (db, s);
+
+            if (!pathStarted)
+            {
+                peakPath.startNewSubPath (x, y);
+                pathStarted = true;
+            }
+            else
+            {
+                peakPath.lineTo (x, y);
+            }
+        }
+
+        g.strokePath (peakPath, juce::PathStrokeType (1.0f));
+    }
+}

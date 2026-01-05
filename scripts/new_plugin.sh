@@ -56,8 +56,8 @@ python3 <<PY
 from pathlib import Path
 
 pairs = {
-    "PluginTemplateAudioProcessor": f"{PLUGIN_NAME}AudioProcessor",
-    "PluginTemplateAudioProcessorEditor": f"{PLUGIN_NAME}AudioProcessorEditor",
+    "AnalayzerProAudioProcessor": f"{PLUGIN_NAME}AudioProcessor",
+    "AnalayzerProAudioProcessorEditor": f"{PLUGIN_NAME}AudioProcessorEditor",
 }
 
 files = list(Path("Source").rglob("*.h")) + list(Path("Source").rglob("*.cpp"))

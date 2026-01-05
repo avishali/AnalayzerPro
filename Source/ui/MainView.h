@@ -5,6 +5,12 @@
 #include <ui_core/UiCore.h>
 #include "hardware/PluginHardwareAdapter.h"
 #include "hardware/PluginHardwareOutputAdapter.h"
+#include "../control/AnalyzerProControlContext.h"
+#include "layout/HeaderBar.h"
+#include "layout/ControlRail.h"
+#include "layout/FooterBar.h"
+#include "analyzer/AnalyzerDisplayView.h"
+#include "views/PhaseCorrelationView.h"
 #include <memory>
 
 //==============================================================================
@@ -12,57 +18,49 @@
     Main UI view component.
     Contains the plugin's user interface elements.
 */
-class MainView : public juce::Component
+class MainView : public juce::Component,
+                  public juce::AudioProcessorValueTreeState::Listener
 {
 public:
-    explicit MainView (PluginTemplateAudioProcessor& p);
+    explicit MainView (AnalayzerProAudioProcessor& p, juce::AudioProcessorValueTreeState* apvts);
     ~MainView() override;
+    
+    //==============================================================================
+    void parameterChanged (const juce::String& parameterID, float newValue) override;
+
+    AnalyzerPro::ControlBinder& controlBinder() noexcept { return controls_.getBinder(); }
+    const AnalyzerPro::ControlBinder& controlBinder() const noexcept { return controls_.getBinder(); }
+
+    AnalyzerPro::UiState& controlUiState() noexcept { return controls_.getUiState(); }
+    const AnalyzerPro::UiState& controlUiState() const noexcept { return controls_.getUiState(); }
 
     void paint (juce::Graphics&) override;
     void resized() override;
-    bool keyPressed (const juce::KeyPress& key) override;
+
+    /** Shutdown: stop timers, clear callbacks, detach listeners. Safe to call multiple times. */
+    void shutdown();
 
 private:
-    PluginTemplateAudioProcessor& audioProcessor;
+    bool isShutdown = false;
+    AnalayzerProAudioProcessor& audioProcessor;
+    juce::AudioProcessorValueTreeState* apvts_ = nullptr;
+    AnalyzerPro::control::AnalyzerProControlContext controls_;
 
-    juce::Label gainLabel;
-    juce::Slider gainSlider;
-    juce::Label outputLabel;
-    juce::Slider outputSlider;
+    HeaderBar header_;
+    ControlRail rail_;
+    FooterBar footer_;
+    AnalyzerDisplayView analyzerView_;
+    PhaseCorrelationView phaseView_;
 
-    ui_core::FocusManager focusManager;
-    ui_core::BindingRegistry bindingRegistry;
-    std::unique_ptr<PluginHardwareAdapter> hardwareAdapter;
-    std::unique_ptr<PluginHardwareOutputAdapter> hardwareOutput;
-
-    // Focus state: tracks which control is focused (0 = none)
-    ui_core::ControlId focusedControlId = 0;
-
-    // Adapter object that FocusManager can call
-    struct FocusFlagAdapter : ui_core::Focusable
-    {
-        ui_core::ControlId controlId = 0;
-        ui_core::ControlId* focusedControlIdPtr = nullptr;
-        juce::Component* repaintTarget = nullptr;
-        void setFocused (bool focused) override
-        {
-            if (focusedControlIdPtr)
-            {
-                if (focused)
-                    *focusedControlIdPtr = controlId;
-                else if (*focusedControlIdPtr == controlId)
-                    *focusedControlIdPtr = 0;
-            }
-            if (repaintTarget)
-                repaintTarget->repaint();
-        }
-    };
-
-    FocusFlagAdapter gainFocusAdapter;
-    FocusFlagAdapter outputFocusAdapter;
-
-    void gainSliderChanged();
-    void outputSliderChanged();
+    // Temporary debug overlay rectangles
+    juce::Rectangle<int> debugOuter;
+    juce::Rectangle<int> debugContent;
+    juce::Rectangle<int> debugHeader;
+    juce::Rectangle<int> debugFooter;
+    juce::Rectangle<int> debugRail;
+    juce::Rectangle<int> debugLeft;
+    juce::Rectangle<int> debugAnalyzerTop;
+    juce::Rectangle<int> debugPhaseBottom;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainView)
 };

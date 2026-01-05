@@ -2,42 +2,38 @@
 #include "PluginEditor.h"
 
 //==============================================================================
-PluginTemplateAudioProcessorEditor::PluginTemplateAudioProcessorEditor (PluginTemplateAudioProcessor& p)
-    : AudioProcessorEditor (&p), audioProcessor (p), mainView (p)
+AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerProAudioProcessor& p)
+    : AudioProcessorEditor (&p), audioProcessor (p), mainView (p, &p.getAPVTS())
 {
     addAndMakeVisible (mainView);
-        // REPLACE — Source/PluginEditor.cpp (inside constructor)
-    setSize (audioProcessor.getParameters().getEditorWidth(),
-    audioProcessor.getParameters().getEditorHeight());
 
-
-         // ADD — PluginTemplateAudioProcessorEditor constructor (Source/PluginEditor.cpp)
-#if PLUGIN_EDITOR_RESIZABLE
+    // PAZ-like base size
+    static constexpr int kBaseW = 766;
+    static constexpr int kBaseH = 476;
+    
     setResizable (true, true);
-    setResizeLimits (360, 360, 900, 900);
-#endif
-    // END REPLACE  
+    setResizeLimits (kBaseW, kBaseH, 1000, 800);
+    setSize (kBaseW, kBaseH);
 }
 
 
-PluginTemplateAudioProcessorEditor::~PluginTemplateAudioProcessorEditor()
-{   
-         
+AnalayzerProAudioProcessorEditor::~AnalayzerProAudioProcessorEditor()
+{
+    // Shutdown MainView BEFORE destruction to stop timers and clear callbacks
+    mainView.shutdown();
+    
+    // Clear look and feel if set
+    setLookAndFeel (nullptr);
 }
 
 
 //==============================================================================
-void PluginTemplateAudioProcessorEditor::paint (juce::Graphics& g)
+void AnalayzerProAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
 }
 
-// ADD — Source/PluginEditor.cpp
-void PluginTemplateAudioProcessorEditor::resized()
+void AnalayzerProAudioProcessorEditor::resized()
 {
     mainView.setBounds (getLocalBounds());
-
-#if PLUGIN_EDITOR_RESIZABLE
-    audioProcessor.getParameters().setEditorSize (getWidth(), getHeight());
-#endif
 }
