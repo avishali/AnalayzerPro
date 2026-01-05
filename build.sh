@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Build script for JUCE Plugin Template
-# Configures and builds the plugin using CMake
+# Build script for AnalyzerPro
+# Configures and builds the plugin (AU, VST3) and standalone application using CMake
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-BUILD_DIR="build-template"
+BUILD_DIR="build"
 CONFIG="${1:-Release}"
 
 # Check if JUCE_PATH is set
@@ -26,10 +26,11 @@ if [ ! -d "$JUCE_PATH" ]; then
     exit 1
 fi
 
-echo "Building JUCE Plugin Template..."
+echo "Building AnalyzerPro..."
 echo "  Build directory: $BUILD_DIR"
 echo "  Configuration: $CONFIG"
 echo "  JUCE path: $JUCE_PATH"
+echo "  Formats: AU, VST3, Standalone"
 echo ""
 
 # Configure CMake
@@ -45,4 +46,12 @@ cmake --build "$BUILD_DIR" --config "$CONFIG" -j$(sysctl -n hw.ncpu 2>/dev/null 
 
 echo ""
 echo "Build complete!"
-echo "Plugin artifacts are in: $BUILD_DIR/PluginTemplate_artefacts/"
+echo ""
+echo "Plugin artifacts are in: $BUILD_DIR/AnalyzerPro_artefacts/"
+echo ""
+echo "Built formats:"
+if [ -d "$BUILD_DIR/AnalyzerPro_artefacts" ]; then
+    find "$BUILD_DIR/AnalyzerPro_artefacts" -type f -name "*.component" -o -name "*.vst3" -o -name "*.app" 2>/dev/null | while read -r file; do
+        echo "  - $file"
+    done
+fi

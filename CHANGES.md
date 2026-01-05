@@ -83,14 +83,14 @@ void Parameters::setState (const juce::ValueTree& state)
 class MainView : public juce::Component
 {
 public:
-    explicit MainView (PluginTemplateAudioProcessor& p);
+    explicit MainView (AnalayzerProAudioProcessor& p);
     ~MainView() override = default;
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
-    PluginTemplateAudioProcessor& audioProcessor;
+    AnalayzerProAudioProcessor& audioProcessor;
 
     juce::Label gainLabel;
     juce::Slider gainSlider;
@@ -106,7 +106,7 @@ private:
 #include "MainView.h"
 
 //==============================================================================
-MainView::MainView (PluginTemplateAudioProcessor& p)
+MainView::MainView (AnalayzerProAudioProcessor& p)
     : audioProcessor (p)
 {
     // Gain Label
@@ -190,7 +190,7 @@ void MainView::gainSliderChanged()
 
 **Replaced `getStateInformation()` method (lines 128-132):**
 ```cpp
-void PluginTemplateAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+void AnalayzerProAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::ignoreUnused (destData);
     // You should use this method to store your parameters in the memory block.
@@ -199,7 +199,7 @@ void PluginTemplateAudioProcessor::getStateInformation (juce::MemoryBlock& destD
 
 **With:**
 ```cpp
-void PluginTemplateAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+void AnalayzerProAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::ValueTree state ("PluginState");
     parameters.getState (state);
@@ -210,7 +210,7 @@ void PluginTemplateAudioProcessor::getStateInformation (juce::MemoryBlock& destD
 
 **Replaced `setStateInformation()` method (lines 134-138):**
 ```cpp
-void PluginTemplateAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+void AnalayzerProAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     juce::ignoreUnused (data, sizeInBytes);
     // You should use this method to restore your parameters from this memory block.
@@ -219,7 +219,7 @@ void PluginTemplateAudioProcessor::setStateInformation (const void* data, int si
 
 **With:**
 ```cpp
-void PluginTemplateAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+void AnalayzerProAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     auto tree = juce::ValueTree::readFromData (data, static_cast<size_t> (sizeInBytes));
     if (tree.isValid())
@@ -247,7 +247,7 @@ void PluginTemplateAudioProcessor::setStateInformation (const void* data, int si
 
 **Modified constructor (line 5-8), changed from:**
 ```cpp
-PluginTemplateAudioProcessorEditor::PluginTemplateAudioProcessorEditor (PluginTemplateAudioProcessor& p)
+AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerProAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
     setSize (400, 300);
@@ -256,7 +256,7 @@ PluginTemplateAudioProcessorEditor::PluginTemplateAudioProcessorEditor (PluginTe
 
 **To:**
 ```cpp
-PluginTemplateAudioProcessorEditor::PluginTemplateAudioProcessorEditor (PluginTemplateAudioProcessor& p)
+AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerProAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p), mainView (p)
 {
     addAndMakeVisible (mainView);
@@ -266,7 +266,7 @@ PluginTemplateAudioProcessorEditor::PluginTemplateAudioProcessorEditor (PluginTe
 
 **Replaced `paint()` method (lines 16-23):**
 ```cpp
-void PluginTemplateAudioProcessorEditor::paint (juce::Graphics& g)
+void AnalayzerProAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
 
@@ -278,7 +278,7 @@ void PluginTemplateAudioProcessorEditor::paint (juce::Graphics& g)
 
 **With:**
 ```cpp
-void PluginTemplateAudioProcessorEditor::paint (juce::Graphics& g)
+void AnalayzerProAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
 }
@@ -286,7 +286,7 @@ void PluginTemplateAudioProcessorEditor::paint (juce::Graphics& g)
 
 **Replaced `resized()` method (lines 25-29):**
 ```cpp
-void PluginTemplateAudioProcessorEditor::resized()
+void AnalayzerProAudioProcessorEditor::resized()
 {
     // This is where you'll lay out the positions of any
     // subcomponents in your editor..
@@ -295,7 +295,7 @@ void PluginTemplateAudioProcessorEditor::resized()
 
 **With:**
 ```cpp
-void PluginTemplateAudioProcessorEditor::resized()
+void AnalayzerProAudioProcessorEditor::resized()
 {
     mainView.setBounds (getLocalBounds());
 }
@@ -332,10 +332,10 @@ When using this template, you should search and replace the following tokens:
 
 ### Primary Rename Tokens:
 
-1. **`PluginTemplateAudioProcessor`** → Your plugin processor class name
+1. **`AnalayzerProAudioProcessor`** → Your plugin processor class name
    - Used in: `PluginProcessor.h`, `PluginProcessor.cpp`, `PluginEditor.h`, `PluginEditor.cpp`, `ui/MainView.h`, `ui/MainView.cpp`
 
-2. **`PluginTemplateAudioProcessorEditor`** → Your plugin editor class name
+2. **`AnalayzerProAudioProcessorEditor`** → Your plugin editor class name
    - Used in: `PluginEditor.h`, `PluginEditor.cpp`, `PluginProcessor.cpp`
 
 3. **`PluginTemplate`** → Your plugin name

@@ -1,23 +1,11 @@
-# JUCE Plugin Template CMakeLists.txt
-# This template can be used to create new JUCE plugins
-#
-# To use this template:
-# 1. Copy this entire folder to create a new plugin
-# 2. Rename the folder to your plugin name
-# 3. Update PLUGIN_NAME, COMPANY_NAME, PLUGIN_CODE, and MANUFACTURER_CODE below
-# 4. Update the source files in Source/ directory
-# 5. Run: cmake -S . -B build -DJUCE_PATH=/path/to/JUCE
-
 cmake_minimum_required(VERSION 3.22)
 
 # ==============================================================================
 # BUILD CONFIGURATION
 # ==============================================================================
 
-# Compile commands, useful for IDEs like VS Code, CLion, etc.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Minimum macOS deployment target
 if(APPLE)
     if(IOS)
         set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum OS X deployment version" FORCE)
@@ -26,44 +14,59 @@ if(APPLE)
     endif()
 endif()
 
-# Universal binary option (build for both x86_64 and arm64)
 option(UniversalBinary "Build universal binary for macOS" OFF)
 if(APPLE AND UniversalBinary AND NOT IOS)
     set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE INTERNAL "")
 endif()
 
-# Static linking in Windows
 if(WIN32)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 # ==============================================================================
-# PLUGIN CONFIGURATION - UPDATE THESE VALUES FOR YOUR PLUGIN
+# PLUGIN CONFIGURATION
 # ==============================================================================
-set(PLUGIN_NAME "PluginTemplate" CACHE STRING "Plugin name")
+
+set(PLUGIN_NAME "AnalyzerPro" CACHE STRING "Plugin name")
 set(PLUGIN_VERSION_MAJOR 1 CACHE STRING "Plugin version major")
 set(PLUGIN_VERSION_MINOR 0 CACHE STRING "Plugin version minor")
 set(PLUGIN_VERSION_PATCH 0 CACHE STRING "Plugin version patch")
-set(COMPANY_NAME "YourCompany" CACHE STRING "Company name")
-set(PLUGIN_CODE "Tmpl" CACHE STRING "4-character plugin code (e.g., Tmpl)")
-set(MANUFACTURER_CODE "Tmpl" CACHE STRING "4-character manufacturer code (e.g., Tmpl) - must have at least one uppercase letter")
+set(COMPANY_NAME "MelecDSP" CACHE STRING "Company name")
+set(PLUGIN_CODE "AnPr" CACHE STRING "4-character plugin code (e.g., Tmpl)")
+set(MANUFACTURER_CODE "Melc" CACHE STRING "4-character manufacturer code (e.g., Tmpl) - must have at least one uppercase letter")
 set(PRODUCT_NAME "${PLUGIN_NAME}" CACHE STRING "Product display name")
 
-# Plugin type configuration
 set(IS_SYNTH FALSE CACHE BOOL "Is this a synthesizer?")
 set(NEEDS_MIDI_INPUT FALSE CACHE BOOL "Does the plugin need MIDI input?")
 set(NEEDS_MIDI_OUTPUT FALSE CACHE BOOL "Does the plugin need MIDI output?")
 set(IS_MIDI_EFFECT FALSE CACHE BOOL "Is this a MIDI effect?")
 set(EDITOR_WANTS_KEYBOARD_FOCUS FALSE CACHE BOOL "Does the editor need keyboard focus?")
 
+# ==============================================================================
+# DEV MODE (define BEFORE first use)
+# ==============================================================================
+
+option(PLUGIN_DEV_MODE "Fast iteration dev mode (limits formats, disables LTO)" ON)
+
+if(PLUGIN_DEV_MODE)
+    set(PLUGIN_DEV_MODE_VALUE 1)
+    message(STATUS "Build mode: DEV (fast iteration)")
+else()
+    set(PLUGIN_DEV_MODE_VALUE 0)
+    message(STATUS "Build mode: RELEASE")
+endif()
+
 # Plugin formats to build
-set(PLUGIN_FORMATS "AU;VST3;Standalone" CACHE STRING "Plugin formats to build (AU, VST3, AAX, Standalone)")
+if(PLUGIN_DEV_MODE)
+    set(PLUGIN_FORMATS "VST3;Standalone" CACHE STRING "Plugin formats to build (AU, VST3, AAX, Standalone)" FORCE)
+else()
+    set(PLUGIN_FORMATS "AU;VST3;Standalone" CACHE STRING "Plugin formats to build (AU, VST3, AAX, Standalone)" FORCE)
+endif()
 
 # ==============================================================================
-# SDK PATHS - These can be set via environment variables or CMake cache
+# SDK PATHS
 # ==============================================================================
 
-# Default paths (can be overridden via -DJUCE_PATH)
 if(NOT DEFINED JUCE_PATH)
     if(DEFINED ENV{JUCE_PATH})
         set(JUCE_PATH "$ENV{JUCE_PATH}")
@@ -72,48 +75,64 @@ if(NOT DEFINED JUCE_PATH)
     endif()
 endif()
 
-# Convert to absolute path
 get_filename_component(JUCE_PATH "${JUCE_PATH}" ABSOLUTE)
 
-# Verify path exists
 if(NOT EXISTS "${JUCE_PATH}")
-    message(FATAL_ERROR "JUCE path not found: ${JUCE_PATH}\n"
-            "Please set JUCE_PATH environment variable or -DJUCE_PATH=/path/to/JUCE")
+    message(FATAL_ERROR "JUCE path not found: ${JUCE_PATH}\nPlease set JUCE_PATH env var or -DJUCE_PATH=/path/to/JUCE")
 endif()
 
 # ==============================================================================
 # PROJECT SETUP
 # ==============================================================================
 
-project(${PLUGIN_NAME} VERSION ${PLUGIN_VERSION_MAJOR}.${PLUGIN_VERSION_MINOR}.${PLUGIN_VERSION_PATCH} LANGUAGES C CXX)
+project(${PLUGIN_NAME}
+    VERSION ${PLUGIN_VERSION_MAJOR}.${PLUGIN_VERSION_MINOR}.${PLUGIN_VERSION_PATCH}
+    LANGUAGES C CXX
+)
 
-# Set C++ standard
-# ADD — CMakeLists.txt (root), after project(...)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Add CMake module path (for custom find scripts)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
 
-# ADD — CMakeLists.txt (root)
 option(PLUGIN_EDITOR_RESIZABLE "Enable mouse-resizable plugin editor" OFF)
 
-# Add JUCE
-# IMPORTANT: This references JUCE from the SDK path, it does NOT copy it.
-# The second parameter "${CMAKE_CURRENT_BINARY_DIR}/JUCE" tells CMake where to
-# place build artifacts for JUCE, but the source files remain in the original SDK location.
-# EXCLUDE_FROM_ALL prevents JUCE targets from being built unless they're dependencies.
+# Disable unity builds (best for incremental iteration)
+set(JUCE_BUILD_UNITY_PLUGIN OFF CACHE BOOL "Disable unity build for plugin targets" FORCE)
+
+# ==============================================================================
+# CMAKE SAFETY ASSERTS (fail early)
+# ==============================================================================
+
+# 1) Detect the classic footgun: putting control flow inside target_link_libraries(...)
+# This scans THIS CMakeLists.txt for "target_link_libraries(" followed by "if (" before the closing ")"
+# It's intentionally conservative; if it ever false-positives, you can loosen the regex.
+file(READ "${CMAKE_CURRENT_LIST_FILE}" _root_cmakelists_text)
+string(REGEX MATCH "target_link_libraries\\([^\\)]*\\n[^\\)]*\\n[^\\)]*if[ \\t]*\\(" _bad_tll "${_root_cmakelists_text}")
+if(_bad_tll)
+    message(FATAL_ERROR
+        "CMake safety check failed: Detected 'if()' inside a target_link_libraries(...) argument list.\n"
+        "Move the if() outside and call target_link_libraries() separately."
+    )
+endif()
+
+# ==============================================================================
+# JUCE
+# ==============================================================================
+
 add_subdirectory("${JUCE_PATH}" "${CMAKE_CURRENT_BINARY_DIR}/JUCE" EXCLUDE_FROM_ALL)
 
-# Add ui_core library
+# ==============================================================================
+# ui_core (OBJECT library + interface includes)
+# ==============================================================================
+
 add_subdirectory(ui_core)
 
 # ==============================================================================
 # PLUGIN TARGET
 # ==============================================================================
 
-# PLUGIN_FORMATS is already a CMake list (semicolon-separated), pass it directly
 juce_add_plugin(${PLUGIN_NAME}
     VERSION ${PROJECT_VERSION}
     COMPANY_NAME "${COMPANY_NAME}"
@@ -126,9 +145,9 @@ juce_add_plugin(${PLUGIN_NAME}
     PLUGIN_MANUFACTURER_CODE ${MANUFACTURER_CODE}
     PLUGIN_CODE ${PLUGIN_CODE}
     FORMATS ${PLUGIN_FORMATS}
-    PRODUCT_NAME "${PRODUCT_NAME}")
+    PRODUCT_NAME "${PRODUCT_NAME}"
+)
 
-# Add source files
 target_sources(${PLUGIN_NAME}
     PRIVATE
         Source/PluginProcessor.cpp
@@ -143,43 +162,88 @@ target_sources(${PLUGIN_NAME}
         Source/hardware/PluginHardwareAdapter.h
         Source/hardware/PluginHardwareOutputAdapter.cpp
         Source/hardware/PluginHardwareOutputAdapter.h
+        Source/control/ControlSpecs.cpp
+        Source/control/ControlBinder.cpp
+        Source/control/AnalyzerProParamIdMap.cpp
+        Source/control/AnalyzerProControlContext.cpp
+        Source/analyzer/AnalyzerEngine.cpp
+        Source/ui/analyzer/AnalyzerDisplayView.cpp
+        Source/ui/analyzer/rta1_import/RTADisplay.cpp
+        Source/ui/layout/HeaderBar.cpp
+        Source/ui/layout/ControlRail.cpp
+        Source/ui/layout/FooterBar.cpp
+        Source/ui/views/AnalyzerGridPlaceholder.cpp
+        Source/ui/views/PhaseCorrelationView.cpp
+        # ui_core OBJECT sources get added below via TARGET_OBJECTS
 )
-# ADD — CMakeLists.txt (root), after juce_add_plugin(...)
+
+# Pull ui_core's compiled objects into the plugin (fast iteration)
+# (ui_core_obj is defined in ui_core/CMakeLists.txt below)
+target_sources(${PLUGIN_NAME} PRIVATE $<TARGET_OBJECTS:ui_core_obj>)
+
 target_compile_features(${PLUGIN_NAME} PUBLIC cxx_std_17)
 
-# Include directories
 target_include_directories(${PLUGIN_NAME}
     PRIVATE
         Source
 )
 
-# Compile definitions
 target_compile_definitions(${PLUGIN_NAME}
     PUBLIC
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
-)
-
-# ADD — CMakeLists.txt (root), after juce_add_plugin() when ${PLUGIN_NAME} exists
-target_compile_definitions(${PLUGIN_NAME}
     PRIVATE
         $<$<BOOL:${PLUGIN_EDITOR_RESIZABLE}>:PLUGIN_EDITOR_RESIZABLE=1>
+        PLUGIN_DEV_MODE=${PLUGIN_DEV_MODE_VALUE}
 )
 
-
-# Link JUCE modules
+# Link JUCE modules + ui_core interface target (includes/defs)
 target_link_libraries(${PLUGIN_NAME}
     PRIVATE
         juce::juce_audio_utils
         juce::juce_gui_basics
         juce::juce_dsp
-        ui_core
     PUBLIC
+        ui_core                     # interface-only: include dirs + compile features/defs
         juce::juce_recommended_config_flags
-        juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+# Link LTO flags only for release builds (dev mode off)
+if(NOT PLUGIN_DEV_MODE)
+    target_link_libraries(${PLUGIN_NAME} PUBLIC juce::juce_recommended_lto_flags)
+endif()
+
+# ==============================================================================
+# TARGET GRAPH ASSERTS (fail early / readable)
+# ==============================================================================
+
+function(assert_target_not_self_linking tgt)
+    if(NOT TARGET "${tgt}")
+        message(FATAL_ERROR "Assert failed: target '${tgt}' does not exist yet.")
+    endif()
+
+    # Direct link libs
+    get_target_property(_ll "${tgt}" LINK_LIBRARIES)
+    if(_ll)
+        list(FIND _ll "${tgt}" _idx)
+        if(NOT _idx EQUAL -1)
+            message(FATAL_ERROR "CMake safety check failed: target '${tgt}' LINK_LIBRARIES contains itself.")
+        endif()
+    endif()
+
+    # Interface link libs
+    get_target_property(_ill "${tgt}" INTERFACE_LINK_LIBRARIES)
+    if(_ill)
+        list(FIND _ill "${tgt}" _iidx)
+        if(NOT _iidx EQUAL -1)
+            message(FATAL_ERROR "CMake safety check failed: target '${tgt}' INTERFACE_LINK_LIBRARIES contains itself.")
+        endif()
+    endif()
+endfunction()
+
+assert_target_not_self_linking(${PLUGIN_NAME})
 
 # ==============================================================================
 # STATUS MESSAGES
@@ -192,6 +256,7 @@ message(STATUS "  Name: ${PLUGIN_NAME}")
 message(STATUS "  Version: ${PROJECT_VERSION}")
 message(STATUS "  Company: ${COMPANY_NAME}")
 message(STATUS "  Formats: ${PLUGIN_FORMATS}")
+message(STATUS "  Dev Mode: ${PLUGIN_DEV_MODE}")
 message(STATUS "")
 message(STATUS "SDK Paths:")
 message(STATUS "  JUCE: ${JUCE_PATH}")

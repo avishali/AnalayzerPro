@@ -1,0 +1,151 @@
+# AI Governance Policy
+
+## Purpose
+This document defines how Artificial Intelligence tools (ChatGPT, Cursor, and similar agents) are permitted to be used in this repository.
+
+The goal is to:
+- Enable AI as a productivity multiplier
+- Prevent architectural drift
+- Preserve real-time, hardware-safe, and production-grade guarantees
+- Maintain clear human accountability
+
+AI is allowed **only** when governed by explicit process.
+
+---
+
+## Governing Documents (Required Reading)
+
+The following documents collectively define AI usage in this repository:
+
+1. **[`SOP.md`](../SOP.md)**  
+   Defines the mandatory Architecture → Implementation workflow.
+
+2. **[`docs/HANDOFF_TEMPLATE.md`](./HANDOFF_TEMPLATE.md)**  
+   Defines the required instruction format for AI implementation agents.
+
+3. **`Cursor System Prompt`**  
+   Enforces SOP compliance and scope discipline at execution time.
+
+4. **Pull Request Template**  
+   Requires disclosure, scope declaration, and Handoff linkage.
+
+These documents are mutually reinforcing. None may be bypassed.
+
+---
+
+## Approved AI Roles
+
+### ChatGPT — Architecture & Review
+Allowed responsibilities:
+- System and module architecture
+- Interface and contract design
+- Migration planning
+- Code review and risk analysis
+- Documentation drafting
+
+Disallowed responsibilities:
+- Direct implementation without a handoff
+- Silent scope expansion
+- Mixing design and execution
+
+---
+
+### Cursor (or Equivalent) — Implementation Agent
+Allowed responsibilities:
+- Mechanical code changes
+- Scoped refactors defined by a Handoff Package
+- CMake updates when explicitly instructed
+
+Disallowed responsibilities:
+- Inventing APIs or abstractions
+- Refactoring beyond defined scope
+- Making architectural decisions
+- “Improving” code without instruction
+
+Cursor must refuse work without a valid Handoff Package.
+
+---
+
+## Mandatory Workflow Summary
+
+1. **Intent Definition (Human)**
+   - Define objective, constraints, scope
+
+2. **Architecture Design (ChatGPT)**
+   - Produce system boundaries and contracts
+
+3. **Handoff Package Creation**
+   - Must use `HANDOFF_TEMPLATE.md`
+
+4. **Implementation (Cursor)**
+   - Execute instructions exactly
+   - Stop on ambiguity
+
+5. **Validation & Review**
+   - Human review
+   - SOP compliance check
+
+6. **Freeze & Document**
+   - When interfaces stabilize
+
+Skipping any step violates policy.
+
+---
+
+## Pull Request Requirements
+
+All non-trivial PRs must:
+- Link to a completed Handoff Package
+- Declare file scope (touched + forbidden)
+- Confirm SOP compliance
+- Disclose AI usage
+
+PRs may be rejected **without code review** if governance requirements are not met.
+
+---
+
+## Real-Time & Hardware Safety Rules
+
+AI-assisted changes must preserve:
+- No allocations, locks, or blocking I/O on the audio thread
+- Thread-safety assumptions
+- Deterministic behavior
+- Stable public interfaces
+
+Any uncertainty requires escalation before implementation.
+
+---
+
+## Enforcement
+
+Violations may result in:
+- PR rejection
+- Request for architectural rework
+- Temporary suspension of AI usage on the repository
+
+Repeated violations indicate misuse of AI tooling.
+
+---
+
+## Philosophy
+
+AI is treated as:
+- A junior implementation engineer
+- A powerful drafting tool
+- A reviewer assistant
+
+AI is **not**:
+- A system architect
+- A decision-maker
+- A substitute for engineering judgment
+
+Architecture is intentional.  
+Implementation is mechanical.  
+Accountability remains human.
+
+---
+
+## Amendments
+
+This policy may evolve as tooling and workflows mature.  
+Changes require explicit approval and documentation updates.
