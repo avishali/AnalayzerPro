@@ -11,7 +11,7 @@ AnalyzerEngine::AnalyzerEngine()
 
 AnalyzerEngine::~AnalyzerEngine() = default;
 
-void AnalyzerEngine::prepare (double sampleRate, int samplesPerBlock)
+void AnalyzerEngine::prepare (double sampleRate, int /* samplesPerBlock */)
 {
     currentSampleRate = sampleRate;
     
@@ -290,7 +290,8 @@ void AnalyzerEngine::updatePeakHold (const float* dbRawIn, float* peakOut, int n
     if (!peakHoldEnabled_)
     {
         // Clear peaks to floor when disabled
-        std::fill (peakOut, peakOut + numBins, kDbFloor);
+        const std::size_t numBinsSz = static_cast<std::size_t> (numBins);
+        std::fill (peakOut, peakOut + numBinsSz, kDbFloor);
         return;
     }
     
