@@ -4,7 +4,7 @@
 FooterBar::FooterBar()
 {
     statusLabel.setText ("Ready", juce::dontSendNotification);
-    statusLabel.setFont (juce::Font (11.0f));
+    statusLabel.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
     statusLabel.setJustificationType (juce::Justification::centredLeft);
     statusLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
     addAndMakeVisible (statusLabel);
