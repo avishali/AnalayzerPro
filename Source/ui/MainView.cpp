@@ -1,6 +1,7 @@
 #include "MainView.h"
 #include "../PluginProcessor.h"
 #include "analyzer/rta1_import/RTADisplay.h"
+#include <mdsp_ui/Theme.h>
 
 //==============================================================================
 MainView::MainView (AnalayzerProAudioProcessor& p, juce::AudioProcessorValueTreeState* apvts)
@@ -179,8 +180,9 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
 
 void MainView::paint (juce::Graphics& g)
 {
-    // Dark background
-    g.fillAll (juce::Colours::black);
+    // Dark background (proof usage: mdsp_ui::Theme)
+    mdsp_ui::Theme theme;
+    g.fillAll (theme.background);
 
     // Temporary debug overlay
     g.setFont (juce::Font (10.0f));

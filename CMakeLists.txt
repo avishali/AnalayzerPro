@@ -128,6 +128,21 @@ add_subdirectory("${JUCE_PATH}" "${CMAKE_CURRENT_BINARY_DIR}/JUCE" EXCLUDE_FROM_
 # ==============================================================================
 
 add_subdirectory(ui_core)
+# ==============================================================================
+# MelechDSP shared modules (via submodule)
+# ==============================================================================
+
+add_subdirectory(
+    third_party/melechdsp-hq/shared/mdsp_core
+)
+
+add_subdirectory(
+    third_party/melechdsp-hq/shared/mdsp_ui
+)
+
+add_subdirectory(
+    third_party/melechdsp-hq/shared/mdsp_dsp
+)
 
 # ==============================================================================
 # PLUGIN TARGET
@@ -204,8 +219,11 @@ target_link_libraries(${PLUGIN_NAME}
         juce::juce_audio_utils
         juce::juce_gui_basics
         juce::juce_dsp
+        mdsp_ui
+        mdsp_dsp
     PUBLIC
-        ui_core                     # interface-only: include dirs + compile features/defs
+        ui_core
+        mdsp_core
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
 )
