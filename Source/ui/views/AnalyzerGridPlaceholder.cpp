@@ -1,4 +1,6 @@
 #include "AnalyzerGridPlaceholder.h"
+#include <mdsp_ui/Theme.h>
+#include <mdsp_ui/GridRenderer.h>
 
 //==============================================================================
 AnalyzerGridPlaceholder::AnalyzerGridPlaceholder()
@@ -10,28 +12,23 @@ AnalyzerGridPlaceholder::~AnalyzerGridPlaceholder() = default;
 void AnalyzerGridPlaceholder::paint (juce::Graphics& g)
 {
     auto bounds = getLocalBounds();
+    mdsp_ui::Theme theme;
 
     // Dark blue-ish background
-    g.fillAll (juce::Colour (0xff0a1520));
+    g.fillAll (theme.panel);
 
-    // Draw simple grid
-    g.setColour (juce::Colours::darkgrey.withAlpha (0.2f));
-    const int gridSpacing = 40;
-
-    // Vertical lines
-    for (int x = gridSpacing; x < bounds.getWidth(); x += gridSpacing)
-    {
-        g.drawVerticalLine (x, 0.0f, static_cast<float> (bounds.getHeight()));
-    }
-
-    // Horizontal lines
-    for (int y = gridSpacing; y < bounds.getHeight(); y += gridSpacing)
-    {
-        g.drawHorizontalLine (y, 0.0f, static_cast<float> (bounds.getWidth()));
-    }
-
+    // Draw grid using GridRenderer
+    mdsp_ui::GridRenderer grid (mdsp_ui::GridStyle {
+        .minorSpacingPx = 40,
+        .majorEvery     = 5,
+        .minorAlpha     = 0.25f,
+        .majorAlpha     = 0.45f,
+        .thickness      = 1.0f,
+        .drawMajor      = true
+    });
+    grid.draw (g, bounds, theme);
     // Caption
-    g.setColour (juce::Colours::lightgrey.withAlpha (0.6f));
+    g.setColour (theme.textMuted.withAlpha (0.90f));
     g.setFont (juce::Font (juce::FontOptions().withHeight (12.0f)));
     g.drawText ("FFT / RTA Display (placeholder)", bounds.reduced (8).removeFromTop (20),
                 juce::Justification::centredLeft);
