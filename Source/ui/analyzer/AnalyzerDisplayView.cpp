@@ -258,7 +258,7 @@ void AnalyzerDisplayView::convertFFTToBands (const AnalyzerSnapshot& snapshot, s
             // Convert dB to linear power for averaging
             const std::size_t idx = static_cast<std::size_t> (bin);
             const float db = snapshot.fftDb[idx];
-            const float power = static_cast<float> (std::pow (10.0, static_cast<double> (db) / 10.0));
+            const float power = std::pow (10.0f, db / 10.0f);
             sumPower += power;
             binCount++;
             
@@ -301,8 +301,8 @@ void AnalyzerDisplayView::convertFFTToLog (const AnalyzerSnapshot& snapshot, std
     const int numBins = snapshot.numBins;
     const double binWidthHz = sampleRate / static_cast<double> (fftSize);
     
-    const double logMin = std::log10 (minFreq);
-    const double logMax = std::log10 (maxFreq);
+    const double logMin = std::log10 (static_cast<double> (minFreq));
+    const double logMax = std::log10 (static_cast<double> (maxFreq));
     const double logRange = logMax - logMin;
     
     for (int logIdx = 0; logIdx < numLogBins; ++logIdx)
@@ -346,7 +346,7 @@ void AnalyzerDisplayView::convertFFTToLog (const AnalyzerSnapshot& snapshot, std
         {
             const std::size_t idx = static_cast<std::size_t> (bin);
             const float db = snapshot.fftDb[idx];
-            const float power = static_cast<float> (std::pow (10.0, static_cast<double> (db) / 10.0));
+            const float power = std::pow (10.0f, db / 10.0f);
             sumPower += power;
             binCount++;
         }
