@@ -1,4 +1,5 @@
 #include "PhaseCorrelationView.h"
+#include <mdsp_ui/Theme.h>
 
 //==============================================================================
 PhaseCorrelationView::PhaseCorrelationView()
@@ -10,12 +11,13 @@ PhaseCorrelationView::~PhaseCorrelationView() = default;
 void PhaseCorrelationView::paint (juce::Graphics& g)
 {
     auto bounds = getLocalBounds();
+    mdsp_ui::Theme theme;
 
     // Dark panel background
-    g.fillAll (juce::Colour (0xff151515));
+    g.fillAll (theme.panel);
 
     // Title text top-left
-    g.setColour (juce::Colours::lightgrey.withAlpha (0.8f));
+    g.setColour (theme.text.withAlpha (0.8f));
     g.setFont (juce::Font (juce::FontOptions().withHeight (12.0f)));
     g.drawText ("Phase / Correlation", bounds.reduced (8).removeFromTop (18),
                 juce::Justification::centredLeft);
@@ -28,7 +30,7 @@ void PhaseCorrelationView::paint (juce::Graphics& g)
     const int radius = scopeSize / 2 - 4;  // Small margin
 
     // Draw concentric circles/arcs
-    g.setColour (juce::Colours::darkgrey.withAlpha (0.3f));
+    g.setColour (theme.grid.withAlpha (0.3f));
     for (int i = 1; i <= 3; ++i)
     {
         const float r = radius * (i / 3.0f);
@@ -40,7 +42,7 @@ void PhaseCorrelationView::paint (juce::Graphics& g)
     }
 
     // Draw crosshair
-    g.setColour (juce::Colours::darkgrey.withAlpha (0.4f));
+    g.setColour (theme.grid.withAlpha (0.4f));
     g.drawLine (static_cast<float> (centerX - radius), static_cast<float> (centerY),
                 static_cast<float> (centerX + radius), static_cast<float> (centerY), 1.0f);
     g.drawLine (static_cast<float> (centerX), static_cast<float> (centerY - radius),
@@ -49,7 +51,7 @@ void PhaseCorrelationView::paint (juce::Graphics& g)
     // Draw sample points if available
     if (numPoints_ > 0)
     {
-        g.setColour (juce::Colours::cyan.withAlpha (0.6f));
+        g.setColour (theme.accent.withAlpha (0.6f));
         for (int i = 0; i < numPoints_; ++i)
         {
             const float x = centerX + points_[i].x * radius;
@@ -60,7 +62,7 @@ void PhaseCorrelationView::paint (juce::Graphics& g)
     else
     {
         // "NO DATA" overlay
-        g.setColour (juce::Colours::grey.withAlpha (0.5f));
+        g.setColour (theme.textMuted.withAlpha (0.5f));
         g.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
         g.drawText ("NO DATA", scopeArea, juce::Justification::centred);
     }
@@ -74,11 +76,11 @@ void PhaseCorrelationView::paint (juce::Graphics& g)
     const int meterY = meterArea.getY();
 
     // Meter background
-    g.setColour (juce::Colours::darkgrey.withAlpha (0.2f));
+    g.setColour (theme.background.withAlpha (0.2f));
     g.fillRect (meterArea);
 
     // Tick marks and labels
-    g.setColour (juce::Colours::grey.withAlpha (0.5f));
+    g.setColour (theme.textMuted.withAlpha (0.5f));
     g.setFont (juce::Font (juce::FontOptions().withHeight (9.0f)));
     for (int tick = -1; tick <= 1; ++tick)
     {
@@ -90,7 +92,7 @@ void PhaseCorrelationView::paint (juce::Graphics& g)
 
     // Correlation marker
     const float markerX = meterX + (meterWidth / 2.0f) * (1.0f + correlation_);
-    g.setColour (juce::Colours::cyan);
+    g.setColour (theme.accent);
     g.fillRect (static_cast<int> (markerX - 1), meterY, 2, meterHeight);
 }
 
