@@ -54,8 +54,9 @@ void PhaseCorrelationView::paint (juce::Graphics& g)
         g.setColour (theme.accent.withAlpha (0.6f));
         for (int i = 0; i < numPoints_; ++i)
         {
-            const float x = centerX + points_[i].x * radius;
-            const float y = centerY + points_[i].y * radius;
+            const auto idx = static_cast<std::size_t> (i);
+            const float x = centerX + points_[idx].x * radius;
+            const float y = centerY + points_[idx].y * radius;
             g.fillEllipse (x - 1.5f, y - 1.5f, 3.0f, 3.0f);
         }
     }
@@ -118,7 +119,8 @@ void PhaseCorrelationView::setPoints (const Sample* pts, int numPts)
         numPoints_ = juce::jmin (numPts, kMaxPoints);
         for (int i = 0; i < numPoints_; ++i)
         {
-            points_[i] = pts[i];
+            const auto idx = static_cast<std::size_t> (i);
+            points_[idx] = pts[i];
         }
     }
     repaint();
