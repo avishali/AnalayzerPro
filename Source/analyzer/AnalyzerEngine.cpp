@@ -43,9 +43,10 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     fft = std::make_unique<juce::dsp::FFT> (fftOrder);
     
     // Resize buffers
-    fftOutput.resize (fftSize * 2, 0.0f);
-    window.resize (fftSize, 1.0f);
-    fifoBuffer.resize (fftSize, 0.0f);
+    const std::size_t fftSizeSz = static_cast<std::size_t> (fftSize);
+    fftOutput.resize (fftSizeSz * 2, 0.0f);
+    window.resize (fftSizeSz, 1.0f);
+    fifoBuffer.resize (fftSizeSz, 0.0f);
     const int numBins = fftSize / 2 + 1;
     smoothedMagnitude.resize (static_cast<size_t> (numBins), 0.0f);
     peakHold.resize (static_cast<size_t> (numBins), kDbFloor);
@@ -60,7 +61,8 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     const float pi = juce::MathConstants<float>::pi;
     for (int i = 0; i < fftSize; ++i)
     {
-        window[i] = 0.5f * (1.0f - std::cos (2.0f * pi * i / (fftSize - 1)));
+        const std::size_t idx = static_cast<std::size_t> (i);
+        window[idx] = 0.5f * (1.0f - std::cos (2.0f * pi * static_cast<float> (i) / static_cast<float> (fftSize - 1)));
     }
     
     // Reset state
@@ -123,7 +125,8 @@ void AnalyzerEngine::processBlock (const juce::AudioBuffer<float>& buffer)
             sample = (sample + buffer.getReadPointer (1)[i]) * 0.5f;
         }
         
-        fifoBuffer[fifoWritePos] = sample;
+        const std::size_t fifoIdx = static_cast<std::size_t> (fifoWritePos);
+        fifoBuffer[fifoIdx] = sample;
         fifoWritePos = (fifoWritePos + 1) % currentFFTSize;
         samplesCollected++;
         
@@ -153,26 +156,32 @@ void AnalyzerEngine::computeFFT()
     // Compute magnitudes from complex FFT output (reuse member buffer, no allocation)
     // Real-only FFT output format: [DC, Nyquist, real1, imag1, real2, imag2, ...]
     // buffer[0] = DC, buffer[1] = Nyquist, buffer[2*i] = real, buffer[2*i+1] = imag
-    magnitudes_[0] = std::abs (fftOutput[0]);  // DC component (real only)
+    magnitudes_[static_cast<std::size_t> (0)] = std::abs (fftOutput[static_cast<std::size_t> (0)]);  // DC component (real only)
     for (int i = 1; i < numBins - 1; ++i)
     {
-        const float real = fftOutput[2 * i];
-        const float imag = fftOutput[2 * i + 1];
-        magnitudes_[i] = std::sqrt (real * real + imag * imag);
+        const std::size_t idx = static_cast<std::size_t> (i);
+        const std::size_t fftIdx1 = static_cast<std::size_t> (2 * i);
+        const std::size_t fftIdx2 = static_cast<std::size_t> (2 * i + 1);
+        const float real = fftOutput[fftIdx1];
+        const float imag = fftOutput[fftIdx2];
+        magnitudes_[idx] = std::sqrt (real * real + imag * imag);
     }
-    magnitudes_[numBins - 1] = std::abs (fftOutput[1]);  // Nyquist (real only, at index 1)
+    const std::size_t nyquistIdx = static_cast<std::size_t> (numBins - 1);
+    magnitudes_[nyquistIdx] = std::abs (fftOutput[static_cast<std::size_t> (1)]);  // Nyquist (real only, at index 1)
     
     // Normalize by FFT size
     const float scale = 1.0f / static_cast<float> (currentFFTSize);
     for (int i = 0; i < numBins; ++i)
     {
-        magnitudes_[i] *= scale;
+        const std::size_t idx = static_cast<std::size_t> (i);
+        magnitudes_[idx] *= scale;
     }
     
     // Apply smoothing (EMA): smoothed = alpha * smoothed + (1 - alpha) * magnitude
     for (int i = 0; i < numBins; ++i)
     {
-        smoothedMagnitude[i] = smoothingCoeff * smoothedMagnitude[i] + (1.0f - smoothingCoeff) * magnitudes_[i];
+        const std::size_t idx = static_cast<std::size_t> (i);
+        smoothedMagnitude[idx] = smoothingCoeff * smoothedMagnitude[idx] + (1.0f - smoothingCoeff) * magnitudes_[idx];
     }
     
     // Convert smoothed magnitude to dB for display (reuse member buffer, no allocation)
@@ -210,8 +219,9 @@ void AnalyzerEngine::computeFFT()
     jassert (numBins <= static_cast<int> (AnalyzerSnapshot::kMaxFFTBins));  // Hard runtime check
     for (int i = 0; i < copyBins; ++i)
     {
-        snapshot.fftDb[i] = juce::jmax (dbFloor, dbValues_[i]);
-        snapshot.fftPeakDb[i] = juce::jmax (dbFloor, peakHold[i]);
+        const std::size_t idx = static_cast<std::size_t> (i);
+        snapshot.fftDb[idx] = juce::jmax (dbFloor, dbValues_[idx]);
+        snapshot.fftPeakDb[idx] = juce::jmax (dbFloor, peakHold[idx]);
     }
     
 #if JUCE_DEBUG
@@ -219,12 +229,13 @@ void AnalyzerEngine::computeFFT()
     static uint32_t debugLogCounter = 0;
     if ((++debugLogCounter % 100) == 0)  // Approx once per second at 48kHz/512 samples
     {
-        float minDb = dbValues_[0];
-        float maxDb = dbValues_[0];
+        float minDb = dbValues_[static_cast<std::size_t> (0)];
+        float maxDb = dbValues_[static_cast<std::size_t> (0)];
         for (int i = 1; i < numBins; ++i)
         {
-            minDb = juce::jmin (minDb, dbValues_[i]);
-            maxDb = juce::jmax (maxDb, dbValues_[i]);
+            const std::size_t idx = static_cast<std::size_t> (i);
+            minDb = juce::jmin (minDb, dbValues_[idx]);
+            maxDb = juce::jmax (maxDb, dbValues_[idx]);
         }
         DBG ("FFT bins=" << numBins << " minDb=" << minDb << " maxDb=" << maxDb
              << " fftSize=" << currentFFTSize << " hop=" << currentHopSize
@@ -248,11 +259,14 @@ void AnalyzerEngine::applyWindow()
     for (int i = 0; i < currentFFTSize; ++i)
     {
         const int fifoIndex = (fifoWritePos + i) % currentFFTSize;
-        fftOutput[(size_t) i] = fifoBuffer[(size_t) fifoIndex] * window[(size_t) i];
+        const std::size_t idx = static_cast<std::size_t> (i);
+        const std::size_t fifoIdx = static_cast<std::size_t> (fifoIndex);
+        fftOutput[idx] = fifoBuffer[fifoIdx] * window[idx];
     }
 
     // Zero-pad the remainder (JUCE uses this buffer in-place for output too)
-    std::fill (fftOutput.begin() + (size_t) currentFFTSize, fftOutput.end(), 0.0f);
+    const std::size_t fftSizeSz = static_cast<std::size_t> (currentFFTSize);
+    std::fill (fftOutput.begin() + static_cast<std::ptrdiff_t> (fftSizeSz), fftOutput.end(), 0.0f);
 }
 
 void AnalyzerEngine::convertToDb (const float* magnitudes, float* dbOut, int numBins)
@@ -264,7 +278,8 @@ void AnalyzerEngine::convertToDb (const float* magnitudes, float* dbOut, int num
     
     for (int i = 0; i < numBins; ++i)
     {
-        const float mag = juce::jmax (magFloor, magnitudes[i]);
+        const std::size_t idx = static_cast<std::size_t> (i);
+        const float mag = juce::jmax (magFloor, magnitudes[idx]);
         const float db = 20.0f * std::log10 (mag);
         dbOut[i] = juce::jmax (dbFloor, db);
     }
@@ -284,17 +299,18 @@ void AnalyzerEngine::updatePeakHold (const float* dbRawIn, float* peakOut, int n
     
     for (int i = 0; i < numBins; ++i)
     {
+        const std::size_t idx = static_cast<std::size_t> (i);
         // Always update to new louder peaks (peak hold tracks maxima)
         // Hold checkbox freezes decay only, but new higher peaks must still update
-        if (dbRawIn[i] > peakOut[i])
+        if (dbRawIn[idx] > peakOut[idx])
         {
-            peakOut[i] = dbRawIn[i];  // Update to new higher peak
+            peakOut[idx] = dbRawIn[idx];  // Update to new higher peak
         }
         
         // Apply decay only if not frozen
         if (!freezePeaks_)
         {
-            peakOut[i] = juce::jmax (kDbFloor, peakOut[i] - decayPerFrame);
+            peakOut[idx] = juce::jmax (kDbFloor, peakOut[idx] - decayPerFrame);
         }
         // If frozen, keep peak value (no decay)
     }
@@ -419,8 +435,9 @@ void AnalyzerEngine::publishSnapshot (const AnalyzerSnapshot& source)
     const int copyBins = juce::jmin (numBins, static_cast<int> (published_.data.fftDb.size()));
     for (int i = 0; i < copyBins; ++i)
     {
-        published_.data.fftDb[i] = source.fftDb[i];
-        published_.data.fftPeakDb[i] = source.fftPeakDb[i];
+        const std::size_t idx = static_cast<std::size_t> (i);
+        published_.data.fftDb[idx] = source.fftDb[idx];
+        published_.data.fftPeakDb[idx] = source.fftPeakDb[idx];
     }
     
     // Increment sequence AFTER data copy completes (release fence ensures visibility)
@@ -466,8 +483,9 @@ bool AnalyzerEngine::getLatestSnapshot (AnalyzerSnapshot& dest) const
         const int copyBins = juce::jmin (numBins, static_cast<int> (dest.fftDb.size()));
         for (int i = 0; i < copyBins; ++i)
         {
-            dest.fftDb[i] = published_.data.fftDb[i];
-            dest.fftPeakDb[i] = published_.data.fftPeakDb[i];
+            const std::size_t idx = static_cast<std::size_t> (i);
+            dest.fftDb[idx] = published_.data.fftDb[idx];
+            dest.fftPeakDb[idx] = published_.data.fftPeakDb[idx];
         }
         
         // Second read to verify stability
