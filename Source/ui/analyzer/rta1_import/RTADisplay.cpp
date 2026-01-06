@@ -12,6 +12,8 @@
 
 //==============================================================================
 RTADisplay::RTADisplay()
+    : labelFont (juce::FontOptions().withHeight (12.0f))
+    , smallFont (juce::FontOptions().withHeight (10.0f))
 {
     // Initialize state with defaults
     state.minHz = 20.0f;
