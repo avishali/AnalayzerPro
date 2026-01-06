@@ -64,10 +64,10 @@ void ControlBinder::bindSlider(ControlId id, juce::Slider& slider)
     }
     slider.onValueChange = [this, id, &slider]()
     {
-        const double range = slider.getMaximum() - slider.getMinimum();
-        if (range > 0.0)
+        const double sliderRange = slider.getMaximum() - slider.getMinimum();
+        if (sliderRange > 0.0)
         {
-            const float normalized = static_cast<float>((slider.getValue() - slider.getMinimum()) / range);
+            const float normalized = static_cast<float>((slider.getValue() - slider.getMinimum()) / sliderRange);
             uiState.setValue(id, normalized);
         }
     };
@@ -125,14 +125,14 @@ void ControlBinder::bindCombo(ControlId id, juce::ComboBox& combo)
     }
     combo.onChange = [this, id, &combo]()
     {
-        const int numItems = combo.getNumItems();
-        if (numItems > 1)
+        const int comboNumItems = combo.getNumItems();
+        if (comboNumItems > 1)
         {
             const int selectedIndex = combo.getSelectedId() - 1;
-            const float normalized = static_cast<float>(selectedIndex) / static_cast<float>(numItems - 1);
+            const float normalized = static_cast<float>(selectedIndex) / static_cast<float>(comboNumItems - 1);
             uiState.setValue(id, normalized);
         }
-        else if (numItems == 1)
+        else if (comboNumItems == 1)
         {
             uiState.setValue(id, 0.0f);
         }
