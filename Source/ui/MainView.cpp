@@ -5,7 +5,7 @@
 
 //==============================================================================
 MainView::MainView (AnalayzerProAudioProcessor& p, juce::AudioProcessorValueTreeState* apvts)
-    : audioProcessor (p), controls_ (apvts), analyzerView_ (p), apvts_ (apvts)
+    : audioProcessor (p), apvts_ (apvts), controls_ (apvts), analyzerView_ (p)
 {
     setWantsKeyboardFocus (true);
 
@@ -185,7 +185,7 @@ void MainView::paint (juce::Graphics& g)
     g.fillAll (theme.background);
 
     // Temporary debug overlay
-    g.setFont (juce::Font (10.0f));
+    g.setFont (juce::Font (juce::FontOptions().withHeight (10.0f)));
     g.setColour (juce::Colours::red.withAlpha (0.7f));
 
     // Draw outer bounds

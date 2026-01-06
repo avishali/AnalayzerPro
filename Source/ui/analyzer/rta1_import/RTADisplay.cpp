@@ -541,12 +541,13 @@ void RTADisplay::mouseMove (const juce::MouseEvent& e)
         needsRepaint = true;
     }
     // Use epsilon comparison for frequency to avoid float equality issues
-    const float freqEpsilon = 0.1f;
-    const float posEpsilon = 0.5f;
+    constexpr float kFreqEpsHz = 0.1f;
+    constexpr float kPosEpsPx = 0.5f;
+    const bool freqChanged = std::abs (newHoverFreqHz - lastHoverFreqHz) > kFreqEpsHz;
+    const bool posChanged = std::abs (newHoverPosPx - lastHoverPosPx) > kPosEpsPx;
     if (newHoverActive != hoverActive || 
-        std::abs (newHoverFreqHz - lastHoverFreqHz) > freqEpsilon ||
         newHoverTickIndex != lastHoverTickIndex ||
-        std::abs (newHoverPosPx - lastHoverPosPx) > posEpsilon)
+        freqChanged || posChanged)
     {
         hoverActive = newHoverActive;
         lastHoverFreqHz = newHoverFreqHz;
