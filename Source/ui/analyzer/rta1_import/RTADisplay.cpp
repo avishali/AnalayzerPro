@@ -451,6 +451,7 @@ void RTADisplay::mouseMove (const juce::MouseEvent& e)
     bool newHoverActive = false;
     float newHoverFreqHz = 0.0f;
     int newHoverTickIndex = -1;
+    float newHoverPosPx = 0.0f;
     
     if (state.viewMode == 2)  // Bands mode
     {
@@ -516,11 +517,12 @@ void RTADisplay::mouseMove (const juce::MouseEvent& e)
             
             mdsp_ui::AxisHitTest hit = mdsp_ui::AxisInteraction::hitTest (posPx, plotAreaWidth, freqMapping, freqTicks, snapOpts);
             
-            if (hit.insidePlot)
+            if (hit.active)
             {
                 newHoverActive = true;
                 newHoverFreqHz = hit.snapped ? hit.snappedValue : hit.value;
                 newHoverTickIndex = hit.tickIndex;
+                newHoverPosPx = hit.posPx;  // Store resolved position
             }
         }
     }
@@ -538,11 +540,18 @@ void RTADisplay::mouseMove (const juce::MouseEvent& e)
         hoveredBandIndex = newHovered;
         needsRepaint = true;
     }
-    if (newHoverActive != hoverActive || newHoverFreqHz != lastHoverFreqHz || newHoverTickIndex != lastHoverTickIndex)
+    // Use epsilon comparison for frequency to avoid float equality issues
+    const float freqEpsilon = 0.1f;
+    const float posEpsilon = 0.5f;
+    if (newHoverActive != hoverActive || 
+        std::abs (newHoverFreqHz - lastHoverFreqHz) > freqEpsilon ||
+        newHoverTickIndex != lastHoverTickIndex ||
+        std::abs (newHoverPosPx - lastHoverPosPx) > posEpsilon)
     {
         hoverActive = newHoverActive;
         lastHoverFreqHz = newHoverFreqHz;
         lastHoverTickIndex = newHoverTickIndex;
+        lastHoverPosPx = newHoverPosPx;
         needsRepaint = true;
     }
     
@@ -563,6 +572,7 @@ void RTADisplay::mouseExit (const juce::MouseEvent&)
         hoverActive = false;
         lastHoverFreqHz = 0.0f;
         lastHoverTickIndex = -1;
+        lastHoverPosPx = 0.0f;
         needsRepaint = true;
     }
     if (needsRepaint)
@@ -1022,43 +1032,20 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
     // Frequency-axis hover readout (Log mode only)
     if (hoverActive && state.viewMode == 1)
     {
-        // Draw vertical cursor line at snapped tick position (if snapped)
+        // Draw vertical cursor line at resolved position (if snapped)
         if (lastHoverTickIndex >= 0)
         {
-            // Rebuild freqTicks to get the tick position (same as in drawGrid)
-            juce::Array<mdsp_ui::AxisTick> freqTicks;
-            const float freqGridPoints[] = { 20.0f, 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f, 20000.0f };
-            for (float freq : freqGridPoints)
-            {
-                if (freq >= s.minHz && freq <= s.maxHz)
-                {
-                    const float tickX = freqToX (freq, s);
-                    const float posPx = tickX - plotAreaLeft;
-                    juce::String label;
-                    if (freq >= 1000.0f)
-                        label = juce::String (freq / 1000.0f, 1) + "k";
-                    else
-                        label = juce::String (static_cast<int> (freq));
-                    const bool isMajor = (freq == 20.0f || freq == 100.0f || freq == 1000.0f || freq == 10000.0f || freq == 20000.0f);
-                    freqTicks.add ({ posPx, label, isMajor });
-                }
-            }
-            
-            if (lastHoverTickIndex < freqTicks.size())
-            {
-                const auto& tick = freqTicks.getReference (lastHoverTickIndex);
-                const float cursorX = plotAreaLeft + tick.posPx;
-                g.setColour (theme.text.withAlpha (0.25f));
-                g.drawVerticalLine (static_cast<int> (cursorX), plotAreaTop, plotAreaTop + plotAreaHeight);
-            }
+            const juce::Rectangle<int> plotBounds (static_cast<int> (plotAreaLeft),
+                                                   static_cast<int> (plotAreaTop),
+                                                   static_cast<int> (plotAreaWidth),
+                                                   static_cast<int> (plotAreaHeight));
+            const float cursorX = mdsp_ui::AxisInteraction::cursorLineX (plotBounds, lastHoverPosPx);
+            g.setColour (theme.text.withAlpha (0.25f));
+            g.drawVerticalLine (static_cast<int> (cursorX), plotAreaTop, plotAreaTop + plotAreaHeight);
         }
         
         // Draw frequency readout box (bottom-left inside plot area)
-        juce::String freqStr;
-        if (lastHoverFreqHz >= 1000.0f)
-            freqStr = juce::String (lastHoverFreqHz / 1000.0f, 2) + " kHz";
-        else
-            freqStr = juce::String (lastHoverFreqHz, 1) + " Hz";
+        juce::String freqStr = mdsp_ui::AxisInteraction::formatFrequencyHz (lastHoverFreqHz);
         
         const float readoutX = plotAreaLeft + 8.0f;
         const float readoutY = plotAreaTop + plotAreaHeight - 28.0f;

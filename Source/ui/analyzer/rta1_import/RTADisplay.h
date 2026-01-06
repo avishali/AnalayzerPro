@@ -172,6 +172,7 @@ private:
     // Frequency axis hover state (for Log mode)
     float lastHoverFreqHz = 0.0f;
     int lastHoverTickIndex = -1;
+    float lastHoverPosPx = 0.0f;  // Resolved position (snapped or raw)
     bool hoverActive = false;
     
     // Display gain offset (UI-only, affects rendering, not DSP)
