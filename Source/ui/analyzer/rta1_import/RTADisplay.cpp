@@ -1,6 +1,7 @@
 #include "RTADisplay.h"
 #include <mdsp_ui/Theme.h>
 #include <mdsp_ui/AxisRenderer.h>
+#include <mdsp_ui/AxisInteraction.h>
 #include <cmath>
 #include <type_traits>
 #include <cstdint>
@@ -445,7 +446,11 @@ void RTADisplay::mouseMove (const juce::MouseEvent& e)
 {
     // B6: Make mouseMove safe and mode-aware without relying on bandGeometry in modes that don't have it
     const float x = static_cast<float> (e.x);
+    const float y = static_cast<float> (e.y);
     int newHovered = -1;
+    bool newHoverActive = false;
+    float newHoverFreqHz = 0.0f;
+    int newHoverTickIndex = -1;
     
     if (state.viewMode == 2)  // Bands mode
     {
@@ -454,6 +459,7 @@ void RTADisplay::mouseMove (const juce::MouseEvent& e)
             state.bandsDb.size() != state.bandCentersHz.size() || bandGeometry.size() != state.bandCentersHz.size())
         {
             hoveredBandIndex = -1;
+            hoverActive = false;
             return;
         }
         
@@ -467,32 +473,100 @@ void RTADisplay::mouseMove (const juce::MouseEvent& e)
         if (state.logDb.empty())
         {
             hoveredBandIndex = -1;
+            hoverActive = false;
             return;
         }
         
         newHovered = findNearestLogBand (x, state);
+        
+        // Frequency-axis hover using AxisInteraction
+        if (x >= plotAreaLeft && x <= plotAreaLeft + plotAreaWidth && 
+            y >= plotAreaTop && y <= plotAreaTop + plotAreaHeight)
+        {
+            // Build frequency ticks (same as in drawGrid)
+            juce::Array<mdsp_ui::AxisTick> freqTicks;
+            const float freqGridPoints[] = { 20.0f, 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f, 20000.0f };
+            for (float freq : freqGridPoints)
+            {
+                if (freq >= state.minHz && freq <= state.maxHz)
+                {
+                    const float tickX = freqToX (freq, state);
+                    const float posPx = tickX - plotAreaLeft;
+                    juce::String label;
+                    if (freq >= 1000.0f)
+                        label = juce::String (freq / 1000.0f, 1) + "k";
+                    else
+                        label = juce::String (static_cast<int> (freq));
+                    const bool isMajor = (freq == 20.0f || freq == 100.0f || freq == 1000.0f || freq == 10000.0f || freq == 20000.0f);
+                    freqTicks.add ({ posPx, label, isMajor });
+                }
+            }
+            
+            // Build axis mapping
+            mdsp_ui::AxisMapping freqMapping;
+            freqMapping.scale = mdsp_ui::AxisScale::Log10;
+            freqMapping.minValue = state.minHz;
+            freqMapping.maxValue = state.maxHz;
+            
+            // Hit test
+            const float posPx = x - plotAreaLeft;
+            mdsp_ui::AxisSnapOptions snapOpts;
+            snapOpts.mode = mdsp_ui::SnapMode::NearestLabelledTick;
+            snapOpts.maxSnapDistPx = 12.0f;
+            
+            mdsp_ui::AxisHitTest hit = mdsp_ui::AxisInteraction::hitTest (posPx, plotAreaWidth, freqMapping, freqTicks, snapOpts);
+            
+            if (hit.insidePlot)
+            {
+                newHoverActive = true;
+                newHoverFreqHz = hit.snapped ? hit.snappedValue : hit.value;
+                newHoverTickIndex = hit.tickIndex;
+            }
+        }
     }
     else  // FFT mode (viewMode == 0)
     {
         // B6: For FFT mode: either disable hover (set hovered=-1) or map to nearest freq/bin (optional)
         // For now, disable hover in FFT mode
         newHovered = -1;
+        newHoverActive = false;
     }
     
+    bool needsRepaint = false;
     if (newHovered != hoveredBandIndex)
     {
         hoveredBandIndex = newHovered;
-        repaint();
+        needsRepaint = true;
     }
+    if (newHoverActive != hoverActive || newHoverFreqHz != lastHoverFreqHz || newHoverTickIndex != lastHoverTickIndex)
+    {
+        hoverActive = newHoverActive;
+        lastHoverFreqHz = newHoverFreqHz;
+        lastHoverTickIndex = newHoverTickIndex;
+        needsRepaint = true;
+    }
+    
+    if (needsRepaint)
+        repaint();
 }
 
 void RTADisplay::mouseExit (const juce::MouseEvent&)
 {
+    bool needsRepaint = false;
     if (hoveredBandIndex >= 0)
     {
         hoveredBandIndex = -1;
-        repaint();
+        needsRepaint = true;
     }
+    if (hoverActive)
+    {
+        hoverActive = false;
+        lastHoverFreqHz = 0.0f;
+        lastHoverTickIndex = -1;
+        needsRepaint = true;
+    }
+    if (needsRepaint)
+        repaint();
 }
 
 //==============================================================================
@@ -945,8 +1019,62 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
         g.strokePath (peakPath, juce::PathStrokeType (1.5f));
     }
     
-    // B6: Cursor support in log mode (optional - can be added later if needed)
-    // For now, log mode hover is disabled (hoveredBandIndex handled in mouseMove)
+    // Frequency-axis hover readout (Log mode only)
+    if (hoverActive && state.viewMode == 1)
+    {
+        // Draw vertical cursor line at snapped tick position (if snapped)
+        if (lastHoverTickIndex >= 0)
+        {
+            // Rebuild freqTicks to get the tick position (same as in drawGrid)
+            juce::Array<mdsp_ui::AxisTick> freqTicks;
+            const float freqGridPoints[] = { 20.0f, 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f, 20000.0f };
+            for (float freq : freqGridPoints)
+            {
+                if (freq >= s.minHz && freq <= s.maxHz)
+                {
+                    const float tickX = freqToX (freq, s);
+                    const float posPx = tickX - plotAreaLeft;
+                    juce::String label;
+                    if (freq >= 1000.0f)
+                        label = juce::String (freq / 1000.0f, 1) + "k";
+                    else
+                        label = juce::String (static_cast<int> (freq));
+                    const bool isMajor = (freq == 20.0f || freq == 100.0f || freq == 1000.0f || freq == 10000.0f || freq == 20000.0f);
+                    freqTicks.add ({ posPx, label, isMajor });
+                }
+            }
+            
+            if (lastHoverTickIndex < freqTicks.size())
+            {
+                const auto& tick = freqTicks.getReference (lastHoverTickIndex);
+                const float cursorX = plotAreaLeft + tick.posPx;
+                g.setColour (theme.text.withAlpha (0.25f));
+                g.drawVerticalLine (static_cast<int> (cursorX), plotAreaTop, plotAreaTop + plotAreaHeight);
+            }
+        }
+        
+        // Draw frequency readout box (bottom-left inside plot area)
+        juce::String freqStr;
+        if (lastHoverFreqHz >= 1000.0f)
+            freqStr = juce::String (lastHoverFreqHz / 1000.0f, 2) + " kHz";
+        else
+            freqStr = juce::String (lastHoverFreqHz, 1) + " Hz";
+        
+        const float readoutX = plotAreaLeft + 8.0f;
+        const float readoutY = plotAreaTop + plotAreaHeight - 28.0f;
+        const float readoutW = 80.0f;
+        const float readoutH = 20.0f;
+        
+        g.setColour (theme.panel.withAlpha (0.9f));
+        g.fillRoundedRectangle (readoutX, readoutY, readoutW, readoutH, 3.0f);
+        g.setColour (theme.gridMajor.withAlpha (0.9f));
+        g.drawRoundedRectangle (readoutX, readoutY, readoutW, readoutH, 3.0f, 1.0f);
+        
+        g.setFont (smallFont);
+        g.setColour (theme.text);
+        g.drawText ("f: " + freqStr, static_cast<int> (readoutX + 4), static_cast<int> (readoutY + 2), 
+                    static_cast<int> (readoutW - 8), static_cast<int> (readoutH - 4), juce::Justification::centredLeft);
+    }
 }
 
 //==============================================================================

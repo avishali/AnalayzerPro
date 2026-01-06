@@ -169,6 +169,11 @@ private:
     // Hover state
     int hoveredBandIndex = -1;
     
+    // Frequency axis hover state (for Log mode)
+    float lastHoverFreqHz = 0.0f;
+    int lastHoverTickIndex = -1;
+    bool hoverActive = false;
+    
     // Display gain offset (UI-only, affects rendering, not DSP)
     float displayGainDb = 0.0f;
     
