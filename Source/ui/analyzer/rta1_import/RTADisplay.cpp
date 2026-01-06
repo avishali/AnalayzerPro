@@ -13,8 +13,6 @@
 //==============================================================================
 RTADisplay::RTADisplay()
 {
-    labelFont = juce::Font (juce::FontOptions().withHeight (12.0f));
-    smallFont = juce::Font (juce::FontOptions().withHeight (10.0f));
     // Initialize state with defaults
     state.minHz = 20.0f;
     state.maxHz = 20000.0f;
@@ -917,11 +915,12 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
         && hoveredBandIndex < static_cast<int> (s.bandCentersHz.size()))
     {
         const int safeIndex = hoveredBandIndex;
-        const float x = bandGeometry[safeIndex].xCenter;
-        const float currentDb = s.bandsDb[safeIndex];
-        const float peakDb = (hasPeaks && safeIndex < static_cast<int> (s.bandsPeakDb.size()))
-            ? s.bandsPeakDb[safeIndex] : -1000.0f;
-        const float centerFreq = s.bandCentersHz[safeIndex];
+        const auto idx = static_cast<size_t> (safeIndex);
+        const float x = bandGeometry[idx].xCenter;
+        const float currentDb = s.bandsDb[idx];
+        const float peakDb = (hasPeaks && idx < s.bandsPeakDb.size())
+            ? s.bandsPeakDb[idx] : -1000.0f;
+        const float centerFreq = s.bandCentersHz[idx];
 
         // Vertical cursor line
         g.setColour (theme.text.withAlpha (0.5f));
@@ -990,7 +989,8 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
         const float xR = freqToX (fR, s);
         
         // Apply display gain in dbToY, so just pass raw dB (clamping happens in dbToY)
-        const float db = s.logDb[i];
+        const auto idx = static_cast<size_t> (i);
+        const float db = s.logDb[idx];
         const float y = dbToY (db, s);
         const float bottomY = plotAreaTop + plotAreaHeight;
 
@@ -1013,7 +1013,8 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
             const float centerFreq = computeLogFreqFromIndex (i, numBands, s.minHz, s.maxHz);
             const float x = freqToX (centerFreq, s);
             // Apply display gain in dbToY, so just pass raw dB (clamping happens in dbToY)
-            const float db = s.logPeakDb[i];
+            const auto idx = static_cast<size_t> (i);
+            const float db = s.logPeakDb[idx];
             const float y = dbToY (db, s);
 
             if (!pathStarted)
@@ -1116,7 +1117,8 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
 
         const float x = freqToX (freq, s);  // B5: Use log mapping for FFT (matches grid)
         // Apply display gain and tilt compensation (frequency-dependent)
-        const float db = s.fftDb[i];
+        const auto idx = static_cast<size_t> (i);
+        const float db = s.fftDb[idx];
         const float y = dbToYWithCompensation (db, freq, s);
 
         if (!pathStarted)
@@ -1148,7 +1150,8 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
 
             const float x = freqToX (freq, s);  // B5: Use log mapping for FFT (matches grid)
             // Apply display gain and tilt compensation (frequency-dependent)
-            const float db = s.fftPeakDb[i];
+            const auto idx = static_cast<size_t> (i);
+            const float db = s.fftPeakDb[idx];
             const float y = dbToYWithCompensation (db, freq, s);
 
             if (!pathStarted)
