@@ -295,7 +295,7 @@ void RTADisplay::updateGeometry()
             // First band: use next band or fixed width
             if (state.bandCentersHz.size() > 1)
             {
-                const float nextCenter = frequencyToX (state.bandCentersHz[1]);
+                const float nextCenter = frequencyToX (state.bandCentersHz[static_cast<size_t> (1)]);
                 const float width = (nextCenter - xCenter) * 0.5f;
                 xLeft = xCenter - width;
                 xRight = xCenter + width;
@@ -1095,8 +1095,8 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
     const uint64_t nowMs = static_cast<uint64_t> (juce::Time::getMillisecondCounterHiRes());
     if (nowMs - lastMinMaxLogMs > 1000 && !s.fftDb.empty())  // Once per second
     {
-        float minDb = s.fftDb[0];
-        float maxDb = s.fftDb[0];
+        float minDb = s.fftDb[static_cast<size_t> (0)];
+        float maxDb = s.fftDb[static_cast<size_t> (0)];
         for (float db : s.fftDb)
         {
             minDb = juce::jmin (minDb, db);
