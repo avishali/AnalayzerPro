@@ -9,11 +9,11 @@ namespace
 {
 
 // Enum option tables (empty for skeleton)
-constexpr std::array<const char*, static_cast<std::size_t>(Stage::Count)> kStageNames = {
+[[maybe_unused]] constexpr std::array<const char*, static_cast<std::size_t>(Stage::Count)> kStageNames = {
     // Add stage names as needed
 };
 
-constexpr std::array<const char*, static_cast<std::size_t>(Type::Count)> kTypeNames = {
+[[maybe_unused]] constexpr std::array<const char*, static_cast<std::size_t>(Type::Count)> kTypeNames = {
     // Add type names as needed
 };
 
