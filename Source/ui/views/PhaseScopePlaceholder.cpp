@@ -1,5 +1,6 @@
 #include "PhaseScopePlaceholder.h"
 #include <mdsp_ui/Theme.h>
+#include <mdsp_ui/MarkerRenderer.h>
 
 //==============================================================================
 PhaseScopePlaceholder::PhaseScopePlaceholder()
@@ -29,11 +30,15 @@ void PhaseScopePlaceholder::paint (juce::Graphics& g)
                    static_cast<float> (radius * 2),
                    1.0f);
 
-    // Draw center crosshair
-    g.drawLine (static_cast<float> (centerX - radius), static_cast<float> (centerY),
-                static_cast<float> (centerX + radius), static_cast<float> (centerY), 1.0f);
-    g.drawLine (static_cast<float> (centerX), static_cast<float> (centerY - radius),
-                static_cast<float> (centerX), static_cast<float> (centerY + radius), 1.0f);
+    // Draw center crosshair using MarkerRenderer
+    mdsp_ui::MarkerRenderer::drawCrosshair (g,
+                                            static_cast<float> (centerX),
+                                            static_cast<float> (centerY),
+                                            static_cast<float> (radius),
+                                            static_cast<float> (radius),
+                                            theme,
+                                            0.3f,
+                                            1.0f);
 
     // Caption
     g.setColour (theme.textMuted.withAlpha (0.6f));
