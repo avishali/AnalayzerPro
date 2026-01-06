@@ -1,6 +1,7 @@
 #include "PhaseCorrelationView.h"
 #include <mdsp_ui/Theme.h>
 #include <mdsp_ui/AxisRenderer.h>
+#include <mdsp_ui/MarkerRenderer.h>
 
 //==============================================================================
 PhaseCorrelationView::PhaseCorrelationView()
@@ -42,12 +43,15 @@ void PhaseCorrelationView::paint (juce::Graphics& g)
                        1.0f);
     }
 
-    // Draw crosshair
-    g.setColour (theme.grid.withAlpha (0.4f));
-    g.drawLine (static_cast<float> (centerX - radius), static_cast<float> (centerY),
-                static_cast<float> (centerX + radius), static_cast<float> (centerY), 1.0f);
-    g.drawLine (static_cast<float> (centerX), static_cast<float> (centerY - radius),
-                static_cast<float> (centerX), static_cast<float> (centerY + radius), 1.0f);
+    // Draw crosshair using MarkerRenderer
+    mdsp_ui::MarkerRenderer::drawCrosshair (g,
+                                            static_cast<float> (centerX),
+                                            static_cast<float> (centerY),
+                                            static_cast<float> (radius),
+                                            static_cast<float> (radius),
+                                            theme,
+                                            0.4f,
+                                            1.0f);
 
     // Draw sample points if available
     if (numPoints_ > 0)
