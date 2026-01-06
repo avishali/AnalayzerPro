@@ -1,4 +1,5 @@
 #include "AnalyzerDisplayView.h"
+#include <mdsp_ui/Theme.h>
 #include <cmath>
 #include <limits>
 
@@ -107,10 +108,11 @@ void AnalyzerDisplayView::paint (juce::Graphics& g)
 {
     // Background is handled by RTADisplay
     juce::ignoreUnused (g);
+    mdsp_ui::Theme theme;
 #if JUCE_DEBUG
     // Debug overlay: mode, sequence, bins, fftSize, meta, drop reason (top-left)
     g.setFont (juce::Font (juce::FontOptions().withHeight (10.0f)));
-    g.setColour (juce::Colours::white.withAlpha (0.7f));
+    g.setColour (theme.text.withAlpha (0.7f));
     
     juce::String modeStr = "FFT";
     if (currentMode_ == Mode::BAND)
@@ -125,7 +127,7 @@ void AnalyzerDisplayView::paint (juce::Graphics& g)
     if (!dropReason_.isEmpty())
     {
         debugText += " " + dropReason_;
-        g.setColour (juce::Colours::red.withAlpha (0.8f));
+        g.setColour (theme.danger.withAlpha (0.85f));
     }
     
     g.drawText (debugText, 8, 8, 500, 12, juce::Justification::centredLeft);
@@ -135,7 +137,7 @@ void AnalyzerDisplayView::paint (juce::Graphics& g)
     // FFT debug line: mode + bins + min/max dB + fftSize
     if (!fftDebugLine_.isEmpty())
     {
-        g.setColour (juce::Colours::cyan.withAlpha (0.8f));
+        g.setColour (theme.accent.withAlpha (0.8f));
         g.setFont (juce::Font (juce::FontOptions().withHeight (10.0f)));
         g.drawText (fftDebugLine_, 8, 22, 600, 12, juce::Justification::centredLeft);
     }
@@ -146,7 +148,7 @@ void AnalyzerDisplayView::paint (juce::Graphics& g)
     // Temporary debug overlay: UI=mode / RTADisplay=mode / bins / min/max dB
     if (!devModeDebugLine_.isEmpty())
     {
-        g.setColour (juce::Colours::yellow.withAlpha (0.9f));
+        g.setColour (theme.warning.withAlpha (0.90f));
         g.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
         g.drawText (devModeDebugLine_, 8, 38, 700, 14, juce::Justification::centredLeft);
     }
@@ -161,7 +163,7 @@ void AnalyzerDisplayView::paint (juce::Graphics& g)
     const juce::String inputProbeText = juce::String ("IN ch=") + juce::String (inputCh)
                                       + juce::String (" RMS=") + juce::String (inputRms, 1) + "dB"
                                       + juce::String (" PEAK=") + juce::String (inputPeak, 1) + "dB";
-    g.setColour (juce::Colours::lime.withAlpha (0.9f));
+    g.setColour (theme.success.withAlpha (0.90f));
     g.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
     g.drawText (inputProbeText, 8, 56, 500, 14, juce::Justification::centredLeft);
 #endif
@@ -254,15 +256,16 @@ void AnalyzerDisplayView::convertFFTToBands (const AnalyzerSnapshot& snapshot, s
         for (int bin = lowerBin; bin <= upperBin; ++bin)
         {
             // Convert dB to linear power for averaging
-            const float db = snapshot.fftDb[bin];
-            const float power = std::pow (10.0, db / 10.0);
+            const std::size_t idx = static_cast<std::size_t> (bin);
+            const float db = snapshot.fftDb[idx];
+            const float power = static_cast<float> (std::pow (10.0, static_cast<double> (db) / 10.0));
             sumPower += power;
             binCount++;
             
             // For peak: use maximum (not sum) - more stable and correct
             if (bin < static_cast<int> (snapshot.fftPeakDb.size()))
             {
-                maxPeakDb = juce::jmax (maxPeakDb, snapshot.fftPeakDb[bin]);
+                maxPeakDb = juce::jmax (maxPeakDb, snapshot.fftPeakDb[idx]);
             }
         }
         
@@ -337,42 +340,39 @@ void AnalyzerDisplayView::convertFFTToLog (const AnalyzerSnapshot& snapshot, std
         
         // Sum power of bins within log bin
         double sumPower = 0.0;
-        double sumPeakPower = 0.0;
         int binCount = 0;
         
         for (int bin = lowerBin; bin <= upperBin; ++bin)
         {
-            const float db = snapshot.fftDb[bin];
-            const float power = std::pow (10.0, db / 10.0);
+            const std::size_t idx = static_cast<std::size_t> (bin);
+            const float db = snapshot.fftDb[idx];
+            const float power = static_cast<float> (std::pow (10.0, static_cast<double> (db) / 10.0));
             sumPower += power;
             binCount++;
-            
-            if (bin < static_cast<int> (snapshot.fftPeakDb.size()))
-            {
-                const float peakDb = snapshot.fftPeakDb[bin];
-                const float peakPower = std::pow (10.0, peakDb / 10.0);
-                sumPeakPower += peakPower;
-            }
         }
         
         // Convert to dB (use average power for proper level)
         if (binCount > 0 && sumPower > 0.0)
         {
             const double avgPower = sumPower / static_cast<double> (binCount);
-            logDb[logIdx] = 10.0f * static_cast<float> (std::log10 (avgPower));
+            const std::size_t logIdxSz = static_cast<std::size_t> (logIdx);
+            logDb[logIdxSz] = 10.0f * static_cast<float> (std::log10 (avgPower));
         }
         else
         {
-            logDb[logIdx] = -120.0f;
+            const std::size_t logIdxSz = static_cast<std::size_t> (logIdx);
+            logDb[logIdxSz] = -120.0f;
         }
         
         // For peak: use maximum (not average) of peak values (more stable and correct)
         float maxPeakDb = -120.0f;
         for (int bin = lowerBin; bin <= upperBin && bin < static_cast<int> (snapshot.fftPeakDb.size()); ++bin)
         {
-            maxPeakDb = juce::jmax (maxPeakDb, snapshot.fftPeakDb[bin]);
+            const std::size_t idx = static_cast<std::size_t> (bin);
+            maxPeakDb = juce::jmax (maxPeakDb, snapshot.fftPeakDb[idx]);
         }
-        logPeakDb[logIdx] = maxPeakDb;
+        const std::size_t logIdxSz = static_cast<std::size_t> (logIdx);
+        logPeakDb[logIdxSz] = maxPeakDb;
     }
 }
 
