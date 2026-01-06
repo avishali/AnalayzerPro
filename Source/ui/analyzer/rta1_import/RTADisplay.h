@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <cmath>
 
+namespace mdsp_ui { struct Theme; }
+
 
 //==============================================================================
 /**
@@ -129,10 +131,10 @@ private:
     void updateGeometry();  // Called from resized() and setBandCenters(), never from paint
     float frequencyToX (float freqHz) const;  // For updateGeometry() - uses member variables
     int findNearestBand (float x) const;  // For Bands mode hover - uses bandGeometry
-    void paintBandsMode (juce::Graphics& g, const RenderState& s);
-    void paintLogMode (juce::Graphics& g, const RenderState& s);
-    void paintFFTMode (juce::Graphics& g, const RenderState& s);
-    void drawGrid (juce::Graphics& g, const RenderState& s);
+    void paintBandsMode (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme);
+    void paintLogMode (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme);
+    void paintFFTMode (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme);
+    void drawGrid (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme);
     
     // Helper: compute log frequency from index (for log mode rendering)
     float computeLogFreqFromIndex (int index, int numBands, float minHz, float maxHz) const;

@@ -1,4 +1,6 @@
 #include "RTADisplay.h"
+#include <mdsp_ui/Theme.h>
+#include <mdsp_ui/AxisRenderer.h>
 #include <cmath>
 #include <type_traits>
 #include <cstdint>
@@ -498,17 +500,18 @@ void RTADisplay::paint (juce::Graphics& g)
 {
     // B3: Use local references to state (NO mutations)
     const auto& s = state;
+    mdsp_ui::Theme theme;
     
     // Background
-    g.fillAll (juce::Colours::black);
+    g.fillAll (theme.background);
 
     // Draw grid (always draw grid)
-    drawGrid (g, s);
+    drawGrid (g, s, theme);
 
     // If no data, show message and return
     if (s.status == DataStatus::NoData)
     {
-        g.setColour (juce::Colours::yellow);
+        g.setColour (theme.warning);
         g.setFont (smallFont);
         const juce::String message = "NO DATA: " + s.noDataReason;
         g.drawText (message, getLocalBounds(), juce::Justification::centred);
@@ -522,36 +525,36 @@ void RTADisplay::paint (juce::Graphics& g)
         if (s.bandsDb.empty() || s.bandCentersHz.empty() || 
             s.bandsDb.size() != s.bandCentersHz.size())
         {
-            g.setColour (juce::Colours::yellow);
+            g.setColour (theme.warning);
             g.setFont (smallFont);
             g.drawText ("NO DATA: BANDS size mismatch", getLocalBounds(), juce::Justification::centred);
             return;
         }
-        paintBandsMode (g, s);
+        paintBandsMode (g, s, theme);
     }
     else if (s.viewMode == 1)  // Log mode
     {
         // Validate log data exists
         if (s.logDb.empty())
         {
-            g.setColour (juce::Colours::yellow);
+            g.setColour (theme.warning);
             g.setFont (smallFont);
             g.drawText ("NO DATA: LOG empty", getLocalBounds(), juce::Justification::centred);
             return;
         }
-        paintLogMode (g, s);
+        paintLogMode (g, s, theme);
     }
     else  // FFT mode (viewMode == 0)
     {
         // Validate FFT data exists
         if (s.fftDb.empty())
         {
-            g.setColour (juce::Colours::yellow);
+            g.setColour (theme.warning);
             g.setFont (smallFont);
             g.drawText ("NO DATA: FFT empty", getLocalBounds(), juce::Justification::centred);
             return;
         }
-        paintFFTMode (g, s);
+        paintFFTMode (g, s, theme);
     }
 
 #if JUCE_DEBUG
@@ -575,7 +578,7 @@ void RTADisplay::paint (juce::Graphics& g)
             debugText += "\nPeak: " + juce::String (debugPeakMinDb, 1) + " to " + juce::String (debugPeakMaxDb, 1);
     }
     
-    g.setColour (juce::Colours::yellow.withAlpha (0.8f));
+    g.setColour (theme.warning.withAlpha (0.8f));
     g.setFont (smallFont);
     const int textWidth = 180;
     const int textHeight = 140;
@@ -590,65 +593,172 @@ void RTADisplay::paint (juce::Graphics& g)
 // Helper functions defined above (freqToX, dbToY, computeLogFreqFromIndex, findNearestLogBand)
 
 //==============================================================================
-void RTADisplay::drawGrid (juce::Graphics& g, const RenderState& s)
+void RTADisplay::drawGrid (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme)
 {
     // B3: Pure function - uses only state reference, no member mutations
-    // Draw dB grid lines
-    g.setColour (juce::Colours::grey.withAlpha (0.3f));
+    
+    // Define plot bounds
+    const juce::Rectangle<int> plotBounds (static_cast<int> (plotAreaLeft),
+                                           static_cast<int> (plotAreaTop),
+                                           static_cast<int> (plotAreaWidth),
+                                           static_cast<int> (plotAreaHeight));
+    
+    // Build dB axis ticks (Left edge) - only major ticks (every 12dB) get labels
+    juce::Array<mdsp_ui::AxisTick> dbTicks;
     for (int db = static_cast<int> (s.topDb); db >= static_cast<int> (s.bottomDb); db -= 6)
     {
         const float y = dbToY (static_cast<float> (db), s);
         if (y >= plotAreaTop && y <= plotAreaTop + plotAreaHeight)
         {
+            const float posPx = y - plotAreaTop;  // Offset from plot top
             const bool isMajor = (db % 12 == 0);
-            g.setColour (isMajor ? juce::Colours::grey.withAlpha (0.5f) : juce::Colours::grey.withAlpha (0.2f));
-            g.drawHorizontalLine (static_cast<int> (y), plotAreaLeft, plotAreaLeft + plotAreaWidth);
-
-            // Label major lines
-            if (isMajor)
-            {
-                g.setColour (juce::Colours::lightgrey);
-                g.setFont (smallFont);
-                g.drawText (juce::String (db) + " dB",
-                           static_cast<int> (plotAreaLeft - 45),
-                           static_cast<int> (y - 7),
-                           40, 14,
-                           juce::Justification::centredRight);
-            }
+            juce::String label = isMajor ? (juce::String (db) + " dB") : juce::String();
+            dbTicks.add ({ posPx, label, isMajor });
         }
     }
 
-    // Draw frequency grid lines (log spacing)
+    // Build frequency axis ticks (Bottom edge)
+    juce::Array<mdsp_ui::AxisTick> freqTicks;
     const float freqGridPoints[] = { 20.0f, 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f, 20000.0f };
-    g.setColour (juce::Colours::grey.withAlpha (0.3f));
     for (float freq : freqGridPoints)
     {
         if (freq >= s.minHz && freq <= s.maxHz)
         {
             const float x = freqToX (freq, s);
-            g.drawVerticalLine (static_cast<int> (x), plotAreaTop, plotAreaTop + plotAreaHeight);
-
-            // Label at bottom
-            g.setColour (juce::Colours::lightgrey);
-            g.setFont (smallFont);
+            const float posPx = x - plotAreaLeft;  // Offset from plot left
             juce::String label;
             if (freq >= 1000.0f)
                 label = juce::String (freq / 1000.0f, 1) + "k";
             else
                 label = juce::String (static_cast<int> (freq));
-            g.drawText (label,
-                       static_cast<int> (x - 20),
-                       static_cast<int> (plotAreaTop + plotAreaHeight + 2),
-                       40, 14,
-                       juce::Justification::centred);
+            // Mark major frequencies: endpoints (20, 20k) and round numbers (100, 1k, 10k)
+            const bool isMajor = (freq == 20.0f || freq == 100.0f || freq == 1000.0f || freq == 10000.0f || freq == 20000.0f);
+            freqTicks.add ({ posPx, label, isMajor });
         }
+    }
+    
+    // Draw horizontal grid lines (from dB ticks) - minor first, then major
+    if (! dbTicks.isEmpty())
+    {
+        const float plotWidth = static_cast<float> (plotBounds.getWidth());
+        
+        // Minor horizontal grid lines
+        juce::Array<mdsp_ui::AxisTick> minorHorizontalTicks;
+        for (const auto& tick : dbTicks)
+        {
+            if (! tick.major)
+                minorHorizontalTicks.add ({ tick.posPx, juce::String(), false });
+        }
+        if (! minorHorizontalTicks.isEmpty())
+        {
+            mdsp_ui::AxisStyle gridMinorStyle;
+            gridMinorStyle.ticksOnly = true;
+            gridMinorStyle.clipTicksToPlot = true;
+            gridMinorStyle.tickAlpha = 0.20f;
+            gridMinorStyle.tickThickness = 1.0f;
+            gridMinorStyle.minorTickLengthPx = plotWidth;
+            gridMinorStyle.majorTickLengthPx = plotWidth;
+            mdsp_ui::AxisRenderer::draw (g, plotBounds, theme, minorHorizontalTicks, mdsp_ui::AxisEdge::Left, gridMinorStyle);
+        }
+        
+        // Major horizontal grid lines
+        juce::Array<mdsp_ui::AxisTick> majorHorizontalTicks;
+        for (const auto& tick : dbTicks)
+        {
+            if (tick.major)
+                majorHorizontalTicks.add ({ tick.posPx, juce::String(), true });
+        }
+        if (! majorHorizontalTicks.isEmpty())
+        {
+            mdsp_ui::AxisStyle gridMajorStyle;
+            gridMajorStyle.ticksOnly = true;
+            gridMajorStyle.clipTicksToPlot = true;
+            gridMajorStyle.tickAlpha = 0.35f;
+            gridMajorStyle.tickThickness = 1.0f;
+            gridMajorStyle.minorTickLengthPx = plotWidth;
+            gridMajorStyle.majorTickLengthPx = plotWidth;
+            mdsp_ui::AxisRenderer::draw (g, plotBounds, theme, majorHorizontalTicks, mdsp_ui::AxisEdge::Left, gridMajorStyle);
+        }
+    }
+    
+    // Draw vertical grid lines (from frequency ticks) - minor first, then major
+    if (! freqTicks.isEmpty())
+    {
+        const float plotHeight = static_cast<float> (plotBounds.getHeight());
+        
+        // Minor vertical grid lines
+        juce::Array<mdsp_ui::AxisTick> minorVerticalTicks;
+        for (const auto& tick : freqTicks)
+        {
+            if (! tick.major)
+                minorVerticalTicks.add ({ tick.posPx, juce::String(), false });
+        }
+        if (! minorVerticalTicks.isEmpty())
+        {
+            mdsp_ui::AxisStyle gridMinorStyle;
+            gridMinorStyle.ticksOnly = true;
+            gridMinorStyle.clipTicksToPlot = true;
+            gridMinorStyle.tickAlpha = 0.20f;
+            gridMinorStyle.tickThickness = 1.0f;
+            gridMinorStyle.minorTickLengthPx = plotHeight;
+            gridMinorStyle.majorTickLengthPx = plotHeight;
+            mdsp_ui::AxisRenderer::draw (g, plotBounds, theme, minorVerticalTicks, mdsp_ui::AxisEdge::Bottom, gridMinorStyle);
+        }
+        
+        // Major vertical grid lines
+        juce::Array<mdsp_ui::AxisTick> majorVerticalTicks;
+        for (const auto& tick : freqTicks)
+        {
+            if (tick.major)
+                majorVerticalTicks.add ({ tick.posPx, juce::String(), true });
+        }
+        if (! majorVerticalTicks.isEmpty())
+        {
+            mdsp_ui::AxisStyle gridMajorStyle;
+            gridMajorStyle.ticksOnly = true;
+            gridMajorStyle.clipTicksToPlot = true;
+            gridMajorStyle.tickAlpha = 0.35f;
+            gridMajorStyle.tickThickness = 1.0f;
+            gridMajorStyle.minorTickLengthPx = plotHeight;
+            gridMajorStyle.majorTickLengthPx = plotHeight;
+            mdsp_ui::AxisRenderer::draw (g, plotBounds, theme, majorVerticalTicks, mdsp_ui::AxisEdge::Bottom, gridMajorStyle);
+        }
+    }
+
+    // Draw dB axis (Left edge) with labels
+    if (! dbTicks.isEmpty())
+    {
+        mdsp_ui::AxisStyle dbStyle;
+        dbStyle.tickAlpha = 0.35f;
+        dbStyle.labelAlpha = 0.90f;
+        dbStyle.tickThickness = 1.0f;
+        dbStyle.labelFontHeight = 10.0f;
+        dbStyle.labelInsetPx = 6.0f;
+        dbStyle.ticksOnly = false;
+        dbStyle.clipTicksToPlot = true;
+        mdsp_ui::AxisRenderer::draw (g, plotBounds, theme, dbTicks, mdsp_ui::AxisEdge::Left, dbStyle);
+    }
+
+    // Draw frequency axis (Bottom edge) with labels
+    if (! freqTicks.isEmpty())
+    {
+        mdsp_ui::AxisStyle freqStyle;
+        freqStyle.tickAlpha = 0.35f;
+        freqStyle.labelAlpha = 0.90f;
+        freqStyle.tickThickness = 1.0f;
+        freqStyle.labelFontHeight = 10.0f;
+        freqStyle.labelInsetPx = 6.0f;
+        freqStyle.ticksOnly = false;
+        freqStyle.clipTicksToPlot = true;
+        mdsp_ui::AxisRenderer::draw (g, plotBounds, theme, freqTicks, mdsp_ui::AxisEdge::Bottom, freqStyle);
     }
 }
 
 //==============================================================================
-void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s)
+void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme)
 {
     // B3: Pure function - uses only state reference, no member mutations
+    
     // B7: Never calls updateGeometry() from paint
     if (!geometryValid || s.bandCentersHz.empty() || s.bandsDb.empty())
         return;
@@ -662,7 +772,7 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s)
     const bool hasPeaks = (s.bandsPeakDb.size() == s.bandsDb.size() && !s.bandsPeakDb.empty());
     
     // Draw thin vertical markers at each band center frequency (subtle)
-    g.setColour (juce::Colours::grey.withAlpha (0.2f));
+    g.setColour (theme.grid.withAlpha (0.2f));
     for (size_t i = 0; i < s.bandCentersHz.size() && i < bandGeometry.size(); ++i)
     {
         const float x = bandGeometry[i].xCenter;
@@ -670,7 +780,7 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s)
     }
 
     // Draw band bars
-    g.setColour (juce::Colours::cyan.withAlpha (0.7f));
+    g.setColour (theme.accent.withAlpha (0.7f));
     for (size_t i = 0; i < s.bandsDb.size() && i < bandGeometry.size(); ++i)
     {
         // Apply display gain in dbToY, so just pass raw dB (clamping happens in dbToY)
@@ -690,7 +800,7 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s)
     // Draw peak trace (using local hasPeaks boolean, NO state mutation)
     if (hasPeaks)
     {
-        g.setColour (juce::Colours::yellow.withAlpha (0.8f));
+        g.setColour (theme.seriesPeak.withAlpha (0.8f));
         juce::Path peakPath;
         bool pathStarted = false;
 
@@ -729,7 +839,7 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s)
         const float centerFreq = s.bandCentersHz[safeIndex];
 
         // Vertical cursor line
-        g.setColour (juce::Colours::white.withAlpha (0.5f));
+        g.setColour (theme.text.withAlpha (0.5f));
         g.drawVerticalLine (static_cast<int> (x), plotAreaTop, plotAreaTop + plotAreaHeight);
 
         // Tooltip box
@@ -738,13 +848,13 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s)
         const float tooltipW = 110.0f;
         const float tooltipH = hasPeaks ? 50.0f : 35.0f;
 
-        g.setColour (juce::Colours::black.withAlpha (0.8f));
+        g.setColour (theme.panel.withAlpha (0.9f));
         g.fillRoundedRectangle (tooltipX, tooltipY, tooltipW, tooltipH, 4.0f);
-        g.setColour (juce::Colours::white);
+        g.setColour (theme.gridMajor.withAlpha (0.9f));
         g.drawRoundedRectangle (tooltipX, tooltipY, tooltipW, tooltipH, 4.0f, 1.0f);
 
         g.setFont (smallFont);
-        g.setColour (juce::Colours::white);
+        g.setColour (theme.text);
 
         // Format frequency
         juce::String freqStr;
@@ -762,9 +872,10 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s)
 }
 
 //==============================================================================
-void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s)
+void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme)
 {
     // B3: Pure function - uses only state reference, no member mutations
+    
     // B4: Compute log centers on-the-fly from index (no logCentersHz storage)
     // B7: Never calls updateGeometry() from paint
     
@@ -780,7 +891,7 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s)
     const bool hasPeaks = (s.logPeakDb.size() == s.logDb.size() && !s.logPeakDb.empty());
     
     // B4: Draw band bars - compute x positions from index on-the-fly
-    g.setColour (juce::Colours::cyan.withAlpha (0.7f));
+    g.setColour (theme.accent.withAlpha (0.7f));
     for (int i = 0; i < numBands; ++i)
     {
         // Compute left/right boundaries in log space
@@ -807,7 +918,7 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s)
     // B4: Draw peak trace - compute centers from index on-the-fly
     if (hasPeaks)
     {
-        g.setColour (juce::Colours::yellow.withAlpha (0.8f));
+        g.setColour (theme.seriesPeak.withAlpha (0.8f));
         juce::Path peakPath;
         bool pathStarted = false;
 
@@ -839,9 +950,10 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s)
 }
 
 //==============================================================================
-void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s)
+void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme)
 {
     // B3: Pure function - uses only state reference, no member mutations
+    
     // B5: FFT mode uses log mapping to match grid scale
     // B7: Never calls updateGeometry() from paint
     
@@ -852,7 +964,7 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s)
     const bool hasPeaks = (s.fftPeakDb.size() == s.fftDb.size() && !s.fftPeakDb.empty());
 
     // B5: Draw FFT spectrum as polyline using log mapping (matches grid)
-    g.setColour (juce::Colours::cyan.withAlpha (0.7f));
+    g.setColour (theme.accent.withAlpha (0.7f));
     juce::Path spectrumPath;
     bool pathStarted = false;
 
@@ -907,7 +1019,7 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s)
     // B5: Draw peak trace if available (using local hasPeaks boolean, NO state mutation)
     if (hasPeaks)
     {
-        g.setColour (juce::Colours::yellow.withAlpha (0.8f));
+        g.setColour (theme.seriesPeak.withAlpha (0.8f));
         juce::Path peakPath;
         pathStarted = false;
 
