@@ -2,6 +2,7 @@
 #include <mdsp_ui/Theme.h>
 #include <mdsp_ui/AxisRenderer.h>
 #include <mdsp_ui/AxisInteraction.h>
+#include <mdsp_ui/PlotFrameRenderer.h>
 #include <cmath>
 #include <type_traits>
 #include <cstdint>
@@ -926,16 +927,23 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
         g.setColour (theme.text.withAlpha (0.5f));
         g.drawVerticalLine (static_cast<int> (x), plotAreaTop, plotAreaTop + plotAreaHeight);
 
-        // Tooltip box
+        // Tooltip box using PlotFrameRenderer
         const float tooltipX = juce::jmin (x + 10.0f, plotAreaLeft + plotAreaWidth - 120.0f);
         const float tooltipY = plotAreaTop + 10.0f;
         const float tooltipW = 110.0f;
         const float tooltipH = hasPeaks ? 50.0f : 35.0f;
-
-        g.setColour (theme.panel.withAlpha (0.9f));
-        g.fillRoundedRectangle (tooltipX, tooltipY, tooltipW, tooltipH, 4.0f);
-        g.setColour (theme.gridMajor.withAlpha (0.9f));
-        g.drawRoundedRectangle (tooltipX, tooltipY, tooltipW, tooltipH, 4.0f, 1.0f);
+        
+        mdsp_ui::PlotFrameStyle tooltipStyle;
+        tooltipStyle.cornerRadiusPx = 4.0f;
+        tooltipStyle.borderThicknessPx = 1.0f;
+        tooltipStyle.borderAlpha = 0.9f;
+        tooltipStyle.fillAlpha = 0.9f;
+        tooltipStyle.drawFill = true;
+        tooltipStyle.drawBorder = true;
+        tooltipStyle.clipToFrame = false;
+        
+        const juce::Rectangle<float> tooltipBounds (tooltipX, tooltipY, tooltipW, tooltipH);
+        mdsp_ui::PlotFrameRenderer::draw (g, tooltipBounds, theme, tooltipStyle);
 
         g.setFont (smallFont);
         g.setColour (theme.text);
@@ -1054,10 +1062,17 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
         const float readoutW = 80.0f;
         const float readoutH = 20.0f;
         
-        g.setColour (theme.panel.withAlpha (0.9f));
-        g.fillRoundedRectangle (readoutX, readoutY, readoutW, readoutH, 3.0f);
-        g.setColour (theme.gridMajor.withAlpha (0.9f));
-        g.drawRoundedRectangle (readoutX, readoutY, readoutW, readoutH, 3.0f, 1.0f);
+        mdsp_ui::PlotFrameStyle readoutStyle;
+        readoutStyle.cornerRadiusPx = 3.0f;
+        readoutStyle.borderThicknessPx = 1.0f;
+        readoutStyle.borderAlpha = 0.9f;
+        readoutStyle.fillAlpha = 0.9f;
+        readoutStyle.drawFill = true;
+        readoutStyle.drawBorder = true;
+        readoutStyle.clipToFrame = false;
+        
+        const juce::Rectangle<float> readoutBounds (readoutX, readoutY, readoutW, readoutH);
+        mdsp_ui::PlotFrameRenderer::draw (g, readoutBounds, theme, readoutStyle);
         
         g.setFont (smallFont);
         g.setColour (theme.text);
