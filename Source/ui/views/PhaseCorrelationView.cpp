@@ -1,5 +1,6 @@
 #include "PhaseCorrelationView.h"
 #include <mdsp_ui/Theme.h>
+#include <mdsp_ui/AxisRenderer.h>
 
 //==============================================================================
 PhaseCorrelationView::PhaseCorrelationView()
@@ -80,18 +81,30 @@ void PhaseCorrelationView::paint (juce::Graphics& g)
     g.setColour (theme.background.withAlpha (0.2f));
     g.fillRect (meterArea);
 
-    // Tick marks and labels
-    g.setColour (theme.textMuted.withAlpha (0.5f));
-    g.setFont (juce::Font (juce::FontOptions().withHeight (9.0f)));
+    // Build axis ticks for correlation meter (-1, 0, +1)
+    juce::Array<mdsp_ui::AxisTick> correlationTicks;
     for (int tick = -1; tick <= 1; ++tick)
     {
-        const float x = meterX + (meterWidth / 2.0f) * (1.0f + tick);
-        g.drawLine (x, static_cast<float> (meterY), x, static_cast<float> (meterY + meterHeight), 1.0f);
-        g.drawText (juce::String (tick), static_cast<int> (x - 8), meterY + meterHeight + 2,
-                    16, 10, juce::Justification::centred);
+        const float normalizedPos = (tick + 1.0f) / 2.0f;  // Map -1..+1 to 0..1
+        const float posPx = normalizedPos * static_cast<float> (meterWidth);
+        correlationTicks.add ({ posPx, juce::String (tick), true });  // All ticks are major and labeled
     }
 
-    // Correlation marker
+    // Draw correlation axis using AxisRenderer (Bottom edge)
+    const juce::Rectangle<int> meterPlotBounds (meterX, meterY, meterWidth, meterHeight);
+    mdsp_ui::AxisStyle meterStyle;
+    meterStyle.tickAlpha = 0.5f;
+    meterStyle.labelAlpha = 0.5f;
+    meterStyle.tickThickness = 1.0f;
+    meterStyle.labelFontHeight = 9.0f;
+    meterStyle.labelInsetPx = 2.0f;
+    meterStyle.minorTickLengthPx = static_cast<float> (meterHeight);
+    meterStyle.majorTickLengthPx = static_cast<float> (meterHeight);
+    meterStyle.ticksOnly = false;
+    meterStyle.clipTicksToPlot = true;
+    mdsp_ui::AxisRenderer::draw (g, meterPlotBounds, theme, correlationTicks, mdsp_ui::AxisEdge::Bottom, meterStyle);
+
+    // Correlation marker (keep as manual drawing - not an axis element)
     const float markerX = meterX + (meterWidth / 2.0f) * (1.0f + correlation_);
     g.setColour (theme.accent);
     g.fillRect (static_cast<int> (markerX - 1), meterY, 2, meterHeight);
