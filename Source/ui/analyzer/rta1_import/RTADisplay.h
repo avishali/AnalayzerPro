@@ -206,8 +206,8 @@ private:
 #endif
 
     // Fonts and colors (cached)
-    juce::Font labelFont;
-    juce::Font smallFont;
+    juce::Font labelFont { juce::FontOptions().withHeight (12.0f) };
+    juce::Font smallFont { juce::FontOptions().withHeight (10.0f) };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RTADisplay)
 };

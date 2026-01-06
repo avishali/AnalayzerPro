@@ -196,6 +196,13 @@ target_sources(${PLUGIN_NAME}
 # (ui_core_obj is defined in ui_core/CMakeLists.txt below)
 target_sources(${PLUGIN_NAME} PRIVATE $<TARGET_OBJECTS:ui_core_obj>)
 
+# Temporary: make deprecated-declarations an error for RTADisplay.cpp to pinpoint exact callsite
+set_source_files_properties(
+    Source/ui/analyzer/rta1_import/RTADisplay.cpp
+    PROPERTIES
+        COMPILE_OPTIONS "-Werror=deprecated-declarations"
+)
+
 target_compile_features(${PLUGIN_NAME} PUBLIC cxx_std_17)
 
 target_include_directories(${PLUGIN_NAME}
