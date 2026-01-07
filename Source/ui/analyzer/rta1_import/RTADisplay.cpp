@@ -1032,9 +1032,21 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
     // B3: Decide locally if peaks should be drawn (no state mutation)
     const bool hasPeaks = (s.logPeakDb.size() == s.logDb.size() && !s.logPeakDb.empty());
     
-    // B4: Draw band bars - compute x positions from index on-the-fly
-    g.setColour (theme.accent.withAlpha (0.7f));
-    for (int i = 0; i < numBands; ++i)
+    // B4: Draw band bars using BarsRenderer - compute x positions from index on-the-fly
+    if (numBands > 0)
+    {
+        // Use fixed stack array to avoid heap allocations (cap at 4096)
+        static constexpr int kMaxBars = 4096;
+        const int barsToDraw = std::min (numBands, kMaxBars);
+        
+        float xLeft[kMaxBars];
+        float xRight[kMaxBars];
+        float yTop[kMaxBars];
+        
+        const float bottomY = plotAreaTop + plotAreaHeight;
+        
+        // Collect bar geometry
+        for (int i = 0; i < barsToDraw; ++i)
     {
         // Compute left/right boundaries in log space
         const float logPosLow = logMin + (logRange * static_cast<float> (i)) / static_cast<float> (numBands);
@@ -1043,19 +1055,30 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
         const float fR = std::pow (10.0f, logPosHigh);
         
         // Map to x coordinates
-        const float xL = freqToX (fL, s);
-        const float xR = freqToX (fR, s);
+            xLeft[i] = freqToX (fL, s);
+            xRight[i] = freqToX (fR, s);
         
         // Apply display gain in dbToY, so just pass raw dB (clamping happens in dbToY)
-        const auto idx = static_cast<size_t> (i);
-        const float db = s.logDb[idx];
-        const float y = dbToY (db, s);
-        const float bottomY = plotAreaTop + plotAreaHeight;
-
-        if (y < bottomY && xR > xL)
-        {
-            g.fillRect (xL, y, xR - xL, bottomY - y);
+            const auto idx = static_cast<size_t> (i);
+            const float db = s.logDb[idx];
+            yTop[i] = dbToY (db, s);
         }
+        
+        // Render bars
+        const juce::Rectangle<int> plotBounds (static_cast<int> (plotAreaLeft),
+                                                static_cast<int> (plotAreaTop),
+                                                static_cast<int> (plotAreaWidth),
+                                                static_cast<int> (plotAreaHeight));
+        
+        mdsp_ui::BarsStyle barsStyle;
+        barsStyle.fillAlpha = 0.7f;
+        barsStyle.clipToPlot = true;
+        barsStyle.minBarWidthPx = 1.0f;
+        
+        mdsp_ui::BarsRenderer::drawBars (g, plotBounds, theme,
+                                          xLeft, xRight, yTop, barsToDraw,
+                                          bottomY,
+                                          theme.accent, barsStyle);
     }
 
     // B4: Draw peak trace - compute centers from index on-the-fly using SeriesRenderer
