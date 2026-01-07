@@ -1209,43 +1209,75 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
     // Frequency-axis hover readout (Log mode only)
     if (hoverActive && state.viewMode == 1)
     {
+        const juce::Rectangle<int> plotBounds (static_cast<int> (plotAreaLeft),
+                                               static_cast<int> (plotAreaTop),
+                                               static_cast<int> (plotAreaWidth),
+                                               static_cast<int> (plotAreaHeight));
+        
         // Draw vertical cursor line at resolved position (if snapped)
         if (lastHoverTickIndex >= 0)
         {
-            const juce::Rectangle<int> plotBounds (static_cast<int> (plotAreaLeft),
-                                                   static_cast<int> (plotAreaTop),
-                                                   static_cast<int> (plotAreaWidth),
-                                                   static_cast<int> (plotAreaHeight));
             const float cursorX = mdsp_ui::AxisInteraction::cursorLineX (plotBounds, lastHoverPosPx);
             g.setColour (theme.text.withAlpha (0.25f));
             g.drawVerticalLine (static_cast<int> (cursorX), plotAreaTop, plotAreaTop + plotAreaHeight);
         }
         
-        // Draw frequency readout box (bottom-left inside plot area) using ValueReadoutRenderer
+        // Build frequency axis ticks (reuse from drawGrid)
+        juce::Array<mdsp_ui::AxisTick> freqTicks;
+        const float freqGridPoints[] = { 20.0f, 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f, 20000.0f };
+        for (float freq : freqGridPoints)
+        {
+            if (freq >= state.minHz && freq <= state.maxHz)
+            {
+                const float x = freqToX (freq, state);
+                const float posPx = x - plotAreaLeft;
+                juce::String label;
+                if (freq >= 1000.0f)
+                    label = juce::String (freq / 1000.0f, 1) + "k";
+                else
+                    label = juce::String (static_cast<int> (freq));
+                const bool isMajor = (freq == 20.0f || freq == 100.0f || freq == 1000.0f || freq == 10000.0f || freq == 20000.0f);
+                freqTicks.add ({ posPx, label, isMajor });
+            }
+        }
+        
+        // Build AxisMapping for log scale
+        mdsp_ui::AxisMapping mapping;
+        mapping.domainMin = state.minHz;
+        mapping.domainMax = state.maxHz;
+        mapping.isLogScale = true;
+        
+        // Snap options (snap to labeled ticks only)
+        mdsp_ui::AxisSnapOptions snapOpts;
+        snapOpts.enableSnap = true;
+        snapOpts.maxSnapPx = 10.0f;
+        snapOpts.allowSnapToMinor = false;
+        snapOpts.preferLabeled = true;
+        
+        // Format frequency value
         juce::String freqStr = mdsp_ui::AxisInteraction::formatFrequencyHz (lastHoverFreqHz);
         
-        const float readoutX = plotAreaLeft + 8.0f;
-        const float readoutY = plotAreaTop + plotAreaHeight - 28.0f;
-        const float readoutW = 80.0f;
-        const float readoutH = 20.0f;
+        // Build CursorReadoutValue
+        mdsp_ui::CursorReadoutValue readoutValue;
+        readoutValue.leftLabel = "";
+        readoutValue.rightValue = "f: " + freqStr;
+        readoutValue.enabled = true;
         
-        const juce::Rectangle<float> readoutBounds (readoutX, readoutY, readoutW, readoutH);
-        
-        mdsp_ui::ValueReadoutLine readoutLine;
-        readoutLine.left = "";
-        readoutLine.right = "f: " + freqStr;
-        readoutLine.enabled = true;
-        
-        mdsp_ui::ValueReadoutStyle readoutStyle;
+        // Build CursorReadoutStyle
+        mdsp_ui::CursorReadoutStyle readoutStyle;
+        readoutStyle.edge = mdsp_ui::CursorReadoutEdge::BottomLeft;
         readoutStyle.fontHeightPx = 10.0f;
-        readoutStyle.drawFrame = true;
-        readoutStyle.cornerRadiusPx = 3.0f;
-        readoutStyle.frameFillAlpha = 0.9f;
-        readoutStyle.frameBorderAlpha = 0.9f;
-        readoutStyle.textAlpha = 1.0f;
         readoutStyle.paddingPx = 4.0f;
+        readoutStyle.cornerRadiusPx = 3.0f;
+        readoutStyle.fillAlpha = 0.9f;
+        readoutStyle.borderAlpha = 0.9f;
+        readoutStyle.textAlpha = 1.0f;
+        readoutStyle.clipToPlot = true;
         
-        mdsp_ui::ValueReadoutRenderer::drawAt (g, readoutBounds, theme, &readoutLine, 1, readoutStyle);
+        // Draw cursor readout
+        const float cursorPosPx = lastHoverPosPx - plotAreaLeft; // convert to axis-relative position
+        mdsp_ui::CursorReadoutRenderer::draw (g, plotBounds, theme, freqTicks, mdsp_ui::AxisEdge::Bottom,
+                                               cursorPosPx, mapping, snapOpts, readoutValue, readoutStyle);
     }
 }
 
