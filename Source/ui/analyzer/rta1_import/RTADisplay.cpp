@@ -10,7 +10,6 @@
 #include <mdsp_ui/AreaFillRenderer.h>
 #include <mdsp_ui/ValueReadoutRenderer.h>
 #include <mdsp_ui/ScaleLabelRenderer.h>
-#include <mdsp_ui/CursorReadoutRenderer.h>
 #include <mdsp_ui/AxisHoverController.h>
 #include <cmath>
 #include <type_traits>
@@ -1297,64 +1296,161 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
     const mdsp_ui::AxisHoverState& freqHoverState = freqHover_.state();
     const mdsp_ui::AxisHoverState& dbHoverState = dbHover_.state();
     
-    // Show readout if peak snap is active OR axis hover is active
-    if ((peakSnapState.snappedActive || freqHoverState.active || dbHoverState.active) && state.viewMode == 1)
+    // Determine if we should show readout (peak snap active OR axis hover active)
+    const bool hasFreq = peakSnapState.snappedActive || freqHoverState.active;
+    const bool hasDb = dbHoverState.active;
+    
+    if ((hasFreq || hasDb) && state.viewMode == 1)
     {
+        const juce::Rectangle<float> plotBoundsFloat (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
         const juce::Rectangle<int> plotBounds (static_cast<int> (plotAreaLeft),
                                                static_cast<int> (plotAreaTop),
                                                static_cast<int> (plotAreaWidth),
                                                static_cast<int> (plotAreaHeight));
         
-        // Determine which state to use for frequency readout (peak snap takes priority)
-        mdsp_ui::AxisHoverState effectiveFreqState = freqHoverState;
+        // Determine frequency value (peak snap takes priority)
+        float freqHz = 0.0f;
+        float freqCursorXPx = 0.0f;
+        bool freqActive = false;
         if (peakSnapState.snappedActive)
         {
-            // Use peak snap state for frequency
-            effectiveFreqState.active = true;
-            effectiveFreqState.cursorPosPx = peakSnapState.snappedXPx - plotAreaLeft; // Convert to relative
-            effectiveFreqState.value = peakSnapState.snappedFreqHz;
-            effectiveFreqState.snappedTickIndex = peakSnapState.lockedIndex; // Use lockedIndex as tick index
+            freqHz = peakSnapState.snappedFreqHz;
+            freqCursorXPx = peakSnapState.snappedXPx - plotAreaLeft; // Convert to relative
+            freqActive = true;
+        }
+        else if (freqHoverState.active)
+        {
+            freqHz = freqHoverState.value;
+            freqCursorXPx = freqHoverState.cursorPosPx;
+            freqActive = true;
         }
         
-        // Draw vertical cursor line at resolved position (if snapped)
-        if (effectiveFreqState.active && effectiveFreqState.snappedTickIndex >= 0)
+        // Determine dB value (from axis hover)
+        float dbVal = 0.0f;
+        float dbCursorYPx = 0.0f;
+        bool dbActive = false;
+        if (dbHoverState.active)
         {
-            const float cursorX = mdsp_ui::AxisInteraction::cursorLineX (plotBounds, effectiveFreqState.cursorPosPx);
+            dbVal = dbHoverState.value;
+            dbCursorYPx = dbHoverState.cursorPosPx;
+            dbActive = true;
+        }
+        else if (peakSnapState.snappedActive)
+        {
+            // Use peak snap dB value as fallback
+            dbVal = peakSnapState.snappedDb;
+            dbActive = true;
+        }
+        
+        // Draw vertical cursor line at resolved position (if freq active)
+        if (freqActive)
+        {
+            const float cursorX = mdsp_ui::AxisInteraction::cursorLineX (plotBounds, freqCursorXPx);
             g.setColour (theme.text.withAlpha (0.25f));
             g.drawVerticalLine (static_cast<int> (cursorX), plotAreaTop, plotAreaTop + plotAreaHeight);
         }
         
-        // Draw horizontal cursor line at resolved position (if snapped)
-        if (dbHoverState.active && dbHoverState.snappedTickIndex >= 0)
+        // Draw horizontal cursor line at resolved position (if db active and snapped)
+        if (dbActive && dbHoverState.active && dbHoverState.snappedTickIndex >= 0)
         {
-            const float cursorY = plotAreaTop + dbHoverState.cursorPosPx;
+            const float cursorY = plotAreaTop + dbCursorYPx;
             g.setColour (theme.text.withAlpha (0.25f));
             g.drawHorizontalLine (static_cast<int> (cursorY), plotAreaLeft, plotAreaLeft + plotAreaWidth);
         }
         
-        // Build CursorReadoutStyle
-        mdsp_ui::CursorReadoutStyle readoutStyle;
-        readoutStyle.edge = mdsp_ui::CursorReadoutEdge::BottomLeft;
-        readoutStyle.fontHeightPx = 10.0f;
-        readoutStyle.paddingPx = 4.0f;
-        readoutStyle.cornerRadiusPx = 3.0f;
-        readoutStyle.fillAlpha = 0.9f;
-        readoutStyle.borderAlpha = 0.9f;
-        readoutStyle.textAlpha = 1.0f;
-        readoutStyle.clipToPlot = true;
+        // Build ValueReadoutLine array (stack-allocated, max 2 lines)
+        mdsp_ui::ValueReadoutLine readoutLines[2];
+        int numLines = 0;
         
-        // Build effective Y state (use peak snap dB if available, otherwise axis hover)
-        mdsp_ui::AxisHoverState effectiveDbState = dbHoverState;
-        if (peakSnapState.snappedActive)
+        if (freqActive)
         {
-            // Use peak snap dB value
-            effectiveDbState.active = true;
-            effectiveDbState.value = peakSnapState.snappedDb;
-            effectiveDbState.snappedTickIndex = -1; // Peak snap doesn't use tick index for dB
+            readoutLines[numLines].left = "f:";
+            readoutLines[numLines].right = mdsp_ui::AxisInteraction::formatFrequencyHz (freqHz);
+            readoutLines[numLines].enabled = true;
+            numLines++;
         }
         
-        // Draw 2D cursor readout using effective states
-        mdsp_ui::CursorReadoutRenderer::draw2D (g, plotBounds, readoutStyle.edge, theme, effectiveFreqState, effectiveDbState, readoutStyle);
+        if (dbActive)
+        {
+            readoutLines[numLines].left = "dB:";
+            readoutLines[numLines].right = mdsp_ui::AxisInteraction::formatDb (dbVal);
+            readoutLines[numLines].enabled = true;
+            numLines++;
+        }
+        
+        if (numLines > 0)
+        {
+            // Measure text to compute accurate frame bounds (using GlyphArrangement like ValueReadoutRenderer)
+            const juce::Font font (juce::FontOptions().withHeight (10.0f));
+            g.setFont (font);
+            
+            float maxLineWidth = 0.0f;
+            for (int i = 0; i < numLines; ++i)
+            {
+                if (!readoutLines[i].enabled)
+                    continue;
+                
+                float lineWidth = 0.0f;
+                if (readoutLines[i].left.isEmpty())
+                {
+                    juce::GlyphArrangement glyphs;
+                    glyphs.addFittedText (font, readoutLines[i].right, 0.0f, 0.0f, 10000.0f, 10.0f, juce::Justification::left, 1);
+                    lineWidth = glyphs.getBoundingBox (0, -1, true).getWidth();
+                }
+                else
+                {
+                    juce::GlyphArrangement leftGlyphs;
+                    leftGlyphs.addFittedText (font, readoutLines[i].left, 0.0f, 0.0f, 10000.0f, 10.0f, juce::Justification::left, 1);
+                    const float leftWidth = leftGlyphs.getBoundingBox (0, -1, true).getWidth();
+                    
+                    juce::GlyphArrangement rightGlyphs;
+                    rightGlyphs.addFittedText (font, readoutLines[i].right, 0.0f, 0.0f, 10000.0f, 10.0f, juce::Justification::right, 1);
+                    const float rightWidth = rightGlyphs.getBoundingBox (0, -1, true).getWidth();
+                    
+                    lineWidth = leftWidth + rightWidth + 20.0f; // Add gap between left and right
+                }
+                maxLineWidth = std::max (maxLineWidth, lineWidth);
+            }
+            
+            // Compute frame dimensions
+            const float padding = 4.0f;
+            const float lineHeight = 12.0f;
+            const float lineGap = 2.0f;
+            const float frameWidth = maxLineWidth + (padding * 2.0f);
+            const float frameHeight = (static_cast<float> (numLines) * lineHeight) +
+                                     (static_cast<float> (numLines - 1) * lineGap) +
+                                     (padding * 2.0f);
+            
+            // Compute frame bounds: anchor near cursor, clamp to plot
+            // Use cursor position from frequency (X) if available, otherwise use plot center
+            const float anchorX = freqActive ? (plotAreaLeft + freqCursorXPx) : (plotAreaLeft + plotAreaWidth * 0.5f);
+            const float anchorY = dbActive ? (plotAreaTop + dbCursorYPx) : (plotAreaTop + plotAreaHeight * 0.5f);
+            
+            // Position readout box: bottom-left of cursor, offset slightly
+            float readoutX = anchorX + 10.0f;
+            float readoutY = anchorY - frameHeight - 5.0f;
+            
+            // Clamp to plot bounds
+            readoutX = juce::jmax (plotAreaLeft + 5.0f, juce::jmin (readoutX, plotAreaLeft + plotAreaWidth - frameWidth - 5.0f));
+            readoutY = juce::jmax (plotAreaTop + 5.0f, juce::jmin (readoutY, plotAreaTop + plotAreaHeight - frameHeight - 5.0f));
+            
+            const juce::Rectangle<float> frameBounds (readoutX, readoutY, frameWidth, frameHeight);
+            
+            // Build ValueReadoutStyle (match existing tooltip style)
+            mdsp_ui::ValueReadoutStyle readoutStyle;
+            readoutStyle.fontHeightPx = 10.0f;
+            readoutStyle.paddingPx = 4.0f;
+            readoutStyle.cornerRadiusPx = 3.0f;
+            readoutStyle.frameFillAlpha = 0.9f;
+            readoutStyle.frameBorderAlpha = 0.9f;
+            readoutStyle.textAlpha = 1.0f;
+            readoutStyle.disabledTextAlpha = 0.55f;
+            readoutStyle.drawFrame = true;
+            readoutStyle.clipToFrame = true;
+            
+            // Draw readout using ValueReadoutRenderer
+            mdsp_ui::ValueReadoutRenderer::drawAt (g, frameBounds, theme, readoutLines, numLines, readoutStyle);
+        }
     }
 }
 
