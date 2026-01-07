@@ -686,15 +686,12 @@ void RTADisplay::paint (juce::Graphics& g)
             debugText += "\nPeak: " + juce::String (debugPeakMinDb, 1) + " to " + juce::String (debugPeakMaxDb, 1);
     }
     
-    g.setColour (theme.warning.withAlpha (0.8f));
-    g.setFont (smallFont);
-    const int textWidth = 180;
-    const int textHeight = 140;
-    const int margin = 10;
-    g.drawText (debugText,
-                margin, margin,
-                textWidth, textHeight,
-                juce::Justification::topLeft);
+    mdsp_ui::TextOverlayStyle debugStyle;
+    debugStyle.colourOverride = theme.warning;
+    debugStyle.alpha = 0.8f;
+    debugStyle.fontHeightPx = 10.0f;
+    debugStyle.justification = juce::Justification::topLeft;
+    mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (10.0f, 10.0f, 180.0f, 140.0f), theme, debugText, debugStyle);
 #endif
 }
 
@@ -1014,11 +1011,17 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
         else
             freqStr = juce::String (centerFreq, 1) + " Hz";
 
-        g.drawText ("Fc: " + freqStr, static_cast<int> (tooltipX + 5), static_cast<int> (tooltipY + 5), 100, 12, juce::Justification::left);
-        g.drawText ("Cur: " + juce::String (currentDb, 1) + " dB", static_cast<int> (tooltipX + 5), static_cast<int> (tooltipY + 18), 100, 12, juce::Justification::left);
+        // Draw tooltip text using TextOverlayRenderer
+        mdsp_ui::TextOverlayStyle tooltipTextStyle;
+        tooltipTextStyle.fontHeightPx = 10.0f;
+        tooltipTextStyle.justification = juce::Justification::left;
+        tooltipTextStyle.paddingPx = 5.0f;
+        
+        mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (tooltipX, tooltipY, tooltipW, 12.0f), theme, "Fc: " + freqStr, tooltipTextStyle);
+        mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (tooltipX, tooltipY + 13.0f, tooltipW, 12.0f), theme, "Cur: " + juce::String (currentDb, 1) + " dB", tooltipTextStyle);
         
         if (hasPeaks && peakDb > s.bottomDb)
-            g.drawText ("Peak: " + juce::String (peakDb, 1) + " dB", static_cast<int> (tooltipX + 5), static_cast<int> (tooltipY + 31), 100, 12, juce::Justification::left);
+            mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (tooltipX, tooltipY + 26.0f, tooltipW, 12.0f), theme, "Peak: " + juce::String (peakDb, 1) + " dB", tooltipTextStyle);
     }
 }
 
@@ -1163,10 +1166,9 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
         
         mdsp_ui::TextOverlayStyle readoutTextStyle;
         readoutTextStyle.fontHeightPx = 10.0f;
-        readoutTextStyle.justification = juce::Justification::left;
+        readoutTextStyle.justification = juce::Justification::centredLeft;
         readoutTextStyle.paddingPx = 4.0f;
-        mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (readoutX, readoutY, 80.0f, 12.0f), theme, "f: " + freqStr, readoutTextStyle); 
-                    static_cast<int> (readoutW - 8), static_cast<int> (readoutH - 4), juce::Justification::centredLeft);
+        mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (readoutX, readoutY, readoutW, readoutH), theme, "f: " + freqStr, readoutTextStyle);
     }
 }
 
