@@ -3,6 +3,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <mdsp_ui/AxisInteraction.h>
 #include <mdsp_ui/AxisHoverController.h>
+#include <mdsp_ui/PeakSnapController.h>
 #include <vector>
 #include <type_traits>
 #include <cstdint>
@@ -149,17 +150,25 @@ private:
     // Helper: compute y position from dB
     float dbToY (float db, const RenderState& s) const;
     
-    // Helper: build frequency axis ticks, mapping, and snap options
-    void buildFreqAxisConfig (const RenderState& s,
-                               juce::Array<mdsp_ui::AxisTick>& ticks,
-                               mdsp_ui::AxisMapping& mapping,
-                               mdsp_ui::AxisSnapOptions& snap) const;
+    // Helper: build frequency axis config (ticks, mapping, snap options, style)
+    struct FreqAxisConfig
+    {
+        juce::Array<mdsp_ui::AxisTick> ticks;
+        mdsp_ui::AxisMapping mapping;
+        mdsp_ui::AxisSnapOptions snap;
+        mdsp_ui::AxisHoverControllerStyle style;
+    };
+    FreqAxisConfig buildFreqAxisConfig (const RenderState& s) const;
     
-    // Helper: build dB axis ticks, mapping, and snap options
-    void buildDbAxisConfig (const RenderState& s,
-                             juce::Array<mdsp_ui::AxisTick>& ticks,
-                             mdsp_ui::AxisMapping& mapping,
-                             mdsp_ui::AxisSnapOptions& snap) const;
+    // Helper: build dB axis config (ticks, mapping, snap options, style)
+    struct DbAxisConfig
+    {
+        juce::Array<mdsp_ui::AxisTick> ticks;
+        mdsp_ui::AxisMapping mapping;
+        mdsp_ui::AxisSnapOptions snap;
+        mdsp_ui::AxisHoverControllerStyle style;
+    };
+    DbAxisConfig buildDbAxisConfig (const RenderState& s) const;
     // Helper: compute y position from dB with frequency-dependent compensation (for FFT mode)
     float dbToYWithCompensation (float db, float freqHz, const RenderState& s) const;
     // Helper: compute tilt compensation in dB for a given frequency
@@ -190,6 +199,9 @@ private:
     // Axis hover controllers
     mdsp_ui::AxisHoverController freqHover_;  // Frequency axis (X, for Log/FFT modes)
     mdsp_ui::AxisHoverController dbHover_;    // dB axis (Y, Left edge)
+    
+    // Peak snap controller (for Log mode sticky peak snap)
+    mdsp_ui::PeakSnapController peakSnap_;
            
 #if JUCE_DEBUG
            // Debug-only runtime toggle for envelope decimator (OFF by default)
