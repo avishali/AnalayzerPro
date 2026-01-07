@@ -965,6 +965,27 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
             },
             theme.seriesPeak, peakStyle);
     }
+    
+    // Draw legend overlay
+    {
+        const juce::Rectangle<float> legendPlotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
+        mdsp_ui::LegendItem legendItems[2];
+        legendItems[0].label = "Bands";
+        legendItems[0].colour = theme.accent;
+        legendItems[0].enabled = true;
+        legendItems[1].label = "Peak";
+        legendItems[1].colour = theme.seriesPeak;
+        legendItems[1].enabled = hasPeaks;
+        
+        mdsp_ui::LegendStyle legendStyle;
+        legendStyle.fontHeightPx = 10.0f;
+        legendStyle.drawFrame = true;
+        legendStyle.frameCornerRadiusPx = 4.0f;
+        legendStyle.frameFillAlpha = 0.80f;
+        legendStyle.frameBorderAlpha = 0.90f;
+        
+        mdsp_ui::LegendRenderer::draw (g, legendPlotBounds, theme, legendItems, 2, mdsp_ui::LegendEdge::TopRight, legendStyle);
+    }
 
     // Draw cursor and readout (with defensive bounds checking)
     if (hoveredBandIndex >= 0 
@@ -1130,6 +1151,27 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
             theme.seriesPeak, peakStyle);
     }
     
+    // Draw legend overlay
+    {
+        const juce::Rectangle<float> legendPlotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
+        mdsp_ui::LegendItem legendItems[2];
+        legendItems[0].label = "Log";
+        legendItems[0].colour = theme.accent;
+        legendItems[0].enabled = true;
+        legendItems[1].label = "Peak";
+        legendItems[1].colour = theme.seriesPeak;
+        legendItems[1].enabled = hasPeaks;
+        
+        mdsp_ui::LegendStyle legendStyle;
+        legendStyle.fontHeightPx = 10.0f;
+        legendStyle.drawFrame = true;
+        legendStyle.frameCornerRadiusPx = 4.0f;
+        legendStyle.frameFillAlpha = 0.80f;
+        legendStyle.frameBorderAlpha = 0.90f;
+        
+        mdsp_ui::LegendRenderer::draw (g, legendPlotBounds, theme, legendItems, 2, mdsp_ui::LegendEdge::TopRight, legendStyle);
+    }
+    
     // Frequency-axis hover readout (Log mode only)
     if (hoverActive && state.viewMode == 1)
     {
@@ -1285,5 +1327,26 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
                 return dbToYWithCompensation (db, freq, s);
             },
             theme.seriesPeak, peakStyle);
+    }
+    
+    // Draw legend overlay
+    {
+        const juce::Rectangle<float> legendPlotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
+        mdsp_ui::LegendItem legendItems[2];
+        legendItems[0].label = "FFT";
+        legendItems[0].colour = theme.accent;
+        legendItems[0].enabled = true;
+        legendItems[1].label = "Peak";
+        legendItems[1].colour = theme.seriesPeak;
+        legendItems[1].enabled = hasPeaks;
+        
+        mdsp_ui::LegendStyle legendStyle;
+        legendStyle.fontHeightPx = 10.0f;
+        legendStyle.drawFrame = true;
+        legendStyle.frameCornerRadiusPx = 4.0f;
+        legendStyle.frameFillAlpha = 0.80f;
+        legendStyle.frameBorderAlpha = 0.90f;
+        
+        mdsp_ui::LegendRenderer::draw (g, legendPlotBounds, theme, legendItems, 2, mdsp_ui::LegendEdge::TopRight, legendStyle);
     }
 }
