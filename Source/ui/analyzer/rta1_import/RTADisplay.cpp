@@ -4,6 +4,7 @@
 #include <mdsp_ui/AxisInteraction.h>
 #include <mdsp_ui/PlotFrameRenderer.h>
 #include <mdsp_ui/SeriesRenderer.h>
+#include <mdsp_ui/BarsRenderer.h>
 #include <cmath>
 #include <type_traits>
 #include <cstdint>
@@ -877,22 +878,47 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
         g.drawVerticalLine (static_cast<int> (x), plotAreaTop, plotAreaTop + plotAreaHeight);
     }
 
-    // Draw band bars
-    g.setColour (theme.accent.withAlpha (0.7f));
-    for (size_t i = 0; i < s.bandsDb.size() && i < bandGeometry.size(); ++i)
+    // Draw band bars using BarsRenderer
+    const int numBands = static_cast<int> (std::min (s.bandsDb.size(), bandGeometry.size()));
+    if (numBands > 0)
     {
-        // Apply display gain in dbToY, so just pass raw dB (clamping happens in dbToY)
-        const float db = s.bandsDb[i];
-        const float y = dbToY (db, s);
+        // Use fixed stack array to avoid heap allocations (cap at 4096)
+        static constexpr int kMaxBars = 4096;
+        const int barsToDraw = std::min (numBands, kMaxBars);
+        
+        float xLeft[kMaxBars];
+        float xRight[kMaxBars];
+        float yTop[kMaxBars];
+        
         const float bottomY = plotAreaTop + plotAreaHeight;
 
-        if (y < bottomY)
+        // Collect bar geometry
+        for (int i = 0; i < barsToDraw; ++i)
         {
-            g.fillRect (bandGeometry[i].xLeft,
-                       y,
-                       bandGeometry[i].xRight - bandGeometry[i].xLeft,
-                       bottomY - y);
+            const auto idx = static_cast<size_t> (i);
+            xLeft[i] = bandGeometry[idx].xLeft;
+            xRight[i] = bandGeometry[idx].xRight;
+            
+            // Apply display gain in dbToY, so just pass raw dB (clamping happens in dbToY)
+            const float db = s.bandsDb[idx];
+            yTop[i] = dbToY (db, s);
         }
+        
+        // Render bars
+        const juce::Rectangle<int> plotBounds (static_cast<int> (plotAreaLeft),
+                                                static_cast<int> (plotAreaTop),
+                                                static_cast<int> (plotAreaWidth),
+                                                static_cast<int> (plotAreaHeight));
+        
+        mdsp_ui::BarsStyle barsStyle;
+        barsStyle.fillAlpha = 0.7f;
+        barsStyle.clipToPlot = true;
+        barsStyle.minBarWidthPx = 1.0f;
+        
+        mdsp_ui::BarsRenderer::drawBars (g, plotBounds, theme,
+                                          xLeft, xRight, yTop, barsToDraw,
+                                          bottomY,
+                                          theme.accent, barsStyle);
     }
 
     // Draw peak trace (using local hasPeaks boolean, NO state mutation) using SeriesRenderer
