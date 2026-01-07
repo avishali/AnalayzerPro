@@ -578,7 +578,20 @@ void RTADisplay::mouseExit (const juce::MouseEvent&)
     }
     if (needsRepaint)
         repaint();
+    }
+
+#if JUCE_DEBUG
+void RTADisplay::mouseDown (const juce::MouseEvent& e)
+{
+    // Debug-only: Toggle envelope decimator with Shift+Click
+    if (e.mods.isShiftDown())
+    {
+        useEnvelopeDecimator = ! useEnvelopeDecimator;
+        repaint();
+        DBG ("RTADisplay: envelope decimator " << (useEnvelopeDecimator ? "ON" : "OFF"));
+    }
 }
+#endif
 
 //==============================================================================
 void RTADisplay::paint (juce::Graphics& g)
@@ -895,14 +908,18 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
         peakStyle.minXStepPx = 1.0f;
         peakStyle.minYStepPx = 0.5f;
         peakStyle.useRoundedJoins = true;
-        peakStyle.decimationMode = kUseEnvelopeDecimator
-            ? mdsp_ui::SeriesStyle::DecimationMode::Envelope
-            : mdsp_ui::SeriesStyle::DecimationMode::Simple;
+#if JUCE_DEBUG
+        peakStyle.decimationMode = useEnvelopeDecimator
+            ? mdsp_ui::DecimationMode::Envelope
+            : mdsp_ui::DecimationMode::Simple;
+#else
+        peakStyle.decimationMode = mdsp_ui::SeriesStyle::DecimationMode::Simple;
+#endif
         peakStyle.envelopeMinBucketPx = 1.0f;
         peakStyle.envelopeDrawVertical = true;
 
         mdsp_ui::SeriesRenderer::drawPathFromMapping (g, plotBounds, theme, numBandsToDraw,
-            [&bandGeometry] (int i) -> float
+            [this] (int i) -> float
             {
                 const auto idx = static_cast<size_t> (i);
                 return bandGeometry[idx].xCenter;
@@ -1026,9 +1043,13 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
         peakStyle.minXStepPx = 1.0f;
         peakStyle.minYStepPx = 0.5f;
         peakStyle.useRoundedJoins = true;
-        peakStyle.decimationMode = kUseEnvelopeDecimator
-            ? mdsp_ui::SeriesStyle::DecimationMode::Envelope
-            : mdsp_ui::SeriesStyle::DecimationMode::Simple;
+#if JUCE_DEBUG
+        peakStyle.decimationMode = useEnvelopeDecimator
+            ? mdsp_ui::DecimationMode::Envelope
+            : mdsp_ui::DecimationMode::Simple;
+#else
+        peakStyle.decimationMode = mdsp_ui::SeriesStyle::DecimationMode::Simple;
+#endif
         peakStyle.envelopeMinBucketPx = 1.0f;
         peakStyle.envelopeDrawVertical = true;
 
@@ -1134,9 +1155,13 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
     spectrumStyle.minXStepPx = 1.0f;
     spectrumStyle.minYStepPx = 0.5f;
     spectrumStyle.useRoundedJoins = true;
-    spectrumStyle.decimationMode = kUseEnvelopeDecimator
-        ? mdsp_ui::SeriesStyle::DecimationMode::Envelope
-        : mdsp_ui::SeriesStyle::DecimationMode::Simple;
+#if JUCE_DEBUG
+    spectrumStyle.decimationMode = useEnvelopeDecimator
+        ? mdsp_ui::DecimationMode::Envelope
+        : mdsp_ui::DecimationMode::Simple;
+#else
+    spectrumStyle.decimationMode = mdsp_ui::SeriesStyle::DecimationMode::Simple;
+#endif
     spectrumStyle.envelopeMinBucketPx = 1.0f;
     spectrumStyle.envelopeDrawVertical = true;
 
@@ -1169,9 +1194,13 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
         peakStyle.minXStepPx = 1.0f;
         peakStyle.minYStepPx = 0.5f;
         peakStyle.useRoundedJoins = true;
-        peakStyle.decimationMode = kUseEnvelopeDecimator
-            ? mdsp_ui::SeriesStyle::DecimationMode::Envelope
-            : mdsp_ui::SeriesStyle::DecimationMode::Simple;
+#if JUCE_DEBUG
+        peakStyle.decimationMode = useEnvelopeDecimator
+            ? mdsp_ui::DecimationMode::Envelope
+            : mdsp_ui::DecimationMode::Simple;
+#else
+        peakStyle.decimationMode = mdsp_ui::SeriesStyle::DecimationMode::Simple;
+#endif
         peakStyle.envelopeMinBucketPx = 1.0f;
         peakStyle.envelopeDrawVertical = true;
 

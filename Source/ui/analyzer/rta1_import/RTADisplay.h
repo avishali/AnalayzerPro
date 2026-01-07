@@ -24,6 +24,10 @@ public:
     void resized() override;
     void mouseMove (const juce::MouseEvent& e) override;
     void mouseExit (const juce::MouseEvent& e) override;
+    
+#if JUCE_DEBUG
+    void mouseDown (const juce::MouseEvent& e) override;
+#endif
 
     /** Set current band data in dBFS */
     void setBandData (const std::vector<float>& currentDb, const std::vector<float>* peakDbNullable = nullptr);
@@ -169,11 +173,16 @@ private:
     // Hover state
     int hoveredBandIndex = -1;
     
-    // Frequency axis hover state (for Log mode)
-    float lastHoverFreqHz = 0.0f;
-    int lastHoverTickIndex = -1;
-    float lastHoverPosPx = 0.0f;  // Resolved position (snapped or raw)
-    bool hoverActive = false;
+           // Frequency axis hover state (for Log mode)
+           float lastHoverFreqHz = 0.0f;
+           int lastHoverTickIndex = -1;
+           float lastHoverPosPx = 0.0f;  // Resolved position (snapped or raw)
+           bool hoverActive = false;
+           
+#if JUCE_DEBUG
+           // Debug-only runtime toggle for envelope decimator (OFF by default)
+           bool useEnvelopeDecimator = false;
+#endif
     
     // Display gain offset (UI-only, affects rendering, not DSP)
     float displayGainDb = 0.0f;
