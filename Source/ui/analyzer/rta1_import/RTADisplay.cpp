@@ -1243,16 +1243,14 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
         
         // Build AxisMapping for log scale
         mdsp_ui::AxisMapping mapping;
-        mapping.domainMin = state.minHz;
-        mapping.domainMax = state.maxHz;
-        mapping.isLogScale = true;
+        mapping.scale = mdsp_ui::AxisScale::Log10;
+        mapping.minValue = state.minHz;
+        mapping.maxValue = state.maxHz;
         
         // Snap options (snap to labeled ticks only)
         mdsp_ui::AxisSnapOptions snapOpts;
-        snapOpts.enableSnap = true;
-        snapOpts.maxSnapPx = 10.0f;
-        snapOpts.allowSnapToMinor = false;
-        snapOpts.preferLabeled = true;
+        snapOpts.mode = mdsp_ui::SnapMode::NearestLabelledTick;
+        snapOpts.maxSnapDistPx = 12.0f;
         
         // Format frequency value
         juce::String freqStr = mdsp_ui::AxisInteraction::formatFrequencyHz (lastHoverFreqHz);
