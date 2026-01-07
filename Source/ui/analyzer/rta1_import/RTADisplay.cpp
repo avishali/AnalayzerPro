@@ -1023,10 +1023,6 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
         tooltipStyle.clipToFrame = false;
         
         const juce::Rectangle<float> tooltipBounds (tooltipX, tooltipY, tooltipW, tooltipH);
-        mdsp_ui::PlotFrameRenderer::draw (g, tooltipBounds, theme, tooltipStyle);
-
-        g.setFont (smallFont);
-        g.setColour (theme.text);
 
         // Format frequency
         juce::String freqStr;
@@ -1035,17 +1031,29 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
         else
             freqStr = juce::String (centerFreq, 1) + " Hz";
 
-        // Draw tooltip text using TextOverlayRenderer
-        mdsp_ui::TextOverlayStyle tooltipTextStyle;
-        tooltipTextStyle.fontHeightPx = 10.0f;
-        tooltipTextStyle.justification = juce::Justification::left;
-        tooltipTextStyle.paddingPx = 5.0f;
+        // Draw tooltip using ValueReadoutRenderer
+        mdsp_ui::ValueReadoutLine tooltipLines[3];
+        tooltipLines[0].left = "Fc:";
+        tooltipLines[0].right = freqStr;
+        tooltipLines[0].enabled = true;
+        tooltipLines[1].left = "Cur:";
+        tooltipLines[1].right = juce::String (currentDb, 1) + " dB";
+        tooltipLines[1].enabled = true;
+        tooltipLines[2].left = "Peak:";
+        tooltipLines[2].right = juce::String (peakDb, 1) + " dB";
+        tooltipLines[2].enabled = (hasPeaks && peakDb > s.bottomDb);
         
-        mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (tooltipX, tooltipY, tooltipW, 12.0f), theme, "Fc: " + freqStr, tooltipTextStyle);
-        mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (tooltipX, tooltipY + 13.0f, tooltipW, 12.0f), theme, "Cur: " + juce::String (currentDb, 1) + " dB", tooltipTextStyle);
+        mdsp_ui::ValueReadoutStyle readoutStyle;
+        readoutStyle.fontHeightPx = 10.0f;
+        readoutStyle.drawFrame = true;
+        readoutStyle.frameCornerRadiusPx = 4.0f;
+        readoutStyle.frameFillAlpha = 0.9f;
+        readoutStyle.frameBorderAlpha = 0.9f;
+        readoutStyle.textAlpha = 1.0f;
+        readoutStyle.disabledTextAlpha = 0.55f;
         
-        if (hasPeaks && peakDb > s.bottomDb)
-            mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (tooltipX, tooltipY + 26.0f, tooltipW, 12.0f), theme, "Peak: " + juce::String (peakDb, 1) + " dB", tooltipTextStyle);
+        const int numTooltipLines = (hasPeaks && peakDb > s.bottomDb) ? 3 : 2;
+        mdsp_ui::ValueReadoutRenderer::drawAt (g, tooltipBounds, theme, tooltipLines, numTooltipLines, readoutStyle);
     }
 }
 
@@ -1189,7 +1197,7 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
             g.drawVerticalLine (static_cast<int> (cursorX), plotAreaTop, plotAreaTop + plotAreaHeight);
         }
         
-        // Draw frequency readout box (bottom-left inside plot area)
+        // Draw frequency readout box (bottom-left inside plot area) using ValueReadoutRenderer
         juce::String freqStr = mdsp_ui::AxisInteraction::formatFrequencyHz (lastHoverFreqHz);
         
         const float readoutX = plotAreaLeft + 8.0f;
@@ -1197,23 +1205,23 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
         const float readoutW = 80.0f;
         const float readoutH = 20.0f;
         
-        mdsp_ui::PlotFrameStyle readoutStyle;
-        readoutStyle.cornerRadiusPx = 3.0f;
-        readoutStyle.borderThicknessPx = 1.0f;
-        readoutStyle.borderAlpha = 0.9f;
-        readoutStyle.fillAlpha = 0.9f;
-        readoutStyle.drawFill = true;
-        readoutStyle.drawBorder = true;
-        readoutStyle.clipToFrame = false;
-        
         const juce::Rectangle<float> readoutBounds (readoutX, readoutY, readoutW, readoutH);
-        mdsp_ui::PlotFrameRenderer::draw (g, readoutBounds, theme, readoutStyle);
         
-        mdsp_ui::TextOverlayStyle readoutTextStyle;
-        readoutTextStyle.fontHeightPx = 10.0f;
-        readoutTextStyle.justification = juce::Justification::centredLeft;
-        readoutTextStyle.paddingPx = 4.0f;
-        mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (readoutX, readoutY, readoutW, readoutH), theme, "f: " + freqStr, readoutTextStyle);
+        mdsp_ui::ValueReadoutLine readoutLine;
+        readoutLine.left = "";
+        readoutLine.right = "f: " + freqStr;
+        readoutLine.enabled = true;
+        
+        mdsp_ui::ValueReadoutStyle readoutStyle;
+        readoutStyle.fontHeightPx = 10.0f;
+        readoutStyle.drawFrame = true;
+        readoutStyle.frameCornerRadiusPx = 3.0f;
+        readoutStyle.frameFillAlpha = 0.9f;
+        readoutStyle.frameBorderAlpha = 0.9f;
+        readoutStyle.textAlpha = 1.0f;
+        readoutStyle.paddingPx = 4.0f;
+        
+        mdsp_ui::ValueReadoutRenderer::drawAt (g, readoutBounds, theme, &readoutLine, 1, readoutStyle);
     }
 }
 
