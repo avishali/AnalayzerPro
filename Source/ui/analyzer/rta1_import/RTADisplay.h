@@ -173,11 +173,8 @@ private:
     // Hover state
     int hoveredBandIndex = -1;
     
-           // Frequency axis hover state (for Log mode)
-           float lastHoverFreqHz = 0.0f;
-           int lastHoverTickIndex = -1;
-           float lastHoverPosPx = 0.0f;  // Resolved position (snapped or raw)
-           bool hoverActive = false;
+    // Frequency axis hover controller (for Log mode)
+    mdsp_ui::AxisHoverController logHover_;
            
 #if JUCE_DEBUG
            // Debug-only runtime toggle for envelope decimator (OFF by default)
