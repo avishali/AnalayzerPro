@@ -5,6 +5,7 @@
 #include <mdsp_ui/PlotFrameRenderer.h>
 #include <mdsp_ui/SeriesRenderer.h>
 #include <mdsp_ui/BarsRenderer.h>
+#include <mdsp_ui/TextOverlayRenderer.h>
 #include <cmath>
 #include <type_traits>
 #include <cstdint>
@@ -610,10 +611,12 @@ void RTADisplay::paint (juce::Graphics& g)
     // If no data, show message and return
     if (s.status == DataStatus::NoData)
     {
-        g.setColour (theme.warning);
-        g.setFont (smallFont);
         const juce::String message = "NO DATA: " + s.noDataReason;
-        g.drawText (message, getLocalBounds(), juce::Justification::centred);
+        mdsp_ui::TextOverlayStyle noDataStyle;
+        noDataStyle.colourOverride = theme.warning;
+        noDataStyle.fontHeightPx = 10.0f;
+        noDataStyle.justification = juce::Justification::centred;
+        mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (getLocalBounds().toFloat()), theme, message, noDataStyle);
         return;
     }
 
@@ -624,9 +627,11 @@ void RTADisplay::paint (juce::Graphics& g)
         if (s.bandsDb.empty() || s.bandCentersHz.empty() || 
             s.bandsDb.size() != s.bandCentersHz.size())
         {
-            g.setColour (theme.warning);
-            g.setFont (smallFont);
-            g.drawText ("NO DATA: BANDS size mismatch", getLocalBounds(), juce::Justification::centred);
+            mdsp_ui::TextOverlayStyle noDataStyle;
+            noDataStyle.colourOverride = theme.warning;
+            noDataStyle.fontHeightPx = 10.0f;
+            noDataStyle.justification = juce::Justification::centred;
+            mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (getLocalBounds().toFloat()), theme, "NO DATA: BANDS size mismatch", noDataStyle);
             return;
         }
         paintBandsMode (g, s, theme);
@@ -636,9 +641,11 @@ void RTADisplay::paint (juce::Graphics& g)
         // Validate log data exists
         if (s.logDb.empty())
         {
-            g.setColour (theme.warning);
-            g.setFont (smallFont);
-            g.drawText ("NO DATA: LOG empty", getLocalBounds(), juce::Justification::centred);
+            mdsp_ui::TextOverlayStyle noDataStyle;
+            noDataStyle.colourOverride = theme.warning;
+            noDataStyle.fontHeightPx = 10.0f;
+            noDataStyle.justification = juce::Justification::centred;
+            mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (getLocalBounds().toFloat()), theme, "NO DATA: LOG empty", noDataStyle);
             return;
         }
         paintLogMode (g, s, theme);
@@ -648,9 +655,11 @@ void RTADisplay::paint (juce::Graphics& g)
         // Validate FFT data exists
         if (s.fftDb.empty())
         {
-            g.setColour (theme.warning);
-            g.setFont (smallFont);
-            g.drawText ("NO DATA: FFT empty", getLocalBounds(), juce::Justification::centred);
+            mdsp_ui::TextOverlayStyle noDataStyle;
+            noDataStyle.colourOverride = theme.warning;
+            noDataStyle.fontHeightPx = 10.0f;
+            noDataStyle.justification = juce::Justification::centred;
+            mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (getLocalBounds().toFloat()), theme, "NO DATA: FFT empty", noDataStyle);
             return;
         }
         paintFFTMode (g, s, theme);
@@ -1152,9 +1161,11 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
         const juce::Rectangle<float> readoutBounds (readoutX, readoutY, readoutW, readoutH);
         mdsp_ui::PlotFrameRenderer::draw (g, readoutBounds, theme, readoutStyle);
         
-        g.setFont (smallFont);
-        g.setColour (theme.text);
-        g.drawText ("f: " + freqStr, static_cast<int> (readoutX + 4), static_cast<int> (readoutY + 2), 
+        mdsp_ui::TextOverlayStyle readoutTextStyle;
+        readoutTextStyle.fontHeightPx = 10.0f;
+        readoutTextStyle.justification = juce::Justification::left;
+        readoutTextStyle.paddingPx = 4.0f;
+        mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (readoutX, readoutY, 80.0f, 12.0f), theme, "f: " + freqStr, readoutTextStyle); 
                     static_cast<int> (readoutW - 8), static_cast<int> (readoutH - 4), juce::Justification::centredLeft);
     }
 }
