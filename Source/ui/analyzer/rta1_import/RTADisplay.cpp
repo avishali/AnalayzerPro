@@ -7,6 +7,7 @@
 #include <mdsp_ui/BarsRenderer.h>
 #include <mdsp_ui/TextOverlayRenderer.h>
 #include <mdsp_ui/LegendRenderer.h>
+#include <mdsp_ui/AreaFillRenderer.h>
 #include <cmath>
 #include <type_traits>
 #include <cstdint>
