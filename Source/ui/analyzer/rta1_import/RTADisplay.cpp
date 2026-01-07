@@ -861,6 +861,29 @@ void RTADisplay::drawGrid (juce::Graphics& g, const RenderState& s, const mdsp_u
         freqStyle.clipTicksToPlot = true;
         mdsp_ui::AxisRenderer::draw (g, plotBounds, theme, freqTicks, mdsp_ui::AxisEdge::Bottom, freqStyle);
     }
+    
+    // Draw scale labels
+    {
+        const juce::Rectangle<float> plotBoundsFloat (plotBounds.toFloat());
+        
+        mdsp_ui::ScaleLabelStyle scaleLabelStyle;
+        scaleLabelStyle.fontHeightPx = 10.0f;
+        scaleLabelStyle.alpha = 0.6f;
+        scaleLabelStyle.insetPx = 6.0f;
+        scaleLabelStyle.rotateForVertical = true;
+        
+        // Bottom edge: "Hz"
+        mdsp_ui::ScaleLabel hzLabel;
+        hzLabel.text = "Hz";
+        hzLabel.enabled = true;
+        mdsp_ui::ScaleLabelRenderer::draw (g, plotBoundsFloat, mdsp_ui::ScaleLabelEdge::Bottom, hzLabel, scaleLabelStyle, theme);
+        
+        // Left edge: "dB"
+        mdsp_ui::ScaleLabel dbLabel;
+        dbLabel.text = "dB";
+        dbLabel.enabled = true;
+        mdsp_ui::ScaleLabelRenderer::draw (g, plotBoundsFloat, mdsp_ui::ScaleLabelEdge::Left, dbLabel, scaleLabelStyle, theme);
+    }
 }
 
 //==============================================================================
@@ -1047,7 +1070,7 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
         mdsp_ui::ValueReadoutStyle readoutStyle;
         readoutStyle.fontHeightPx = 10.0f;
         readoutStyle.drawFrame = true;
-        readoutStyle.frameCornerRadiusPx = 4.0f;
+        readoutStyle.cornerRadiusPx = 4.0f;
         readoutStyle.frameFillAlpha = 0.9f;
         readoutStyle.frameBorderAlpha = 0.9f;
         readoutStyle.textAlpha = 1.0f;
@@ -1216,7 +1239,7 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
         mdsp_ui::ValueReadoutStyle readoutStyle;
         readoutStyle.fontHeightPx = 10.0f;
         readoutStyle.drawFrame = true;
-        readoutStyle.frameCornerRadiusPx = 3.0f;
+        readoutStyle.cornerRadiusPx = 3.0f;
         readoutStyle.frameFillAlpha = 0.9f;
         readoutStyle.frameBorderAlpha = 0.9f;
         readoutStyle.textAlpha = 1.0f;
@@ -1266,6 +1289,7 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
     const juce::Rectangle<float> plotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
     
     // Optional area fill (behind spectrum stroke)
+    static constexpr bool kEnableFftFill = false; // OFF by default
     if (kEnableFftFill)
     {
         mdsp_ui::AreaFillStyle fillStyle;
@@ -1299,9 +1323,9 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
         mdsp_ui::AreaFillRenderer::drawFromMapping (
             g, plotBounds,
             freqValues, dbValues, binsToUse,
-            [&s, &mappingIndex, this] (float freq) -> float
+            [&s, &mappingIndex, this, plotBounds] (float freq) -> float
             {
-                const int idx = mappingIndex++;
+                mappingIndex++; // track index for yTo01 lambda
                 if (freq < s.minHz || freq > s.maxHz)
                     return std::numeric_limits<float>::quiet_NaN();
                 const float xPx = freqToX (freq, s);
