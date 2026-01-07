@@ -1254,6 +1254,61 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
 #endif
 
     const juce::Rectangle<float> plotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
+    
+    // Optional area fill (behind spectrum stroke)
+    if (kEnableFftFill)
+    {
+        mdsp_ui::AreaFillStyle fillStyle;
+        fillStyle.colour = theme.accent;
+        fillStyle.alpha = 0.18f;
+        fillStyle.baselineY01 = 1.0f; // fill to bottom of plot
+        fillStyle.closeToBaseline = true;
+        fillStyle.clipToPlot = true;
+        fillStyle.decimate = true;
+        fillStyle.minXStepPx = 1.0f;
+        fillStyle.minYStepPx = 0.25f;
+        
+        // Build arrays for x/y values (frequencies and dB values)
+        // Use stack arrays to avoid heap allocations
+        static constexpr int kMaxBins = 65536;
+        const int binsToUse = std::min (numBins, kMaxBins);
+        float freqValues[kMaxBins];
+        float dbValues[kMaxBins];
+        
+        for (int i = 0; i < binsToUse; ++i)
+        {
+            freqValues[i] = static_cast<float> (i * binWidthHz);
+            const auto idx = static_cast<size_t> (i);
+            dbValues[i] = (idx < s.fftDb.size()) ? s.fftDb[idx] : std::numeric_limits<float>::quiet_NaN();
+        }
+        
+        // Use same mapping as SeriesRenderer (freqToX/dbToYWithCompensation)
+        // Map frequency -> normalized x, and (freq, db) -> normalized y
+        // AreaFillRenderer calls xTo01/yTo01 in pairs, so we track index
+        int mappingIndex = 0;
+        mdsp_ui::AreaFillRenderer::drawFromMapping (
+            g, plotBounds,
+            freqValues, dbValues, binsToUse,
+            [&s, &mappingIndex, this] (float freq) -> float
+            {
+                const int idx = mappingIndex++;
+                if (freq < s.minHz || freq > s.maxHz)
+                    return std::numeric_limits<float>::quiet_NaN();
+                const float xPx = freqToX (freq, s);
+                return (xPx - plotBounds.getX()) / plotBounds.getWidth(); // normalize to [0..1]
+            },
+            [&s, freqValues, &mappingIndex, binsToUse, &plotBounds, this] (float db) -> float
+            {
+                const int idx = mappingIndex - 1; // xTo01 already incremented
+                if (!std::isfinite (db))
+                    return std::numeric_limits<float>::quiet_NaN();
+                const float freq = (idx >= 0 && idx < binsToUse) ? freqValues[idx] : 0.0f;
+                const float yPx = dbToYWithCompensation (db, freq, s);
+                return (yPx - plotBounds.getY()) / plotBounds.getHeight(); // normalize to [0..1]
+            },
+            fillStyle);
+    }
+    
     mdsp_ui::SeriesStyle spectrumStyle;
     spectrumStyle.strokeThickness = 1.5f;
     spectrumStyle.alpha = 0.7f;
