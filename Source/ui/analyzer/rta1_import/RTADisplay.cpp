@@ -22,18 +22,13 @@
 
 //==============================================================================
 RTADisplay::RTADisplay()
-    : freqHover_ ([]() {
-        mdsp_ui::AxisHoverControllerStyle style;
-        style.snap.mode = mdsp_ui::SnapMode::NearestLabelledTick;
-        style.snap.maxSnapDistPx = 12.0f;
-        style.epsPosPx = 0.5f;
-        style.epsValue = 0.1f;
-        return style;
-    }())
-    , dbHover_ ([]() {
-        mdsp_ui::AxisHoverControllerStyle style;
-        style.snap.mode = mdsp_ui::SnapMode::NearestLabelledTick;
-        style.snap.maxSnapDistPx = 12.0f;
+    : freqHover_ ({})  // Style will be set via buildFreqAxisConfig if needed
+    , dbHover_ ({})    // Style will be set via buildDbAxisConfig if needed
+    , peakSnap_ ([]() {
+        mdsp_ui::PeakSnapStyle style;
+        style.snapPx = 8.0f;
+        style.releasePx = 16.0f;
+        style.searchRadiusPx = 20.0f;
         style.epsPosPx = 0.5f;
         style.epsValue = 0.1f;
         return style;
@@ -496,26 +491,22 @@ void RTADisplay::mouseMove (const juce::MouseEvent& e)
         y >= plotAreaTop && y <= plotAreaTop + plotAreaHeight)
     {
         // Build frequency axis config
-        juce::Array<mdsp_ui::AxisTick> freqTicks;
-        mdsp_ui::AxisMapping freqMapping;
-        mdsp_ui::AxisSnapOptions freqSnap;
-        buildFreqAxisConfig (state, freqTicks, freqMapping, freqSnap);
+        const FreqAxisConfig freqConfig = buildFreqAxisConfig (state);
+        freqHover_.setStyle (freqConfig.style);
         
         // Update frequency hover controller (X-axis)
         const float cursorXpx = x - plotAreaLeft;
-        if (freqHover_.updateFromCursorPx (cursorXpx, plotAreaWidth, freqMapping, freqTicks))
+        if (freqHover_.updateFromCursorPx (cursorXpx, plotAreaWidth, freqConfig.mapping, freqConfig.ticks))
             needsRepaint = true;
         
         // Build dB axis config
-        juce::Array<mdsp_ui::AxisTick> dbTicks;
-        mdsp_ui::AxisMapping dbMapping;
-        mdsp_ui::AxisSnapOptions dbSnap;
-        buildDbAxisConfig (state, dbTicks, dbMapping, dbSnap);
+        const DbAxisConfig dbConfig = buildDbAxisConfig (state);
+        dbHover_.setStyle (dbConfig.style);
         
         // Update dB hover controller (Y-axis)
         // Note: Y increases downward in screen coords, but dbMapping maps bottomDb (min) to 0, topDb (max) to plotHeight
         const float cursorYpx = y - plotAreaTop;
-        if (dbHover_.updateFromCursorPx (cursorYpx, plotAreaHeight, dbMapping, dbTicks))
+        if (dbHover_.updateFromCursorPx (cursorYpx, plotAreaHeight, dbConfig.mapping, dbConfig.ticks))
             needsRepaint = true;
     }
     else
@@ -531,8 +522,56 @@ void RTADisplay::mouseMove (const juce::MouseEvent& e)
         if (state.logDb.empty())
         {
             hoveredBandIndex = -1;
+            if (peakSnap_.deactivate())
+                needsRepaint = true;
+            if (needsRepaint)
+                repaint();
             return;
         }
+        
+        // Update peak snap controller for Log mode
+        if (x >= plotAreaLeft && x <= plotAreaLeft + plotAreaWidth && 
+            y >= plotAreaTop && y <= plotAreaTop + plotAreaHeight)
+        {
+            // Build frequency array for peak snap (compute on-the-fly, no allocation)
+            const int numBands = static_cast<int> (state.logDb.size());
+            static constexpr int kMaxBands = 4096;
+            const int bandsToUse = std::min (numBands, kMaxBands);
+            
+            // Use stack arrays to avoid heap allocations
+            float freqHz[kMaxBands];
+            float db[kMaxBands];
+            
+            const float logMin = std::log10 (state.minHz);
+            const float logMax = std::log10 (state.maxHz);
+            const float logRange = logMax - logMin;
+            
+            for (int i = 0; i < bandsToUse; ++i)
+            {
+                // Compute log frequency from index (same as computeLogFreqFromIndex)
+                const float logPos = logMin + (static_cast<float> (i) + 0.5f) / static_cast<float> (numBands) * logRange;
+                freqHz[i] = std::pow (10.0f, logPos);
+                const auto idx = static_cast<size_t> (i);
+                db[i] = (idx < state.logDb.size()) ? state.logDb[idx] : std::numeric_limits<float>::quiet_NaN();
+            }
+            
+            // Build frequency axis mapping (same as buildFreqAxisConfig)
+            mdsp_ui::AxisMapping freqMapping;
+            freqMapping.scale = mdsp_ui::AxisScale::Log10;
+            freqMapping.minValue = state.minHz;
+            freqMapping.maxValue = state.maxHz;
+            
+            const juce::Rectangle<float> plotBoundsFloat (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
+            
+            if (peakSnap_.updateFromCursorX (x, plotBoundsFloat, freqMapping, freqHz, db, bandsToUse))
+                needsRepaint = true;
+        }
+        else
+        {
+            if (peakSnap_.deactivate())
+                needsRepaint = true;
+        }
+        
         newHovered = findNearestLogBand (x, state);
     }
     else if (state.viewMode == 0)  // FFT mode
@@ -540,8 +579,6 @@ void RTADisplay::mouseMove (const juce::MouseEvent& e)
         // For now, disable band hover in FFT mode
         newHovered = -1;
     }
-    
-    bool needsRepaint = false;
     if (newHovered != hoveredBandIndex)
     {
         hoveredBandIndex = newHovered;
@@ -636,7 +673,7 @@ void RTADisplay::paint (juce::Graphics& g)
         }
         paintLogMode (g, s, theme);
     }
-    else  // FFT mode (viewMode == 0)
+    else if (s.viewMode == 0)  // FFT mode
     {
         // Validate FFT data exists
         if (s.fftDb.empty())
@@ -684,12 +721,10 @@ void RTADisplay::paint (juce::Graphics& g)
 // Helper functions defined above (freqToX, dbToY, computeLogFreqFromIndex, findNearestLogBand)
 
 //==============================================================================
-void RTADisplay::buildFreqAxisConfig (const RenderState& s,
-                                       juce::Array<mdsp_ui::AxisTick>& ticks,
-                                       mdsp_ui::AxisMapping& mapping,
-                                       mdsp_ui::AxisSnapOptions& snap) const
+RTADisplay::FreqAxisConfig RTADisplay::buildFreqAxisConfig (const RenderState& s) const
 {
-    ticks.clear();
+    FreqAxisConfig config;
+    
     const float freqGridPoints[] = { 20.0f, 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f, 20000.0f };
     for (float freq : freqGridPoints)
     {
@@ -703,24 +738,28 @@ void RTADisplay::buildFreqAxisConfig (const RenderState& s,
             else
                 label = juce::String (static_cast<int> (freq));
             const bool isMajor = (freq == 20.0f || freq == 100.0f || freq == 1000.0f || freq == 10000.0f || freq == 20000.0f);
-            ticks.add ({ posPx, label, isMajor });
+            config.ticks.add ({ posPx, label, isMajor });
         }
     }
     
-    mapping.scale = mdsp_ui::AxisScale::Log10;
-    mapping.minValue = s.minHz;
-    mapping.maxValue = s.maxHz;
+    config.mapping.scale = mdsp_ui::AxisScale::Log10;
+    config.mapping.minValue = s.minHz;
+    config.mapping.maxValue = s.maxHz;
     
-    snap.mode = mdsp_ui::SnapMode::NearestLabelledTick;
-    snap.maxSnapDistPx = 12.0f;
+    config.snap.mode = mdsp_ui::SnapMode::NearestLabelledTick;
+    config.snap.maxSnapDistPx = 12.0f;
+    
+    config.style.snap = config.snap;
+    config.style.epsPosPx = 0.5f;
+    config.style.epsValue = 0.1f;
+    
+    return config;
 }
 
-void RTADisplay::buildDbAxisConfig (const RenderState& s,
-                                     juce::Array<mdsp_ui::AxisTick>& ticks,
-                                     mdsp_ui::AxisMapping& mapping,
-                                     mdsp_ui::AxisSnapOptions& snap) const
+RTADisplay::DbAxisConfig RTADisplay::buildDbAxisConfig (const RenderState& s) const
 {
-    ticks.clear();
+    DbAxisConfig config;
+    
     // Build dB ticks: every 6dB, major at every 12dB (with labels)
     for (int db = static_cast<int> (s.topDb); db >= static_cast<int> (s.bottomDb); db -= 6)
     {
@@ -730,16 +769,22 @@ void RTADisplay::buildDbAxisConfig (const RenderState& s,
             const float posPx = y - plotAreaTop;  // Offset from plot top
             const bool isMajor = (db % 12 == 0);
             juce::String label = isMajor ? (juce::String (db) + " dB") : juce::String();
-            ticks.add ({ posPx, label, isMajor });
+            config.ticks.add ({ posPx, label, isMajor });
         }
     }
     
-    mapping.scale = mdsp_ui::AxisScale::Linear;
-    mapping.minValue = s.bottomDb;  // Note: bottomDb is more negative (lower value)
-    mapping.maxValue = s.topDb;     // topDb is less negative (higher value)
+    config.mapping.scale = mdsp_ui::AxisScale::Linear;
+    config.mapping.minValue = s.bottomDb;  // Note: bottomDb is more negative (lower value)
+    config.mapping.maxValue = s.topDb;     // topDb is less negative (higher value)
     
-    snap.mode = mdsp_ui::SnapMode::NearestLabelledTick;
-    snap.maxSnapDistPx = 12.0f;
+    config.snap.mode = mdsp_ui::SnapMode::NearestLabelledTick;
+    config.snap.maxSnapDistPx = 12.0f;
+    
+    config.style.snap = config.snap;
+    config.style.epsPosPx = 0.5f;
+    config.style.epsValue = 0.1f;
+    
+    return config;
 }
 
 //==============================================================================
@@ -1247,37 +1292,45 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
         mdsp_ui::LegendRenderer::draw (g, legendPlotBounds, theme, legendItems, 2, mdsp_ui::LegendEdge::TopRight, legendStyle);
     }
     
-    // Frequency-axis hover readout (Log mode only)
+    // 2D cursor readout (freq + dB) for Log mode with peak snap
+    const mdsp_ui::PeakSnapState& peakSnapState = peakSnap_.state();
     const mdsp_ui::AxisHoverState& freqHoverState = freqHover_.state();
-    if (freqHoverState.active && state.viewMode == 1)
+    const mdsp_ui::AxisHoverState& dbHoverState = dbHover_.state();
+    
+    // Show readout if peak snap is active OR axis hover is active
+    if ((peakSnapState.snappedActive || freqHoverState.active || dbHoverState.active) && state.viewMode == 1)
     {
         const juce::Rectangle<int> plotBounds (static_cast<int> (plotAreaLeft),
                                                static_cast<int> (plotAreaTop),
                                                static_cast<int> (plotAreaWidth),
                                                static_cast<int> (plotAreaHeight));
         
-        // Draw vertical cursor line at resolved position (if snapped)
-        if (freqHoverState.snappedTickIndex >= 0)
+        // Determine which state to use for frequency readout (peak snap takes priority)
+        mdsp_ui::AxisHoverState effectiveFreqState = freqHoverState;
+        if (peakSnapState.snappedActive)
         {
-            const float cursorX = mdsp_ui::AxisInteraction::cursorLineX (plotBounds, freqHoverState.cursorPosPx);
+            // Use peak snap state for frequency
+            effectiveFreqState.active = true;
+            effectiveFreqState.cursorPosPx = peakSnapState.snappedXPx - plotAreaLeft; // Convert to relative
+            effectiveFreqState.value = peakSnapState.snappedFreqHz;
+            effectiveFreqState.snappedTickIndex = peakSnapState.lockedIndex; // Use lockedIndex as tick index
+        }
+        
+        // Draw vertical cursor line at resolved position (if snapped)
+        if (effectiveFreqState.active && effectiveFreqState.snappedTickIndex >= 0)
+        {
+            const float cursorX = mdsp_ui::AxisInteraction::cursorLineX (plotBounds, effectiveFreqState.cursorPosPx);
             g.setColour (theme.text.withAlpha (0.25f));
             g.drawVerticalLine (static_cast<int> (cursorX), plotAreaTop, plotAreaTop + plotAreaHeight);
         }
         
-        // Build frequency axis config (reuse helper)
-        juce::Array<mdsp_ui::AxisTick> freqTicks;
-        mdsp_ui::AxisMapping freqMapping;
-        mdsp_ui::AxisSnapOptions freqSnap;
-        buildFreqAxisConfig (state, freqTicks, freqMapping, freqSnap);
-        
-        // Format frequency value from controller state
-        juce::String freqStr = mdsp_ui::AxisInteraction::formatFrequencyHz (freqHoverState.value);
-        
-        // Build CursorReadoutValue
-        mdsp_ui::CursorReadoutValue readoutValue;
-        readoutValue.leftLabel = "";
-        readoutValue.rightValue = "f: " + freqStr;
-        readoutValue.enabled = true;
+        // Draw horizontal cursor line at resolved position (if snapped)
+        if (dbHoverState.active && dbHoverState.snappedTickIndex >= 0)
+        {
+            const float cursorY = plotAreaTop + dbHoverState.cursorPosPx;
+            g.setColour (theme.text.withAlpha (0.25f));
+            g.drawHorizontalLine (static_cast<int> (cursorY), plotAreaLeft, plotAreaLeft + plotAreaWidth);
+        }
         
         // Build CursorReadoutStyle
         mdsp_ui::CursorReadoutStyle readoutStyle;
@@ -1290,9 +1343,18 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
         readoutStyle.textAlpha = 1.0f;
         readoutStyle.clipToPlot = true;
         
-        // Draw cursor readout using controller state
-        mdsp_ui::CursorReadoutRenderer::draw (g, plotBounds, theme, freqTicks, mdsp_ui::AxisEdge::Bottom,
-                                               freqHoverState.cursorPosPx, freqMapping, freqSnap, readoutValue, readoutStyle);
+        // Build effective Y state (use peak snap dB if available, otherwise axis hover)
+        mdsp_ui::AxisHoverState effectiveDbState = dbHoverState;
+        if (peakSnapState.snappedActive)
+        {
+            // Use peak snap dB value
+            effectiveDbState.active = true;
+            effectiveDbState.value = peakSnapState.snappedDb;
+            effectiveDbState.snappedTickIndex = -1; // Peak snap doesn't use tick index for dB
+        }
+        
+        // Draw 2D cursor readout using effective states
+        mdsp_ui::CursorReadoutRenderer::draw2D (g, plotBounds, readoutStyle.edge, theme, effectiveFreqState, effectiveDbState, readoutStyle);
     }
 }
 
@@ -1410,8 +1472,8 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
     mdsp_ui::SeriesRenderer::drawPathFromMapping (g, plotBounds, theme, numBins,
         [&s, binWidthHz, this] (int i) -> float
         {
-        const float freq = static_cast<float> (i * binWidthHz);
-        if (freq < s.minHz || freq > s.maxHz)
+            const float freq = static_cast<float> (i * binWidthHz);
+            if (freq < s.minHz || freq > s.maxHz)
                 return std::numeric_limits<float>::quiet_NaN();  // Skip outside range
             return freqToX (freq, s);
         },
