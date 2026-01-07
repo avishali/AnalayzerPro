@@ -3,6 +3,7 @@
 #include <mdsp_ui/AxisRenderer.h>
 #include <mdsp_ui/AxisInteraction.h>
 #include <mdsp_ui/PlotFrameRenderer.h>
+#include <mdsp_ui/SeriesRenderer.h>
 #include <cmath>
 #include <type_traits>
 #include <cstdint>
@@ -881,32 +882,33 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
         }
     }
 
-    // Draw peak trace (using local hasPeaks boolean, NO state mutation)
+    // Draw peak trace (using local hasPeaks boolean, NO state mutation) using SeriesRenderer
     if (hasPeaks)
     {
-        g.setColour (theme.seriesPeak.withAlpha (0.8f));
-        juce::Path peakPath;
-        bool pathStarted = false;
+        const juce::Rectangle<float> plotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
+        const int numBandsToDraw = static_cast<int> (std::min (s.bandsPeakDb.size(), bandGeometry.size()));
+        
+        mdsp_ui::SeriesStyle peakStyle;
+        peakStyle.strokeThickness = 1.5f;
+        peakStyle.alpha = 0.8f;
+        peakStyle.clipToPlot = true;
+        peakStyle.minXStepPx = 1.0f;
+        peakStyle.minYStepPx = 0.5f;
+        peakStyle.useRoundedJoins = true;
 
-        for (size_t i = 0; i < s.bandsPeakDb.size() && i < bandGeometry.size(); ++i)
-        {
-            // Apply display gain in dbToY, so just pass raw dB (clamping happens in dbToY)
-            const float db = s.bandsPeakDb[i];
-            const float x = bandGeometry[i].xCenter;
-            const float y = dbToY (db, s);
-
-            if (!pathStarted)
+        mdsp_ui::SeriesRenderer::drawPathFromMapping (g, plotBounds, theme, numBandsToDraw,
+            [&bandGeometry] (int i) -> float
             {
-                peakPath.startNewSubPath (x, y);
-                pathStarted = true;
-            }
-            else
+                const auto idx = static_cast<size_t> (i);
+                return bandGeometry[idx].xCenter;
+            },
+            [&s, this] (int i) -> float
             {
-                peakPath.lineTo (x, y);
-            }
-        }
-
-        g.strokePath (peakPath, juce::PathStrokeType (1.5f));
+                const auto idx = static_cast<size_t> (i);
+                const float db = s.bandsPeakDb[idx];
+                return dbToY (db, s);
+            },
+            theme.seriesPeak, peakStyle);
     }
 
     // Draw cursor and readout (with defensive bounds checking)
@@ -932,7 +934,7 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
         const float tooltipY = plotAreaTop + 10.0f;
         const float tooltipW = 110.0f;
         const float tooltipH = hasPeaks ? 50.0f : 35.0f;
-        
+
         mdsp_ui::PlotFrameStyle tooltipStyle;
         tooltipStyle.cornerRadiusPx = 4.0f;
         tooltipStyle.borderThicknessPx = 1.0f;
@@ -1008,35 +1010,31 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
         }
     }
 
-    // B4: Draw peak trace - compute centers from index on-the-fly
+    // B4: Draw peak trace - compute centers from index on-the-fly using SeriesRenderer
     if (hasPeaks)
     {
-        g.setColour (theme.seriesPeak.withAlpha (0.8f));
-        juce::Path peakPath;
-        bool pathStarted = false;
+        const juce::Rectangle<float> plotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
+        mdsp_ui::SeriesStyle peakStyle;
+        peakStyle.strokeThickness = 1.5f;
+        peakStyle.alpha = 0.8f;
+        peakStyle.clipToPlot = true;
+        peakStyle.minXStepPx = 1.0f;
+        peakStyle.minYStepPx = 0.5f;
+        peakStyle.useRoundedJoins = true;
 
-        for (int i = 0; i < numBands; ++i)
-        {
-            // Compute center frequency from index
+        mdsp_ui::SeriesRenderer::drawPathFromMapping (g, plotBounds, theme, numBands,
+            [&s, numBands, this] (int i) -> float
+            {
             const float centerFreq = computeLogFreqFromIndex (i, numBands, s.minHz, s.maxHz);
-            const float x = freqToX (centerFreq, s);
-            // Apply display gain in dbToY, so just pass raw dB (clamping happens in dbToY)
-            const auto idx = static_cast<size_t> (i);
-            const float db = s.logPeakDb[idx];
-            const float y = dbToY (db, s);
-
-            if (!pathStarted)
+                return freqToX (centerFreq, s);
+            },
+            [&s, this] (int i) -> float
             {
-                peakPath.startNewSubPath (x, y);
-                pathStarted = true;
-            }
-            else
-            {
-                peakPath.lineTo (x, y);
-            }
-        }
-
-        g.strokePath (peakPath, juce::PathStrokeType (1.5f));
+                const auto idx = static_cast<size_t> (i);
+                const float db = s.logPeakDb[idx];
+                return dbToY (db, s);
+            },
+            theme.seriesPeak, peakStyle);
     }
     
     // Frequency-axis hover readout (Log mode only)
@@ -1095,11 +1093,7 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
     // B3: Decide locally if peaks should be drawn (no state mutation)
     const bool hasPeaks = (s.fftPeakDb.size() == s.fftDb.size() && !s.fftPeakDb.empty());
 
-    // B5: Draw FFT spectrum as polyline using log mapping (matches grid)
-    g.setColour (theme.accent.withAlpha (0.7f));
-    juce::Path spectrumPath;
-    bool pathStarted = false;
-
+    // B5: Draw FFT spectrum as polyline using log mapping (matches grid) using SeriesRenderer
     const int numBins = static_cast<int> (s.fftDb.size());
     // Calculate frequency per bin: binHz = i * (sampleRate / fftSize)
     const double binWidthHz = s.sampleRate / static_cast<double> (s.fftSize);
@@ -1122,64 +1116,62 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
     }
 #endif
 
-    for (int i = 0; i < numBins; ++i)
-    {
-        // Calculate actual frequency for this bin: binHz = i * (sampleRate / fftSize)
+    const juce::Rectangle<float> plotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
+    mdsp_ui::SeriesStyle spectrumStyle;
+    spectrumStyle.strokeThickness = 1.5f;
+    spectrumStyle.alpha = 0.7f;
+    spectrumStyle.clipToPlot = true;
+    spectrumStyle.minXStepPx = 1.0f;
+    spectrumStyle.minYStepPx = 0.5f;
+    spectrumStyle.useRoundedJoins = true;
+
+    mdsp_ui::SeriesRenderer::drawPathFromMapping (g, plotBounds, theme, numBins,
+        [&s, binWidthHz, this] (int i) -> float
+        {
         const float freq = static_cast<float> (i * binWidthHz);
-        // B5: Skip bins outside [minHz..maxHz]
         if (freq < s.minHz || freq > s.maxHz)
-            continue;
-
-        const float x = freqToX (freq, s);  // B5: Use log mapping for FFT (matches grid)
-        // Apply display gain and tilt compensation (frequency-dependent)
-        const auto idx = static_cast<size_t> (i);
-        const float db = s.fftDb[idx];
-        const float y = dbToYWithCompensation (db, freq, s);
-
-        if (!pathStarted)
+                return std::numeric_limits<float>::quiet_NaN();  // Skip outside range
+            return freqToX (freq, s);
+        },
+        [&s, binWidthHz, this] (int i) -> float
         {
-            spectrumPath.startNewSubPath (x, y);
-            pathStarted = true;
-        }
-        else
-        {
-            spectrumPath.lineTo (x, y);
-        }
-    }
-
-    g.strokePath (spectrumPath, juce::PathStrokeType (1.5f));
-
-    // B5: Draw peak trace if available (using local hasPeaks boolean, NO state mutation)
-    if (hasPeaks)
-    {
-        g.setColour (theme.seriesPeak.withAlpha (0.8f));
-        juce::Path peakPath;
-        pathStarted = false;
-
-        for (int i = 0; i < numBins; ++i)
-        {
-            // Calculate actual frequency for this bin: binHz = i * (sampleRate / fftSize)
             const float freq = static_cast<float> (i * binWidthHz);
             if (freq < s.minHz || freq > s.maxHz)
-                continue;
-
-            const float x = freqToX (freq, s);  // B5: Use log mapping for FFT (matches grid)
-            // Apply display gain and tilt compensation (frequency-dependent)
+                return std::numeric_limits<float>::quiet_NaN();  // Skip outside range
             const auto idx = static_cast<size_t> (i);
-            const float db = s.fftPeakDb[idx];
-            const float y = dbToYWithCompensation (db, freq, s);
+            const float db = s.fftDb[idx];
+            return dbToYWithCompensation (db, freq, s);
+        },
+        theme.accent, spectrumStyle);
 
-            if (!pathStarted)
-            {
-                peakPath.startNewSubPath (x, y);
-                pathStarted = true;
-            }
-            else
-            {
-                peakPath.lineTo (x, y);
-            }
-        }
+    // B5: Draw peak trace if available (using local hasPeaks boolean, NO state mutation) using SeriesRenderer
+    if (hasPeaks)
+    {
+        mdsp_ui::SeriesStyle peakStyle;
+        peakStyle.strokeThickness = 1.0f;
+        peakStyle.alpha = 0.8f;
+        peakStyle.clipToPlot = true;
+        peakStyle.minXStepPx = 1.0f;
+        peakStyle.minYStepPx = 0.5f;
+        peakStyle.useRoundedJoins = true;
 
-        g.strokePath (peakPath, juce::PathStrokeType (1.0f));
+        mdsp_ui::SeriesRenderer::drawPathFromMapping (g, plotBounds, theme, numBins,
+            [&s, binWidthHz, this] (int i) -> float
+            {
+            const float freq = static_cast<float> (i * binWidthHz);
+            if (freq < s.minHz || freq > s.maxHz)
+                    return std::numeric_limits<float>::quiet_NaN();  // Skip outside range
+                return freqToX (freq, s);
+            },
+            [&s, binWidthHz, this] (int i) -> float
+            {
+                const float freq = static_cast<float> (i * binWidthHz);
+                if (freq < s.minHz || freq > s.maxHz)
+                    return std::numeric_limits<float>::quiet_NaN();  // Skip outside range
+                const auto idx = static_cast<size_t> (i);
+                const float db = s.fftPeakDb[idx];
+                return dbToYWithCompensation (db, freq, s);
+            },
+            theme.seriesPeak, peakStyle);
     }
 }
