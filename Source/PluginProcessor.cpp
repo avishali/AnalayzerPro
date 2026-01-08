@@ -2,8 +2,35 @@
 #include "PluginEditor.h"
 #include <atomic>
 #include <cmath>
+#include <limits>
+#include <iterator>
+
+#ifndef JUCE_UNLIKELY
+// JUCE does not always provide JUCE_UNLIKELY as a macro in all module include paths.
+// Define a local, compiler-friendly fallback (RT-safe, branch-predictable).
+ #if defined(__clang__) || defined(__GNUC__)
+  #define JUCE_UNLIKELY(x) __builtin_expect (!!(x), 0)
+ #else
+  #define JUCE_UNLIKELY(x) (x)
+ #endif
+#endif
+
+#if JucePlugin_Build_Standalone
+#include <juce_audio_devices/juce_audio_devices.h>
+#include <juce_audio_utils/juce_audio_utils.h>
+#include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
+#include "audio/DeviceRoutingHelper.h"
+#endif
 
 //==============================================================================
+namespace
+{
+    inline void applyPeakHoldFromDecayParam (AnalyzerEngine& engine, float decayDbPerSec)
+    {
+        // PeakDecay maps directly to engine peak decay (no additional modes/settings here).
+        engine.setPeakDecayDbPerSec (decayDbPerSec);
+    }
+}
 // TEMP ROUTING PROBE: remove after FFT confirmed.
 // Audio input probe variables (atomic for thread-safe UI access)
 namespace
@@ -26,12 +53,37 @@ AnalayzerProAudioProcessor::AnalayzerProAudioProcessor()
       ),
       apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
-    // Add parameter listeners for analyzer controls
-    apvts.addParameterListener ("Mode", this);
-    apvts.addParameterListener ("FftSize", this);
-    apvts.addParameterListener ("Averaging", this);
-    apvts.addParameterListener ("Hold", this);
-    apvts.addParameterListener ("PeakDecay", this);
+    // Analyzer parameters are polled and applied in processBlock (single source of truth).
+    // Avoid APVTS listeners here to prevent double-application and to keep RT behavior predictable.
+    // Cache raw parameter pointers once (valid for lifetime of APVTS)
+    pFftSize_   = apvts.getRawParameterValue ("FftSize");
+    pAveraging_ = apvts.getRawParameterValue ("Averaging");
+    pHold_      = apvts.getRawParameterValue ("Hold");
+    pPeakDecay_ = apvts.getRawParameterValue ("PeakDecay");
+
+    #if JUCE_DEBUG
+    jassert (pFftSize_   != nullptr);
+    jassert (pAveraging_ != nullptr);
+    jassert (pHold_      != nullptr);
+    jassert (pPeakDecay_ != nullptr);
+    #endif
+#if JucePlugin_Build_Standalone
+    // Auto-configure macOS loopback routing for standalone builds
+    // Defer the routing setup to ensure StandalonePluginHolder is initialized
+    juce::Timer::callAfterDelay(100, []
+    {
+        if (auto* holder = juce::StandalonePluginHolder::getInstance())
+        {
+            auto& dm = holder->deviceManager;
+            auto r = analyzerpro::DeviceRoutingHelper::applyMacSystemCapture(dm, "AnalyzerPro Aggregate", 48000.0, 256);
+            DBG("[AnalyzerPro] " + r.message);
+        }
+        else
+        {
+            DBG("[AnalyzerPro] StandalonePluginHolder instance not available.");
+        }
+    });
+#endif
 }
 
 AnalayzerProAudioProcessor::~AnalayzerProAudioProcessor()
@@ -109,7 +161,13 @@ void AnalayzerProAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     DBG ("Prepare: inCh=" << getTotalNumInputChannels() << " outCh=" << getTotalNumOutputChannels());
 #endif
     analyzerEngine.prepare (sampleRate, samplesPerBlock);
+
+    lastFftSizeIndex_ = -1;
+    lastAveragingIndex_ = -1;
+    lastHold_ = false;
+    lastPeakDecayDbPerSec_ = std::numeric_limits<float>::quiet_NaN();
 }
+
 
 void AnalayzerProAudioProcessor::releaseResources()
 {
@@ -148,6 +206,14 @@ bool AnalayzerProAudioProcessor::isBusesLayoutSupported (const BusesLayout& layo
 void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ignoreUnused (midiMessages);
+
+    if (JUCE_UNLIKELY (pFftSize_ == nullptr ||
+                       pAveraging_ == nullptr ||
+                       pHold_ == nullptr ||
+                       pPeakDecay_ == nullptr))
+    {
+        return; // Safety guard (should never happen)
+    }
 
     // Safe early-out for empty buffers
     if (buffer.getNumChannels() == 0 || buffer.getNumSamples() == 0)
@@ -259,37 +325,76 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             buffer.applyGain (channel, 0, buffer.getNumSamples(), gainValue);
     }
     
+    
     // Update analyzer parameters from APVTS (audio thread, real-time safe)
     // Note: Mode is UI-only, handled on message thread
     auto* fftSizeParam = apvts.getRawParameterValue ("FftSize");
     auto* avgParam     = apvts.getRawParameterValue ("Averaging");
     auto* holdParam    = apvts.getRawParameterValue ("Hold");
     auto* decayParam   = apvts.getRawParameterValue ("PeakDecay");
-    
+
     if (fftSizeParam != nullptr)
     {
-        // Convert choice index to FFT size
-        const int sizes[] = { 1024, 2048, 4096, 8192 };
-        const int index = juce::roundToInt (fftSizeParam->load());
-        if (index >= 0 && index < 4)
-            analyzerEngine.setFftSize (sizes[index]);
+        constexpr int sizes[] = { 1024, 2048, 4096, 8192 };
+        constexpr int kNumSizes = static_cast<int> (std::size (sizes));
+
+        const float raw = fftSizeParam->load();
+        const int index = juce::jlimit (0, kNumSizes - 1, static_cast<int> (raw));
+
+       #if JUCE_DEBUG
+        // Choice params should be discrete indices; if hosts send fractional values, clamp will still behave.
+        jassert (std::abs (raw - static_cast<float> (index)) < 0.001f);
+       #endif
+
+        if (index != lastFftSizeIndex_)
+        {
+            lastFftSizeIndex_ = index;
+            analyzerEngine.requestFftSize (sizes[index]);
+        }
     }
-    
+
     if (avgParam != nullptr)
     {
-        // Convert choice index to ms: Off=0, 50ms=1, 100ms=2, 250ms=3, 500ms=4, 1s=5
-        const float avgMs[] = { 0.0f, 50.0f, 100.0f, 250.0f, 500.0f, 1000.0f };
-        const int index = juce::roundToInt (avgParam->load());
-        if (index >= 0 && index < 6)
+        constexpr float avgMs[] = { 0.0f, 50.0f, 100.0f, 250.0f, 500.0f, 1000.0f };
+        constexpr int kNumAvg = static_cast<int> (std::size (avgMs));
+
+        const float raw = avgParam->load();
+        const int index = juce::jlimit (0, kNumAvg - 1, static_cast<int> (raw));
+
+       #if JUCE_DEBUG
+        jassert (std::abs (raw - static_cast<float> (index)) < 0.001f);
+       #endif
+
+        if (index != lastAveragingIndex_)
+        {
+            lastAveragingIndex_ = index;
             analyzerEngine.setAveragingMs (avgMs[index]);
+        }
     }
-    
+
     if (holdParam != nullptr)
-        analyzerEngine.setHold (holdParam->load() > 0.5f);
-    
+    {
+        const bool hold = (holdParam->load() > 0.5f);
+        if (hold != lastHold_)
+        {
+            lastHold_ = hold;
+            analyzerEngine.setHold (hold);
+        }
+    }
+
     if (decayParam != nullptr)
-        analyzerEngine.setPeakDecayDbPerSec (decayParam->load());
-    
+    {
+        const float decay = decayParam->load();
+
+        const bool first = std::isnan (lastPeakDecayDbPerSec_);
+        const bool changed = first || (std::abs (decay - lastPeakDecayDbPerSec_) > 1.0e-3f);
+
+        if (changed)
+        {
+            lastPeakDecayDbPerSec_ = decay;
+            applyPeakHoldFromDecayParam (analyzerEngine, decay);
+        }
+    }
     // IMPORTANT: AnalyzerEngine must be fed from the input signal (pre-mute, pre-gain, pre-output).
     // Feed analyzer (audio thread, real-time safe)
     analyzerEngine.processBlock (buffer);
@@ -325,32 +430,9 @@ void AnalayzerProAudioProcessor::setStateInformation (const void* data, int size
 //==============================================================================
 void AnalayzerProAudioProcessor::parameterChanged (const juce::String& parameterID, float newValue)
 {
-    // Update analyzer engine parameters (called from message thread)
-    // Note: Mode is handled in MainView to update AnalyzerDisplayView
-    if (parameterID == "FftSize")
-    {
-        // Convert choice index to FFT size
-        const int sizes[] = { 1024, 2048, 4096, 8192 };
-        const int index = juce::roundToInt (newValue);
-        if (index >= 0 && index < 4)
-            analyzerEngine.setFftSize (sizes[index]);
-    }
-    else if (parameterID == "Averaging")
-    {
-        // Convert choice index to ms: Off=0, 50ms=1, 100ms=2, 250ms=3, 500ms=4, 1s=5
-        const float avgMs[] = { 0.0f, 50.0f, 100.0f, 250.0f, 500.0f, 1000.0f };
-        const int index = juce::roundToInt (newValue);
-        if (index >= 0 && index < 6)
-            analyzerEngine.setAveragingMs (avgMs[index]);
-    }
-    else if (parameterID == "Hold")
-    {
-        analyzerEngine.setHold (newValue > 0.5f);
-    }
-    else if (parameterID == "PeakDecay")
-    {
-        analyzerEngine.setPeakDecayDbPerSec (newValue);
-    }
+    // No-op: analyzer parameters are polled and applied in processBlock.
+    // Keeping this override to satisfy the listener interface (if implemented in the header).
+    juce::ignoreUnused (parameterID, newValue);
 }
 
 // ADD — Source/PluginProcessor.cpp (very bottom, after all code)
@@ -389,7 +471,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
     // Analyzer Peak Decay (0..10 dB/sec, default 1.0 dB/sec)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "PeakDecay", "Peak Decay",
-        juce::NormalisableRange<float> (0.0f, 10.0f, 0.1f),
+        juce::NormalisableRange<float> (0.0f, 60.0f, 0.1f),
         1.0f,  // Default: 1.0 dB/sec
         "Peak Decay (dB/s)"));
     
