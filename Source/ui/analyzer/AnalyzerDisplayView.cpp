@@ -219,7 +219,7 @@ void AnalyzerDisplayView::convertFFTToBands (const AnalyzerSnapshot& snapshot, s
     
     const double sampleRate = snapshot.sampleRate;
     const int fftSize = snapshot.fftSize;
-    const int numBins = snapshot.numBins;
+    const int fftBinCount = (snapshot.fftBinCount > 0) ? snapshot.fftBinCount : snapshot.numBins;
     const double binWidthHz = sampleRate / static_cast<double> (fftSize);
     
     // For each band, compute lower and upper frequency edges
@@ -238,13 +238,13 @@ void AnalyzerDisplayView::convertFFTToBands (const AnalyzerSnapshot& snapshot, s
         
         // Clamp to valid bin range
         lowerBin = juce::jmax (0, lowerBin);
-        upperBin = juce::jmin (numBins - 1, upperBin);
+        upperBin = juce::jmin (fftBinCount - 1, upperBin);
         
         // If lowerBin > upperBin, collapse to nearest valid bin
         if (lowerBin > upperBin)
         {
             const int centerBin = (lowerBin + upperBin) / 2;
-            lowerBin = juce::jlimit (0, numBins - 1, centerBin);
+            lowerBin = juce::jlimit (0, fftBinCount - 1, centerBin);
             upperBin = lowerBin;
         }
         
@@ -298,7 +298,7 @@ void AnalyzerDisplayView::convertFFTToLog (const AnalyzerSnapshot& snapshot, std
     
     const double sampleRate = snapshot.sampleRate;
     const int fftSize = snapshot.fftSize;
-    const int numBins = snapshot.numBins;
+    const int fftBinCount = (snapshot.fftBinCount > 0) ? snapshot.fftBinCount : snapshot.numBins;
     const double binWidthHz = sampleRate / static_cast<double> (fftSize);
     
     const double logMin = std::log10 (static_cast<double> (minFreq));
@@ -328,13 +328,13 @@ void AnalyzerDisplayView::convertFFTToLog (const AnalyzerSnapshot& snapshot, std
         
         // Clamp to valid bin range
         lowerBin = juce::jmax (0, lowerBin);
-        upperBin = juce::jmin (numBins - 1, upperBin);
+        upperBin = juce::jmin (fftBinCount - 1, upperBin);
         
         // If lowerBin > upperBin, collapse to nearest valid bin
         if (lowerBin > upperBin)
         {
             const int centerBin = static_cast<int> (std::round (centerFreq / binWidthHz));
-            lowerBin = juce::jlimit (0, numBins - 1, centerBin);
+            lowerBin = juce::jlimit (0, fftBinCount - 1, centerBin);
             upperBin = lowerBin;
         }
         
@@ -437,6 +437,9 @@ void AnalyzerDisplayView::timerCallback()
     // Early return if shutdown (do not rely on isTimerRunning())
     if (isShutdown)
         return;
+
+    // Apply any pending FFT resize on the message thread (RT-safe: allocations happen here, not on audio thread).
+    audioProcessor.getAnalyzerEngine().applyPendingFftSizeIfNeeded();
     
     // Pull latest snapshot from analyzer engine (UI thread, reuse member snapshot)
     const bool gotSnapshot = audioProcessor.getAnalyzerEngine().getLatestSnapshot (snapshot_);
@@ -448,8 +451,9 @@ void AnalyzerDisplayView::timerCallback()
     }
     
     // CRITICAL: Only update if snapshot is valid AND has bins (prevents blinking to floor)
-    // Gate explicitly on isValid && numBins > 0 to ensure smooth updates
-    if (!snapshot_.isValid || snapshot_.numBins <= 0)
+    // Gate explicitly on isValid && fftBinCount > 0 to ensure smooth updates
+    const int fftBinCount = (snapshot_.fftBinCount > 0) ? snapshot_.fftBinCount : snapshot_.numBins;
+    if (!snapshot_.isValid || fftBinCount <= 0)
     {
         // Invalid snapshot - hold last valid frame (do not touch RTADisplay)
         return;
@@ -464,7 +468,8 @@ void AnalyzerDisplayView::timerCallback()
 
 void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
 {
-    if (!snapshot.isValid || snapshot.numBins <= 0)
+    const int fftBinCount = (snapshot.fftBinCount > 0) ? snapshot.fftBinCount : snapshot.numBins;
+    if (!snapshot.isValid || fftBinCount <= 0)
         return;
     
     // CRITICAL: Synchronize RTADisplay mode BEFORE any data feeding
@@ -493,15 +498,15 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         {
             // FFT mode: validate data and feed to RTADisplay
             // Check if FFT vectors are empty (defensive)
-            if (snapshot.numBins <= 0 || snapshot.fftSize <= 0)
+            if (fftBinCount <= 0 || snapshot.fftSize <= 0)
             {
                 rtaDisplay.setNoData ("FFT bins empty");
                 rtaDisplay.repaint();
                 break;
             }
             
-            // Bin contract: snapshot.numBins should equal (fftSize/2 + 1)
-            const int validBins = snapshot.numBins;
+            // Bin contract: snapshot.fftBinCount should equal (fftSize/2 + 1)
+            const int validBins = fftBinCount;
             const int expectedBins = snapshot.fftSize / 2 + 1;
             
             if (validBins != expectedBins_ || validBins != expectedBins)
@@ -625,7 +630,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         case Mode::BAND:
         {
             // BANDS mode: Convert FFT bins to 1/3-octave bands
-            if (snapshot.numBins <= 0 || snapshot.fftSize <= 0 || snapshot.sampleRate <= 0.0)
+            if (fftBinCount <= 0 || snapshot.fftSize <= 0 || snapshot.sampleRate <= 0.0)
             {
                 rtaDisplay.setNoData ("Invalid snapshot for BANDS");
                 break;
@@ -675,7 +680,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         case Mode::LOG:
         {
             // LOG mode: Convert FFT bins to log-spaced bins
-            if (snapshot.numBins <= 0 || snapshot.fftSize <= 0 || snapshot.sampleRate <= 0.0)
+            if (fftBinCount <= 0 || snapshot.fftSize <= 0 || snapshot.sampleRate <= 0.0)
             {
                 rtaDisplay.setNoData ("Invalid snapshot for LOG");
                 break;

@@ -35,8 +35,26 @@ public:
     
     /** Update parameters from APVTS (call from UI thread or parameter change callback) */
     void setFftSize (int fftSize);
+
+    // RT-safe: request an FFT size change (no allocations here)
+    void requestFftSize (int fftSize);
+
+    // Called on a non-audio thread (message thread) to apply pending resize
+    void applyPendingFftSizeIfNeeded();
+
     void setAveragingMs (float averagingMs);
     void setPeakHoldEnabled (bool enabled);
+
+    enum class PeakHoldMode
+    {
+        Off = 0,
+        Infinite,
+        Decay,
+        HoldThenDecay
+    };
+
+    void setPeakHoldMode (PeakHoldMode mode);
+    void setPeakHoldTimeMs (float holdTimeMs);
     void setHold (bool hold);  // Freeze peaks (no decay when enabled)
     void setPeakDecayDbPerSec (float decayDbPerSec);
     
@@ -77,6 +95,15 @@ private:
     float peakDecayDbPerSec = 1.0f;
     bool peakHoldEnabled_ = true;  // Whether peaks overlay is displayed and tracked
     bool freezePeaks_ = false;      // Freeze peaks (no decay when enabled)
+
+    // Pending FFT resize request (RT-safe)
+    std::atomic<int> pendingFftSize_{ 0 };
+    std::atomic<bool> fftResizeRequested_{ false };
+
+    // Peak hold mode/timer (used by updatePeakHold)
+    PeakHoldMode peakHoldMode_ = PeakHoldMode::HoldThenDecay;
+    float peakHoldTimeMs_ = 0.0f;
+    std::vector<int> peakHoldFramesRemaining_;
     
     void initializeFFT (int fftSize);
     void updateSmoothingCoeff (float averagingMs, double sampleRate);

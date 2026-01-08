@@ -64,6 +64,10 @@ void RTADisplay::setViewMode (int mode)
     if (state.viewMode != mode)
     {
         state.viewMode = mode;
+#if JUCE_DEBUG
+        // Keep debug overlay in sync with the active view mode.
+        debugViewMode = mode;
+#endif
         geometryValid = false;
         hoveredBandIndex = -1;  // A3: Clear hover on view change
         repaint();
@@ -1470,10 +1474,40 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
 
     // B5: Draw FFT spectrum as polyline using log mapping (matches grid) using SeriesRenderer
     const int numBins = static_cast<int> (s.fftDb.size());
-    // Calculate frequency per bin: binHz = i * (sampleRate / fftSize)
+    const int expectedBins = s.fftSize / 2 + 1;
+    const int availableBins = std::min (numBins, expectedBins);
+    if (availableBins <= 0)
+        return;
+
+    // Frequency per FFT bin: f(i) = i * (sampleRate / fftSize)
     const double binWidthHz = s.sampleRate / static_cast<double> (s.fftSize);
 
+    // Draw only the in-range bins to avoid injecting NaNs into the renderer.
+    const int firstBin = juce::jlimit (0, availableBins - 1,
+                                      static_cast<int> (std::ceil (static_cast<double> (s.minHz) / binWidthHz)));
+    const int lastBin  = juce::jlimit (0, availableBins - 1,
+                                      static_cast<int> (std::floor (static_cast<double> (s.maxHz) / binWidthHz)));
+
+    if (lastBin < firstBin)
+        return;
+
+    const int binsToDraw = (lastBin - firstBin) + 1;
+    if (binsToDraw <= 0)
+        return;
+
 #if JUCE_DEBUG
+    // TEMP: validate bin/mapping sizing at draw time
+    static uint64_t lastDrawDbgMs = 0;
+    const uint64_t nowDrawMs = static_cast<uint64_t> (juce::Time::getMillisecondCounterHiRes());
+    if (nowDrawMs - lastDrawDbgMs > 1000)
+    {
+        lastDrawDbgMs = nowDrawMs;
+        DBG ("FFT draw: bins=" << binsToDraw
+             << " fftDb=" << static_cast<int> (s.fftDb.size())
+             << " firstBin=" << firstBin
+             << " lastBin=" << lastBin);
+    }
+
     // Compute min/max for debug overlay (throttled logging)
     static uint64_t lastMinMaxLogMs = 0;
     const uint64_t nowMs = static_cast<uint64_t> (juce::Time::getMillisecondCounterHiRes());
@@ -1565,21 +1599,20 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
     spectrumStyle.envelopeMinBucketPx = 1.0f;
     spectrumStyle.envelopeDrawVertical = true;
 
-    mdsp_ui::SeriesRenderer::drawPathFromMapping (g, plotBounds, theme, numBins,
-        [&s, binWidthHz, this] (int i) -> float
+    mdsp_ui::SeriesRenderer::drawPathFromMapping (g, plotBounds, theme, binsToDraw,
+        [&s, binWidthHz, firstBin, this] (int i) -> float
         {
-            const float freq = static_cast<float> (i * binWidthHz);
-            if (freq < s.minHz || freq > s.maxHz)
-                return std::numeric_limits<float>::quiet_NaN();  // Skip outside range
+            const int binIndex = firstBin + i;
+            const float freq = static_cast<float> (static_cast<double> (binIndex) * binWidthHz);
             return freqToX (freq, s);
         },
-        [&s, binWidthHz, this] (int i) -> float
+        [&s, binWidthHz, firstBin, this] (int i) -> float
         {
-            const float freq = static_cast<float> (i * binWidthHz);
-            if (freq < s.minHz || freq > s.maxHz)
-                return std::numeric_limits<float>::quiet_NaN();  // Skip outside range
-            const auto idx = static_cast<size_t> (i);
-            const float db = s.fftDb[idx];
+            const int binIndex = firstBin + i;
+            const float freq = static_cast<float> (static_cast<double> (binIndex) * binWidthHz);
+            const auto idx = static_cast<size_t> (binIndex);
+            const float db = (idx < s.fftDb.size()) ? s.fftDb[idx]
+                                                    : std::numeric_limits<float>::quiet_NaN();
             return dbToYWithCompensation (db, freq, s);
         },
         theme.accent, spectrumStyle);
@@ -1604,21 +1637,20 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
         peakStyle.envelopeMinBucketPx = 1.0f;
         peakStyle.envelopeDrawVertical = true;
 
-        mdsp_ui::SeriesRenderer::drawPathFromMapping (g, plotBounds, theme, numBins,
-            [&s, binWidthHz, this] (int i) -> float
+        mdsp_ui::SeriesRenderer::drawPathFromMapping (g, plotBounds, theme, binsToDraw,
+            [&s, binWidthHz, firstBin, this] (int i) -> float
             {
-            const float freq = static_cast<float> (i * binWidthHz);
-            if (freq < s.minHz || freq > s.maxHz)
-                    return std::numeric_limits<float>::quiet_NaN();  // Skip outside range
+                const int binIndex = firstBin + i;
+                const float freq = static_cast<float> (static_cast<double> (binIndex) * binWidthHz);
                 return freqToX (freq, s);
             },
-            [&s, binWidthHz, this] (int i) -> float
+            [&s, binWidthHz, firstBin, this] (int i) -> float
             {
-                const float freq = static_cast<float> (i * binWidthHz);
-                if (freq < s.minHz || freq > s.maxHz)
-                    return std::numeric_limits<float>::quiet_NaN();  // Skip outside range
-                const auto idx = static_cast<size_t> (i);
-                const float db = s.fftPeakDb[idx];
+                const int binIndex = firstBin + i;
+                const float freq = static_cast<float> (static_cast<double> (binIndex) * binWidthHz);
+                const auto idx = static_cast<size_t> (binIndex);
+                const float db = (idx < s.fftPeakDb.size()) ? s.fftPeakDb[idx]
+                                                           : std::numeric_limits<float>::quiet_NaN();
                 return dbToYWithCompensation (db, freq, s);
             },
             theme.seriesPeak, peakStyle);

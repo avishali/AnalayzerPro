@@ -20,6 +20,15 @@ struct AnalyzerSnapshot
     // UI clamps/sanitizes only; no conversion needed.
     std::array<float, kMaxFFTBins> fftDb{};
     std::array<float, kMaxFFTBins> fftPeakDb{};
+
+    // FFT: authoritative bin count for fftDb/fftPeakDb.
+    // Contract: fftBinCount == (fftSize / 2 + 1).
+    int fftBinCount = 0;
+
+    // Legacy/compat only:
+    // Historically this field was also used as the FFT bin count. Going forward, FFT uses fftBinCount
+    // exclusively. numBins is reserved for non-FFT series (Bands/Log) if/when those are ever stored
+    // in the snapshot directly.
     int numBins = 0;
     
     // Metadata

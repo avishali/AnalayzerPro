@@ -1,6 +1,7 @@
 #include "AnalyzerEngine.h"
 #include <cmath>
 #include <algorithm>
+#include <juce_events/juce_events.h>
 
 //==============================================================================
 AnalyzerEngine::AnalyzerEngine()
@@ -50,6 +51,8 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     const int numBins = fftSize / 2 + 1;
     smoothedMagnitude.resize (static_cast<size_t> (numBins), 0.0f);
     peakHold.resize (static_cast<size_t> (numBins), kDbFloor);
+
+    peakHoldFramesRemaining_.resize (static_cast<size_t> (numBins), 0);
     
     // Resize per-frame computation buffers (eliminates allocations in computeFFT)
     magnitudes_.resize (static_cast<size_t> (numBins), 0.0f);
@@ -72,6 +75,7 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     std::fill (fftOutput.begin(), fftOutput.end(), 0.0f);
     std::fill (smoothedMagnitude.begin(), smoothedMagnitude.end(), 0.0f);
     std::fill (peakHold.begin(), peakHold.end(), kDbFloor);
+    std::fill (peakHoldFramesRemaining_.begin(), peakHoldFramesRemaining_.end(), 0);
     
     // Safety guard: ensure numBins doesn't exceed array capacity
     jassert (numBins <= static_cast<int> (published_.data.fftDb.size()));
@@ -83,6 +87,7 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     published_.data.isValid = false;
     published_.data.fftSize = fftSize;
     published_.data.numBins = numBins;
+    published_.data.fftBinCount = numBins;
 }
 
 void AnalyzerEngine::reset()
@@ -141,6 +146,10 @@ void AnalyzerEngine::processBlock (const juce::AudioBuffer<float>& buffer)
 
 void AnalyzerEngine::computeFFT()
 {
+    // If a resize is pending, hold publishing until the resize is applied on the message thread.
+    if (fftResizeRequested_.load (std::memory_order_acquire))
+        return;
+
     if (!prepared || fft == nullptr || currentFFTSize == 0)
         return;
     
@@ -200,7 +209,9 @@ void AnalyzerEngine::computeFFT()
     
     // Build local snapshot with computed FFT data
     AnalyzerSnapshot snapshot;
-    snapshot.numBins = numBins;
+    snapshot.fftBinCount = numBins;
+    // Legacy/compat: numBins is reserved for non-FFT series. FFT bin count lives in fftBinCount.
+    snapshot.numBins = 0;
     snapshot.sampleRate = currentSampleRate;
     snapshot.fftSize = currentFFTSize;
     snapshot.displayBottomDb = -120.0f;
@@ -287,33 +298,75 @@ void AnalyzerEngine::convertToDb (const float* magnitudes, float* dbOut, int num
 
 void AnalyzerEngine::updatePeakHold (const float* dbRawIn, float* peakOut, int numBins)
 {
-    if (!peakHoldEnabled_)
+    // Legacy flag: if disabled, behave like Off.
+    if (! peakHoldEnabled_ || peakHoldMode_ == PeakHoldMode::Off)
     {
-        // Clear peaks to floor when disabled
         const std::size_t numBinsSz = static_cast<std::size_t> (numBins);
         std::fill (peakOut, peakOut + numBinsSz, kDbFloor);
         return;
     }
-    
-    // Calculate decay per frame (for audio thread: decay per FFT frame = (decayDbPerSec * hopSize) / sampleRate)
-    const float decayPerFrame = (peakDecayDbPerSec * static_cast<float> (currentHopSize)) / static_cast<float> (currentSampleRate);
-    
+
+    // Ensure timer vector matches bins (defensive; initializeFFT should size this).
+    if (static_cast<int> (peakHoldFramesRemaining_.size()) != numBins)
+        peakHoldFramesRemaining_.assign (static_cast<std::size_t> (numBins), 0);
+
+    // Decay per FFT frame: (dB/s) * (hopSec)
+    const float hopSec = static_cast<float> (currentHopSize) / static_cast<float> (currentSampleRate);
+    const float decayPerFrame = (peakDecayDbPerSec * hopSec);
+
+    // Hold time expressed in FFT frames (only used for HoldThenDecay)
+    const int holdFramesTotal = (hopSec > 0.0f && peakHoldTimeMs_ > 0.0f)
+                                  ? juce::jmax (1, static_cast<int> (std::ceil ((peakHoldTimeMs_ / 1000.0f) / hopSec)))
+                                  : 0;
+
     for (int i = 0; i < numBins; ++i)
     {
         const std::size_t idx = static_cast<std::size_t> (i);
-        // Always update to new louder peaks (peak hold tracks maxima)
-        // Hold checkbox freezes decay only, but new higher peaks must still update
+
+        // Always update to new louder peaks
         if (dbRawIn[idx] > peakOut[idx])
         {
-            peakOut[idx] = dbRawIn[idx];  // Update to new higher peak
+            peakOut[idx] = dbRawIn[idx];
+
+            if (peakHoldMode_ == PeakHoldMode::HoldThenDecay && holdFramesTotal > 0)
+                peakHoldFramesRemaining_[idx] = holdFramesTotal;
         }
-        
-        // Apply decay only if not frozen
-        if (!freezePeaks_)
+
+        // User “Hold” checkbox: freeze the peak trace completely (no decay, no timer countdown).
+        if (freezePeaks_)
+            continue;
+
+        switch (peakHoldMode_)
         {
-            peakOut[idx] = juce::jmax (kDbFloor, peakOut[idx] - decayPerFrame);
+            case PeakHoldMode::Infinite:
+                // No decay
+                break;
+
+            case PeakHoldMode::Decay:
+                // Continuous decay
+                peakOut[idx] = juce::jmax (kDbFloor, peakOut[idx] - decayPerFrame);
+                break;
+
+            case PeakHoldMode::HoldThenDecay:
+            {
+                // Sticky hold for N frames, then decay
+                int& frames = peakHoldFramesRemaining_[idx];
+                if (frames > 0)
+                {
+                    --frames;
+                }
+                else
+                {
+                    peakOut[idx] = juce::jmax (kDbFloor, peakOut[idx] - decayPerFrame);
+                }
+                break;
+            }
+
+            case PeakHoldMode::Off:
+            default:
+                // Already handled above
+                break;
         }
-        // If frozen, keep peak value (no decay)
     }
 }
 
@@ -337,12 +390,8 @@ void AnalyzerEngine::setFftSize (int fftSize)
     
     if (validSize != currentFFTSize && prepared)
     {
-        // Re-initialize FFT (this is safe to call from UI thread, but will affect next processBlock)
-        // For safety, we'll do this on next prepare() or use a pending flag
-        // For now, just update if not processing
-        initializeFFT (validSize);
-        // Update smoothing coefficient after FFT size changes (hop size changes)
-        updateSmoothingCoeff (averagingMs_, currentSampleRate);
+        // RT-safe: never allocate/resize here (this may be called from audio thread).
+        requestFftSize (validSize);
     }
     
     // CRITICAL: Mark snapshot as invalid on FFT size change to prevent "blink to floor"
@@ -360,7 +409,53 @@ void AnalyzerEngine::setFftSize (int fftSize)
         published_.data.fftSize = validSize;
         published_.data.sampleRate = currentSampleRate;
         published_.data.numBins = numBins;
+        published_.data.fftBinCount = numBins;
     }
+}
+
+void AnalyzerEngine::requestFftSize (int fftSize)
+{
+    pendingFftSize_.store (fftSize, std::memory_order_release);
+    fftResizeRequested_.store (true, std::memory_order_release);
+
+    // Metadata invalidation (no allocations): update expected FFT shape immediately so the UI can
+    // hold the last valid frame while waiting for applyPendingFftSizeIfNeeded() to run.
+    if (prepared)
+    {
+        const int numBins = fftSize / 2 + 1;
+
+        // Safety guard: ensure numBins doesn't exceed array capacity
+        jassert (numBins <= static_cast<int> (published_.data.fftDb.size()));
+        jassert (numBins <= static_cast<int> (published_.data.fftPeakDb.size()));
+
+        published_.data.isValid = false;
+        published_.data.fftSize = fftSize;
+        published_.data.sampleRate = currentSampleRate;
+        published_.data.numBins = numBins;
+        published_.data.fftBinCount = numBins;
+    }
+}
+
+void AnalyzerEngine::applyPendingFftSizeIfNeeded()
+{
+#if JUCE_DEBUG
+    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+#endif
+
+    if (! fftResizeRequested_.load (std::memory_order_acquire))
+        return;
+
+    const int requested = pendingFftSize_.load (std::memory_order_acquire);
+    if (requested <= 0 || requested == currentFFTSize)
+    {
+        fftResizeRequested_.store (false, std::memory_order_release);
+        return;
+    }
+
+    initializeFFT (requested);
+    updateSmoothingCoeff (averagingMs_, currentSampleRate);
+
+    fftResizeRequested_.store (false, std::memory_order_release);
 }
 
 void AnalyzerEngine::setAveragingMs (float averagingMs)
@@ -372,11 +467,38 @@ void AnalyzerEngine::setAveragingMs (float averagingMs)
 void AnalyzerEngine::setPeakHoldEnabled (bool enabled)
 {
     peakHoldEnabled_ = enabled;
-    if (!enabled)
+
+    if (! enabled)
     {
-        // Clear peaks when disabled
+        peakHoldMode_ = PeakHoldMode::Off;
         std::fill (peakHold.begin(), peakHold.end(), kDbFloor);
+        std::fill (peakHoldFramesRemaining_.begin(), peakHoldFramesRemaining_.end(), 0);
+        return;
     }
+
+    // If enabling from Off, restore a sensible default mode.
+    if (peakHoldMode_ == PeakHoldMode::Off)
+        peakHoldMode_ = PeakHoldMode::HoldThenDecay;
+}
+void AnalyzerEngine::setPeakHoldMode (PeakHoldMode mode)
+{
+    peakHoldMode_ = mode;
+
+    // Keep legacy enable flag in sync.
+    peakHoldEnabled_ = (peakHoldMode_ != PeakHoldMode::Off);
+
+    // Reset timers when switching modes (safe, avoids “stuck hold”).
+    std::fill (peakHoldFramesRemaining_.begin(), peakHoldFramesRemaining_.end(), 0);
+
+    // If turning off, clear peaks.
+    if (peakHoldMode_ == PeakHoldMode::Off)
+        std::fill (peakHold.begin(), peakHold.end(), kDbFloor);
+}
+
+void AnalyzerEngine::setPeakHoldTimeMs (float holdTimeMs)
+{
+    peakHoldTimeMs_ = juce::jlimit (0.0f, 5000.0f, holdTimeMs);
+    std::fill (peakHoldFramesRemaining_.begin(), peakHoldFramesRemaining_.end(), 0);
 }
 
 void AnalyzerEngine::setHold (bool hold)
@@ -386,7 +508,7 @@ void AnalyzerEngine::setHold (bool hold)
 
 void AnalyzerEngine::setPeakDecayDbPerSec (float decayDbPerSec)
 {
-    peakDecayDbPerSec = juce::jlimit (0.0f, 10.0f, decayDbPerSec);
+    peakDecayDbPerSec = juce::jlimit (0.0f, 60.0f, decayDbPerSec);
 }
 
 void AnalyzerEngine::updateSmoothingCoeff (float averagingMs, double sampleRate)
@@ -410,7 +532,9 @@ void AnalyzerEngine::publishSnapshot (const AnalyzerSnapshot& source)
 {
     // CRITICAL: Never publish invalid or "floor-only" snapshots
     // Only publish valid snapshots with actual FFT data
-    if (!source.isValid || source.numBins <= 0 || source.numBins > static_cast<int> (AnalyzerSnapshot::kMaxFFTBins))
+    // Prefer fftBinCount for FFT bin counts; fallback to numBins exists for legacy snapshots only.
+    const int binCount = (source.fftBinCount > 0) ? source.fftBinCount : source.numBins;
+    if (!source.isValid || binCount <= 0 || binCount > static_cast<int> (AnalyzerSnapshot::kMaxFFTBins))
     {
         // Do not publish invalid snapshot - UI will hold last valid frame
         return;
@@ -418,6 +542,7 @@ void AnalyzerEngine::publishSnapshot (const AnalyzerSnapshot& source)
     
     // Copy ALL fields into published snapshot (deep copy arrays)
     published_.data.isValid = source.isValid;
+    published_.data.fftBinCount = binCount;
     published_.data.numBins = source.numBins;
     published_.data.sampleRate = source.sampleRate;
     published_.data.fftSize = source.fftSize;
@@ -425,7 +550,7 @@ void AnalyzerEngine::publishSnapshot (const AnalyzerSnapshot& source)
     published_.data.displayTopDb = source.displayTopDb;
     
     // Deep copy arrays (fixed-size, but copy only used portion)
-    const int numBins = source.numBins;
+    const int numBins = binCount;
     
     // Safety guard: ensure numBins doesn't exceed array capacity
     jassert (numBins <= static_cast<int> (published_.data.fftDb.size()));
@@ -466,6 +591,7 @@ bool AnalyzerEngine::getLatestSnapshot (AnalyzerSnapshot& dest) const
         
         // Copy published data into destination
         dest.isValid = published_.data.isValid;
+        dest.fftBinCount = published_.data.fftBinCount;
         dest.numBins = published_.data.numBins;
         dest.sampleRate = published_.data.sampleRate;
         dest.fftSize = published_.data.fftSize;
@@ -473,7 +599,9 @@ bool AnalyzerEngine::getLatestSnapshot (AnalyzerSnapshot& dest) const
         dest.displayTopDb = published_.data.displayTopDb;
         
         // Deep copy arrays
-        const int numBins = published_.data.numBins;
+        // Prefer fftBinCount for FFT bin counts; fallback to numBins exists for legacy snapshots only.
+        const int numBins = (published_.data.fftBinCount > 0) ? published_.data.fftBinCount
+                                                              : published_.data.numBins;
         
         // Safety guard: ensure numBins doesn't exceed array capacity
         jassert (numBins <= static_cast<int> (dest.fftDb.size()));

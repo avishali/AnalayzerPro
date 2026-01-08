@@ -4,6 +4,8 @@
 #include <atomic>
 #include "parameters/Parameters.h"
 #include "analyzer/AnalyzerEngine.h"
+#include <limits>
+
 
 //==============================================================================
 /**
@@ -79,7 +81,17 @@ private:
     //==============================================================================
     Parameters parameters;
     AnalyzerEngine analyzerEngine;
-    
+    // Cached analyzer parameter values (to avoid calling setters every block)
+    int   lastFftSizeIndex_ = -1;
+    int   lastAveragingIndex_ = -1;
+    bool  lastHold_ = false;
+    float lastPeakDecayDbPerSec_ = std::numeric_limits<float>::quiet_NaN();
+    // Cached raw APVTS parameter pointers (avoid map lookups in processBlock)
+    std::atomic<float>* pFftSize_   = nullptr;
+    std::atomic<float>* pAveraging_ = nullptr;
+    std::atomic<float>* pHold_      = nullptr;
+    std::atomic<float>* pPeakDecay_ = nullptr;
+        
     // APVTS for analyzer controls
     juce::AudioProcessorValueTreeState apvts;
     

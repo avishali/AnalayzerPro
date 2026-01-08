@@ -161,7 +161,23 @@ juce_add_plugin(${PLUGIN_NAME}
     PLUGIN_CODE ${PLUGIN_CODE}
     FORMATS ${PLUGIN_FORMATS}
     PRODUCT_NAME "${PRODUCT_NAME}"
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "AnalyzerPro needs microphone access to capture audio input devices, including virtual loopback devices such as BlackHole."
 )
+
+if(APPLE)
+    set_target_properties(${PLUGIN_NAME} PROPERTIES
+        XCODE_ATTRIBUTE_INFOPLIST_KEY_NSMicrophoneUsageDescription
+        "AnalyzerPro needs microphone access to capture audio input devices, including virtual loopback devices such as BlackHole."
+    )
+endif()
+
+# Also set globally so it applies to JUCE-generated bundle targets (e.g. Standalone app) in Xcode projects.
+if(APPLE)
+    set(CMAKE_XCODE_ATTRIBUTE_INFOPLIST_KEY_NSMicrophoneUsageDescription
+        "AnalyzerPro needs microphone access to capture audio input devices, including virtual loopback devices such as BlackHole."
+    )
+endif()
 
 target_sources(${PLUGIN_NAME}
     PRIVATE
@@ -189,6 +205,8 @@ target_sources(${PLUGIN_NAME}
         Source/ui/layout/FooterBar.cpp
         Source/ui/views/AnalyzerGridPlaceholder.cpp
         Source/ui/views/PhaseCorrelationView.cpp
+        Source/audio/DeviceRoutingHelper.cpp
+        Source/audio/DeviceRoutingHelper.h
         # ui_core OBJECT sources get added below via TARGET_OBJECTS
 )
 
