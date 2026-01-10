@@ -3,7 +3,10 @@
 
 //==============================================================================
 AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerProAudioProcessor& p)
-    : AudioProcessorEditor (&p), audioProcessor (p), mainView (p, &p.getAPVTS())
+    : AudioProcessorEditor (&p),
+      audioProcessor (p),
+      ui_ (mdsp_ui::ThemeVariant::Dark),  // Default to Dark theme (Phase 1)
+      mainView (ui_, p, &p.getAPVTS())
 {
     addAndMakeVisible (mainView);
 

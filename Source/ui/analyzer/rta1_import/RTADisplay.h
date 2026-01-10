@@ -110,7 +110,7 @@ private:
         float minHz = 20.0f;
         float maxHz = 20000.0f;
         float topDb = 0.0f;
-        float bottomDb = -90.0f;
+        float bottomDb = -120.0f;
         
         // Bands view
         std::vector<float> bandCentersHz;

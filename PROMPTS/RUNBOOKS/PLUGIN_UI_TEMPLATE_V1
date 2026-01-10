@@ -1,0 +1,110 @@
+MASTER CURSOR RUNBOOK — PLUGIN UI TEMPLATE v1
+PROJECT: Any new MelechDSP plugin
+
+================================================================
+GLOBAL RULES (MANDATORY)
+================================================================
+
+You MUST obey all rules defined in 00_SYSTEM_RULES.txt.
+
+This runbook is UI-ONLY.
+DO NOT touch:
+- DSP
+- Engine logic
+- Parameter definitions
+- Threading / timers
+- Performance-critical paths
+
+Minimal diffs.
+No cosmetic refactors unless instructed.
+STOP after each step.
+
+================================================================
+STEP 0 — SESSION INITIALIZATION
+================================================================
+
+Context:
+This task initializes a new plugin UI using the MelechDSP UI Design System.
+Theme / Metrics / Typography are provided by mdsp_ui.
+
+Instructions:
+- Treat AnalyzerPro as the reference implementation.
+- Copy structure, not visuals.
+- Do not invent new UI paradigms.
+
+STOP AFTER DONE
+
+================================================================
+STEP 1 — CREATE MAIN VIEW SCAFFOLD
+================================================================
+
+TASK:
+Create a MainView layout scaffold consistent with AnalyzerPro.
+
+Required structure:
+- MainView owns layout only
+- Child components own rendering and parameter logic
+
+Expected regions:
+- HeaderBar (top)
+- FooterBar (bottom)
+- Optional Meter rails (left/right)
+- Center view (main visualization)
+- ControlRail (bottom center)
+
+Rules:
+- All layout metrics sourced from ui_.metrics()
+- No hardcoded spacing
+- No setSize() inside views
+
+Acceptance:
+- MainView compiles
+- Layout is resizable
+- No visual polish required yet
+
+STOP AFTER DONE
+
+================================================================
+STEP 2 — UI CONTEXT INJECTION
+================================================================
+
+TASK:
+Wire mdsp_ui::UiContext through the new plugin UI.
+
+Required actions:
+1. PluginEditor owns mdsp_ui::UiContext.
+2. MainView receives UiContext by reference.
+3. All child UI components receive the same reference.
+
+Rules:
+- Single UiContext instance
+- No copying Theme or Metrics
+
+Acceptance:
+- UI compiles
+- Theme + Metrics accessible everywhere
+
+STOP AFTER DONE
+
+================================================================
+STEP 3 — PLACEHOLDER VISUALS ONLY
+================================================================
+
+TASK:
+Use placeholders for visuals until DSP is ready.
+
+Rules:
+- Use Grid / Placeholder views
+- No heavy drawing logic
+- No optimization work
+
+Acceptance:
+- UI runs
+- Resizes correctly
+- No crashes
+
+STOP AFTER DONE
+
+================================================================
+END OF RUNBOOK
+================================================================

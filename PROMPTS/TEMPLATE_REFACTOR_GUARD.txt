@@ -1,0 +1,27 @@
+TASK: <Defensive refactor / clarification>
+
+    Subsystem:
+    - Guard / readability / intent clarification
+    
+    Scope:
+    - <Exact file list>
+    
+    Rules:
+    - NO behavior change.
+    - NO renaming of public APIs unless explicitly stated.
+    
+    Context:
+    <Explain the ambiguity or future risk being addressed.>
+    
+    Steps:
+    1) <Extract constant / helper / comment>
+    2) <Replace magic numbers>
+    3) <Add clarifying comment>
+    
+    Do NOT:
+    - Reformat unrelated code.
+    - Touch logic paths.
+    
+    Acceptance:
+    - Binary-identical behavior.
+    - Improved readability and intent clarity.

@@ -22,6 +22,7 @@ enum class ControlId
     AnalyzerMode,        // FFT / BANDS / LOG
     AnalyzerFftSize,
     AnalyzerAveraging,
+    AnalyzerPeakHold,   // Enable/disable peak hold
     AnalyzerHold,
     AnalyzerPeakDecay,
     AnalyzerDisplayGain,

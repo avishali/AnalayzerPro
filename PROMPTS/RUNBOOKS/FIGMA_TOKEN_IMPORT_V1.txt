@@ -1,0 +1,91 @@
+MASTER CURSOR RUNBOOK — FIGMA TOKEN IMPORT v1
+
+================================================================
+GLOBAL RULES (MANDATORY)
+================================================================
+
+You MUST obey all rules defined in 00_SYSTEM_RULES.txt.
+
+This runbook ONLY affects design tokens.
+NO UI layout changes allowed.
+
+STOP after each step.
+
+================================================================
+STEP 0 — SESSION INITIALIZATION
+================================================================
+
+Context:
+Figma design tokens are now finalized.
+We will map tokens into mdsp_ui without touching UI code.
+
+STOP AFTER DONE
+
+================================================================
+STEP 1 — COLOR TOKEN MAPPING
+================================================================
+
+TASK:
+Map Figma color tokens to mdsp_ui::Theme.
+
+Rules:
+- Semantic mapping only
+- Do NOT rename Theme fields
+- Do NOT add plugin-specific colors
+
+Acceptance:
+- Dark and Light palettes compile
+- UI switches palette via UiContext only
+
+STOP AFTER DONE
+
+================================================================
+STEP 2 — METRICS TOKEN MAPPING
+================================================================
+
+TASK:
+Map Figma spacing/radius tokens to mdsp_ui::Metrics.
+
+Rules:
+- Maintain existing field names
+- Adjust values only
+
+Acceptance:
+- UI spacing updates globally
+- No layout breakage
+
+STOP AFTER DONE
+
+================================================================
+STEP 3 — TYPOGRAPHY TOKEN MAPPING
+================================================================
+
+TASK:
+Map Figma typography scale to mdsp_ui::Typography.
+
+Rules:
+- Use font sizes only
+- Font families may be stubbed initially
+
+Acceptance:
+- Text scales correctly
+- No clipping or overflow
+
+STOP AFTER DONE
+
+================================================================
+STEP 4 — VALIDATION
+================================================================
+
+TASK:
+Verify AnalyzerPro and one additional plugin (if available).
+
+Acceptance:
+- No UI refactors required
+- Token-only changes applied
+
+STOP AFTER DONE
+
+================================================================
+END OF RUNBOOK
+================================================================

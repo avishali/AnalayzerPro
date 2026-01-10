@@ -74,8 +74,7 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     std::fill (fifoBuffer.begin(), fifoBuffer.end(), 0.0f);
     std::fill (fftOutput.begin(), fftOutput.end(), 0.0f);
     std::fill (smoothedMagnitude.begin(), smoothedMagnitude.end(), 0.0f);
-    std::fill (peakHold.begin(), peakHold.end(), kDbFloor);
-    std::fill (peakHoldFramesRemaining_.begin(), peakHoldFramesRemaining_.end(), 0);
+    resetPeaks();
     
     // Safety guard: ensure numBins doesn't exceed array capacity
     jassert (numBins <= static_cast<int> (published_.data.fftDb.size()));
@@ -312,7 +311,10 @@ void AnalyzerEngine::updatePeakHold (const float* dbRawIn, float* peakOut, int n
 
     // Decay per FFT frame: (dB/s) * (hopSec)
     const float hopSec = static_cast<float> (currentHopSize) / static_cast<float> (currentSampleRate);
-    const float decayPerFrame = (peakDecayDbPerSec * hopSec);
+    const float decayDbPerSec = (peakDecayCurve_ == PeakDecayCurve::TimeConstant60dB)
+                                  ? (60.0f / juce::jmax (0.01f, peakDecayTimeConstantSec_))
+                                  : peakDecayDbPerSec;
+    const float decayPerFrame = (decayDbPerSec * hopSec);
 
     // Hold time expressed in FFT frames (only used for HoldThenDecay)
     const int holdFramesTotal = (hopSec > 0.0f && peakHoldTimeMs_ > 0.0f)
@@ -385,55 +387,39 @@ void AnalyzerEngine::setFftSize (int fftSize)
     {
         // Round to nearest power of 2
         validSize = 1 << static_cast<int> (std::ceil (std::log2 (fftSize)));
-        validSize = juce::jlimit (1024, 8192, validSize);  // Clamp to 1024 minimum (not 2048)
+        validSize = juce::jlimit (1024, 8192, validSize);
     }
-    
-    if (validSize != currentFFTSize && prepared)
-    {
-        // RT-safe: never allocate/resize here (this may be called from audio thread).
+
+    // Always route through requestFftSize (RT-safe, centralizes metadata invalidation).
+    // requestFftSize will handle prepared/not-prepared state.
+    if (validSize != currentFFTSize)
         requestFftSize (validSize);
-    }
-    
-    // CRITICAL: Mark snapshot as invalid on FFT size change to prevent "blink to floor"
-    // Only publish valid snapshots after first real FFT computation
-    // Do NOT fill arrays to floor here - UI will hold last valid frame
-    if (prepared)
-    {
-        const int numBins = validSize / 2 + 1;
-        
-        // Safety guard: ensure numBins doesn't exceed array capacity
-        jassert (numBins <= static_cast<int> (published_.data.fftDb.size()));
-        jassert (numBins <= static_cast<int> (published_.data.fftPeakDb.size()));
-        
-        published_.data.isValid = false;
-        published_.data.fftSize = validSize;
-        published_.data.sampleRate = currentSampleRate;
-        published_.data.numBins = numBins;
-        published_.data.fftBinCount = numBins;
-    }
 }
 
 void AnalyzerEngine::requestFftSize (int fftSize)
 {
+    // Micro-polish: avoid re-requesting the same FFT size
+    const int pending = pendingFftSize_.load (std::memory_order_acquire);
+    if ((pending == fftSize && fftResizeRequested_.load (std::memory_order_acquire)) ||
+        (pending == 0 && fftSize == currentFFTSize))
+    {
+        return;
+    }
+
     pendingFftSize_.store (fftSize, std::memory_order_release);
     fftResizeRequested_.store (true, std::memory_order_release);
 
-    // Metadata invalidation (no allocations): update expected FFT shape immediately so the UI can
-    // hold the last valid frame while waiting for applyPendingFftSizeIfNeeded() to run.
-    if (prepared)
-    {
-        const int numBins = fftSize / 2 + 1;
+    // Metadata invalidation (no allocations)
+    const int numBins = fftSize / 2 + 1;
 
-        // Safety guard: ensure numBins doesn't exceed array capacity
-        jassert (numBins <= static_cast<int> (published_.data.fftDb.size()));
-        jassert (numBins <= static_cast<int> (published_.data.fftPeakDb.size()));
+    jassert (numBins <= static_cast<int> (published_.data.fftDb.size()));
+    jassert (numBins <= static_cast<int> (published_.data.fftPeakDb.size()));
 
-        published_.data.isValid = false;
-        published_.data.fftSize = fftSize;
-        published_.data.sampleRate = currentSampleRate;
-        published_.data.numBins = numBins;
-        published_.data.fftBinCount = numBins;
-    }
+    published_.data.isValid = false;
+    published_.data.fftSize = fftSize;
+    published_.data.sampleRate = currentSampleRate;
+    published_.data.numBins = numBins;      // legacy/compat
+    published_.data.fftBinCount = numBins;
 }
 
 void AnalyzerEngine::applyPendingFftSizeIfNeeded()
@@ -446,15 +432,29 @@ void AnalyzerEngine::applyPendingFftSizeIfNeeded()
         return;
 
     const int requested = pendingFftSize_.load (std::memory_order_acquire);
+
+    // Nothing meaningful pending: clear the request state.
     if (requested <= 0 || requested == currentFFTSize)
     {
+        pendingFftSize_.store (0, std::memory_order_release);
         fftResizeRequested_.store (false, std::memory_order_release);
         return;
     }
 
+    // Apply the resize on the message thread (allocations/resizes are allowed here).
     initializeFFT (requested);
     updateSmoothingCoeff (averagingMs_, currentSampleRate);
 
+    // If a newer request arrived while we were resizing, keep the flag set.
+    const int nowPending = pendingFftSize_.load (std::memory_order_acquire);
+    if (nowPending > 0 && nowPending != currentFFTSize)
+    {
+        fftResizeRequested_.store (true, std::memory_order_release);
+        return;
+    }
+
+    // No newer request: clear state.
+    pendingFftSize_.store (0, std::memory_order_release);
     fftResizeRequested_.store (false, std::memory_order_release);
 }
 
@@ -471,8 +471,7 @@ void AnalyzerEngine::setPeakHoldEnabled (bool enabled)
     if (! enabled)
     {
         peakHoldMode_ = PeakHoldMode::Off;
-        std::fill (peakHold.begin(), peakHold.end(), kDbFloor);
-        std::fill (peakHoldFramesRemaining_.begin(), peakHoldFramesRemaining_.end(), 0);
+        resetPeaks();
         return;
     }
 
@@ -480,6 +479,13 @@ void AnalyzerEngine::setPeakHoldEnabled (bool enabled)
     if (peakHoldMode_ == PeakHoldMode::Off)
         peakHoldMode_ = PeakHoldMode::HoldThenDecay;
 }
+
+void AnalyzerEngine::resetPeaks()
+{
+    std::fill (peakHold.begin(), peakHold.end(), kDbFloor);
+    std::fill (peakHoldFramesRemaining_.begin(), peakHoldFramesRemaining_.end(), 0);
+}
+
 void AnalyzerEngine::setPeakHoldMode (PeakHoldMode mode)
 {
     peakHoldMode_ = mode;
@@ -487,12 +493,15 @@ void AnalyzerEngine::setPeakHoldMode (PeakHoldMode mode)
     // Keep legacy enable flag in sync.
     peakHoldEnabled_ = (peakHoldMode_ != PeakHoldMode::Off);
 
-    // Reset timers when switching modes (safe, avoids “stuck hold”).
-    std::fill (peakHoldFramesRemaining_.begin(), peakHoldFramesRemaining_.end(), 0);
-
     // If turning off, clear peaks.
     if (peakHoldMode_ == PeakHoldMode::Off)
-        std::fill (peakHold.begin(), peakHold.end(), kDbFloor);
+    {
+        resetPeaks();
+        return;
+    }
+
+    // Reset timers when switching modes (safe, avoids “stuck hold”).
+    std::fill (peakHoldFramesRemaining_.begin(), peakHoldFramesRemaining_.end(), 0);
 }
 
 void AnalyzerEngine::setPeakHoldTimeMs (float holdTimeMs)
@@ -509,6 +518,16 @@ void AnalyzerEngine::setHold (bool hold)
 void AnalyzerEngine::setPeakDecayDbPerSec (float decayDbPerSec)
 {
     peakDecayDbPerSec = juce::jlimit (0.0f, 60.0f, decayDbPerSec);
+}
+
+void AnalyzerEngine::setPeakDecayCurve (PeakDecayCurve curve)
+{
+    peakDecayCurve_ = curve;
+}
+
+void AnalyzerEngine::setPeakDecayTimeConstantSec (float seconds)
+{
+    peakDecayTimeConstantSec_ = juce::jlimit (0.01f, 10.0f, seconds);
 }
 
 void AnalyzerEngine::updateSmoothingCoeff (float averagingMs, double sampleRate)

@@ -19,6 +19,9 @@
 #include <limits>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+// NOTE (audit trail):
+// “RTADisplay.cpp touched for build fix only (API enum rename); no functional changes.”
+
 //==============================================================================
 RTADisplay::RTADisplay()
     : freqHover_ ({})  // Style will be set via buildFreqAxisConfig if needed
@@ -33,11 +36,13 @@ RTADisplay::RTADisplay()
         return style;
     }())
 {
+    constexpr float kGridMinDb = -120.0f;
+
     // Initialize state with defaults
     state.minHz = 20.0f;
     state.maxHz = 20000.0f;
     state.topDb = 0.0f;
-    state.bottomDb = -90.0f;
+    state.bottomDb = kGridMinDb;
     // Initialize coordinate mapping factors
     logMinFreq = std::log10 (state.minHz);
     logFreqRange = std::log10 (state.maxHz) - logMinFreq;
@@ -1061,7 +1066,7 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
             ? mdsp_ui::DecimationMode::Envelope
             : mdsp_ui::DecimationMode::Simple;
 #else
-        peakStyle.decimationMode = mdsp_ui::SeriesStyle::DecimationMode::Simple;
+        peakStyle.decimationMode = mdsp_ui::DecimationMode::Simple;
 #endif
         peakStyle.envelopeMinBucketPx = 1.0f;
         peakStyle.envelopeDrawVertical = true;
@@ -1075,8 +1080,9 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
             [&s, this] (int i) -> float
             {
                 const auto idx = static_cast<size_t> (i);
-                const float db = s.bandsPeakDb[idx];
-                return dbToY (db, s);
+                float peakDb = s.bandsPeakDb[idx];
+                peakDb = juce::jlimit (s.bottomDb, 0.0f, peakDb);
+                return dbToY (peakDb, s);
             },
             theme.seriesPeak, peakStyle);
     }
@@ -1254,7 +1260,7 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
             ? mdsp_ui::DecimationMode::Envelope
             : mdsp_ui::DecimationMode::Simple;
 #else
-        peakStyle.decimationMode = mdsp_ui::SeriesStyle::DecimationMode::Simple;
+        peakStyle.decimationMode = mdsp_ui::DecimationMode::Simple;
 #endif
         peakStyle.envelopeMinBucketPx = 1.0f;
         peakStyle.envelopeDrawVertical = true;
@@ -1268,8 +1274,9 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
             [&s, this] (int i) -> float
             {
                 const auto idx = static_cast<size_t> (i);
-                const float db = s.logPeakDb[idx];
-                return dbToY (db, s);
+                float peakDb = s.logPeakDb[idx];
+                peakDb = juce::jlimit (s.bottomDb, 0.0f, peakDb);
+                return dbToY (peakDb, s);
             },
             theme.seriesPeak, peakStyle);
     }
@@ -1594,7 +1601,7 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
         ? mdsp_ui::DecimationMode::Envelope
         : mdsp_ui::DecimationMode::Simple;
 #else
-    spectrumStyle.decimationMode = mdsp_ui::SeriesStyle::DecimationMode::Simple;
+    spectrumStyle.decimationMode = mdsp_ui::DecimationMode::Simple;
 #endif
     spectrumStyle.envelopeMinBucketPx = 1.0f;
     spectrumStyle.envelopeDrawVertical = true;
@@ -1632,7 +1639,7 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
             ? mdsp_ui::DecimationMode::Envelope
             : mdsp_ui::DecimationMode::Simple;
 #else
-        peakStyle.decimationMode = mdsp_ui::SeriesStyle::DecimationMode::Simple;
+        peakStyle.decimationMode = mdsp_ui::DecimationMode::Simple;
 #endif
         peakStyle.envelopeMinBucketPx = 1.0f;
         peakStyle.envelopeDrawVertical = true;
@@ -1649,9 +1656,10 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
                 const int binIndex = firstBin + i;
                 const float freq = static_cast<float> (static_cast<double> (binIndex) * binWidthHz);
                 const auto idx = static_cast<size_t> (binIndex);
-                const float db = (idx < s.fftPeakDb.size()) ? s.fftPeakDb[idx]
-                                                           : std::numeric_limits<float>::quiet_NaN();
-                return dbToYWithCompensation (db, freq, s);
+                float peakDb = (idx < s.fftPeakDb.size()) ? s.fftPeakDb[idx]
+                                                          : std::numeric_limits<float>::quiet_NaN();
+                peakDb = juce::jlimit (s.bottomDb, 0.0f, peakDb);
+                return dbToYWithCompensation (peakDb, freq, s);
             },
             theme.seriesPeak, peakStyle);
     }

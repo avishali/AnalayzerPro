@@ -1,0 +1,45 @@
+# TODO
+# Paste the Cursor prompt text for this task here.
+TASK: Defensive refactor — UIContext adoption + remove local Theme creation
+
+Subsystem:
+	•	HeaderBar / FooterBar / ControlRail / Meters (UI only)
+
+Scope (ONLY these files):
+	•	Source/ui/layout/HeaderBar.h
+	•	Source/ui/layout/HeaderBar.cpp
+	•	Source/ui/layout/FooterBar.h
+	•	Source/ui/layout/FooterBar.cpp
+	•	Source/ui/layout/ControlRail.h
+	•	Source/ui/layout/ControlRail.cpp
+	•	Source/ui/meters/MeterComponent.h
+	•	Source/ui/meters/MeterComponent.cpp
+	•	Source/ui/meters/MeterGroupComponent.h
+	•	Source/ui/meters/MeterGroupComponent.cpp
+
+Rules:
+	•	NO behavior change.
+	•	NO public API renaming unless needed to accept mdsp_ui::UiContext&.
+	•	Minimal diffs. No formatting-only edits.
+
+Context:
+MainView now uses mdsp_ui::UiContext for theme+metrics. These UI components must stop inventing their own constants/colors/fonts and must source them from UiContext. This is groundwork for future dark/light + Figma token handoff.
+
+Steps:
+	1.	Add mdsp_ui::UiContext& injection to each component (constructor takes mdsp_ui::UiContext& ui, stored as reference member).
+	2.	Replace any local mdsp_ui::Theme theme; constructions with const auto& theme = ui_.theme();.
+	3.	Replace any layout magic numbers (padding/gaps/heights/radii/strokes) with const auto& m = ui_.metrics(); and use m.pad, m.gap, m.rMed, etc.
+	4.	Replace font-size literals (if present) with const auto& type = ui_.type(); and use type.labelH, etc. (If fonts are created via juce::Font(size), pass type.*H.)
+	5.	Ensure any debug drawing remains debug-only and unchanged.
+
+Do NOT:
+	•	Touch AnalyzerEngine / DSP / snapshot logic.
+	•	Change visuals intentionally (only token sourcing changes).
+	•	Move files or create new architecture.
+
+Acceptance:
+	•	Compiles.
+	•	Identical layout and appearance to before (aside from negligible anti-alias differences).
+	•	No new allocations in hot paths; no extra timers.
+
+⸻

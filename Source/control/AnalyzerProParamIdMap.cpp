@@ -9,6 +9,7 @@ ap::control::ParamIdMap ap::control::makeDefaultParamIdMap()
     m[ap::control::ControlId::AnalyzerMode] = "Mode";
     m[ap::control::ControlId::AnalyzerFftSize] = "FftSize";
     m[ap::control::ControlId::AnalyzerAveraging] = "Averaging";
+    m[ap::control::ControlId::AnalyzerPeakHold] = "PeakHold";
     m[ap::control::ControlId::AnalyzerHold] = "Hold";
     m[ap::control::ControlId::AnalyzerPeakDecay] = "PeakDecay";
     m[ap::control::ControlId::AnalyzerDisplayGain] = "DisplayGain";

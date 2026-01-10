@@ -1,6 +1,9 @@
 #pragma once
 
+#include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <mdsp_ui/Theme.h>
+#include <mdsp_ui/ThemeVariant.h>
 #include <vector>
 #include <algorithm>
 #include "rta1_import/RTADisplay.h"
@@ -35,6 +38,13 @@ public:
         BAND   // 2
     };
 
+    enum class DbRange
+    {
+        Minus60 = 0,
+        Minus90 = 1,
+        Minus120 = 2
+    };
+
     AnalyzerDisplayView (AnalayzerProAudioProcessor& processor);
     ~AnalyzerDisplayView() override;
 
@@ -43,6 +53,14 @@ public:
 
     void setMode (Mode mode);
     Mode getMode() const noexcept { return currentMode_; }
+
+    void setDbRange (DbRange r);
+    DbRange getDbRange() const noexcept { return dbRange_; }
+    void setDbRangeFromChoiceIndex (int idx);
+
+    void setPeakDbRange (DbRange r);
+    DbRange getPeakDbRange() const noexcept { return peakDbRange_; }
+    void triggerPeakFlash();
 
     RTADisplay& getRTADisplay() noexcept { return rtaDisplay; }
     const RTADisplay& getRTADisplay() const noexcept { return rtaDisplay; }
@@ -77,6 +95,21 @@ private:
     AnalayzerProAudioProcessor& audioProcessor;
     RTADisplay rtaDisplay;
     Mode currentMode_ = Mode::FFT;
+    DbRange dbRange_ = DbRange::Minus120;
+    DbRange appliedDbRange_ = DbRange::Minus120;
+    DbRange peakDbRange_ = DbRange::Minus90;
+    bool peakScaleDirty_ = false;
+
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> minDbAnim_;
+    float targetMinDb_ = -120.0f;
+    float lastAppliedMinDb_ = -120.0f;
+
+    std::vector<float> fftPeakDbDisplay_;
+    std::vector<float> bandsPeakDbDisplay_;
+    std::vector<float> logPeakDbDisplay_;
+
+    bool peakFlashActive_ = false;
+    double peakFlashUntilMs_ = 0.0;
     uint32_t lastSequence_ = 0;  // Track sequence to avoid unnecessary updates
     AnalyzerSnapshot snapshot_;
     AnalyzerSnapshot lastValidSnapshot_;  // Hold last valid frame for grace period
@@ -125,11 +158,13 @@ private:
         void setText (juce::String t) { text = std::move (t); repaint(); }
         void paint (juce::Graphics& g) override
         {
+            // Debug overlay uses theme-aware colors (variant-aware, defaults to Dark for Phase 1)
+            const mdsp_ui::Theme theme (mdsp_ui::ThemeVariant::Dark);
             auto r = getLocalBounds().toFloat();
-            g.setColour (juce::Colours::black.withAlpha (0.55f));
+            g.setColour (theme.background.withAlpha (0.55f));
             g.fillRoundedRectangle (r, 4.0f);
             
-            g.setColour (juce::Colours::yellow);
+            g.setColour (theme.warning);  // Yellow warning color from theme
             g.setFont (juce::Font (juce::FontOptions().withHeight (12.0f)));
             g.drawText (text, getLocalBounds().reduced (6, 2), juce::Justification::centredLeft);
         }

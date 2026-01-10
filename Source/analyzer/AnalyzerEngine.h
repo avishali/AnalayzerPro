@@ -44,6 +44,7 @@ public:
 
     void setAveragingMs (float averagingMs);
     void setPeakHoldEnabled (bool enabled);
+    void resetPeaks();
 
     enum class PeakHoldMode
     {
@@ -57,6 +58,15 @@ public:
     void setPeakHoldTimeMs (float holdTimeMs);
     void setHold (bool hold);  // Freeze peaks (no decay when enabled)
     void setPeakDecayDbPerSec (float decayDbPerSec);
+
+    enum class PeakDecayCurve
+    {
+        DbPerSec = 0,
+        TimeConstant60dB = 1
+    };
+
+    void setPeakDecayCurve (PeakDecayCurve curve);
+    void setPeakDecayTimeConstantSec (float seconds);
     
 private:
     static constexpr int kMaxFFTSize = 8192;
@@ -95,6 +105,9 @@ private:
     float peakDecayDbPerSec = 1.0f;
     bool peakHoldEnabled_ = true;  // Whether peaks overlay is displayed and tracked
     bool freezePeaks_ = false;      // Freeze peaks (no decay when enabled)
+
+    PeakDecayCurve peakDecayCurve_ = PeakDecayCurve::DbPerSec;
+    float peakDecayTimeConstantSec_ = 1.0f;
 
     // Pending FFT resize request (RT-safe)
     std::atomic<int> pendingFftSize_{ 0 };

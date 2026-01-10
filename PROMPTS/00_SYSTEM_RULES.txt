@@ -1,0 +1,42 @@
+GLOBAL RULES FOR CURSOR / CODING AGENTS
+
+These rules apply to EVERY prompt unless explicitly overridden.
+
+ABSOLUTE RULES:
+- Do NOT redefine classes inside .cpp files.
+- Do NOT rewrite entire files unless explicitly instructed.
+- Do NOT invent new architecture, managers, or abstractions.
+- Do NOT allocate, resize, or create objects on the audio thread.
+- Do NOT move logic between UI and Engine layers.
+
+SCOPE RULES:
+- Only touch the files explicitly listed in the prompt.
+- If a change seems to require more files, STOP and ask.
+- Minimal diffs are preferred over “clean” rewrites.
+
+REAL-TIME SAFETY:
+- AnalyzerEngine and DSP code must remain RT-safe.
+- No malloc/new/vector.resize/FFT creation in processBlock.
+- Deferred or message-thread application is mandatory for heavy ops.
+
+UI VS ENGINE CONTRACT:
+- Engine owns math, DSP state, buffers.
+- UI owns mapping, clamping, animation, visualization.
+- UI may NEVER modify engine buffers directly.
+- Engine may NEVER know about UI ranges, grids, or animation.
+
+PARAMETERS:
+- APVTS parameters are the single source of truth.
+- Cache raw parameter pointers when appropriate.
+- Avoid per-block or per-frame parameter churn.
+
+STYLE:
+- Prefer explicit code over clever code.
+- Prefer named constants over magic numbers.
+- Preserve existing naming and conventions.
+
+FAIL FAST:
+- If a prompt is ambiguous, do NOT guess.
+- If a prompt contradicts existing architecture, STOP.
+
+The goal is correctness, stability, and longevity — not speed of completion.

@@ -1,0 +1,187 @@
+MELECHDSP — CURSOR RUNBOOK INDEX
+Version: v1
+Owner: MelechDSP HQ
+Scope: UI / UX / Design System / Plugin Layouts
+
+================================================================
+PURPOSE
+================================================================
+
+This index defines:
+- Which runbook to use
+- When to use it
+- In what order
+- What each runbook is allowed to change
+
+All runbooks are:
+- Operator-safe
+- Commit-ready
+- Designed for Cursor agents
+- STOP-driven (explicit phase control)
+
+================================================================
+GLOBAL RULE
+================================================================
+
+Before running ANY runbook:
+- Load 00_SYSTEM_RULES.txt
+- Follow instructions verbatim
+- Do NOT skip steps
+- Do NOT merge runbooks unless explicitly instructed
+
+================================================================
+PRIMARY RUNBOOKS (CORE)
+================================================================
+
+1) ANALYZERPRO_UI_V1.txt
+------------------------------------------------------------
+WHEN TO USE:
+- Stabilizing AnalyzerPro UI
+- Introducing design system foundations
+- Preparing for dark/light themes
+- Locking layout + metrics consistency
+
+ALLOWED CHANGES:
+- UI layout code
+- UI token sourcing
+- Theme / Metrics / Typography wiring
+
+FORBIDDEN:
+- DSP
+- Engine logic
+- Parameter definitions
+
+PREREQUISITES:
+- Existing AnalyzerPro UI
+- mdsp_ui module present
+
+STATUS:
+MANDATORY for AnalyzerPro
+
+------------------------------------------------------------
+
+2) PLUGIN_UI_TEMPLATE_V1.txt
+------------------------------------------------------------
+WHEN TO USE:
+- Starting a NEW plugin UI
+- Bootstrapping layout and structure
+- Reusing AnalyzerPro UI patterns
+
+ALLOWED CHANGES:
+- New UI files
+- MainView scaffolding
+- UiContext injection
+
+FORBIDDEN:
+- DSP logic
+- UI redesign beyond structure
+
+PREREQUISITES:
+- mdsp_ui design system available
+
+STATUS:
+MANDATORY for all new plugins
+
+------------------------------------------------------------
+
+================================================================
+SECONDARY RUNBOOKS (SYSTEMIZATION)
+================================================================
+
+3) CONTROL_PRIMITIVES_EXTRACTION_V1.txt
+------------------------------------------------------------
+WHEN TO USE:
+- ControlRail becomes complex
+- Repeated UI patterns appear
+- Preparing shared control primitives
+
+ALLOWED CHANGES:
+- Internal UI refactors
+- Local helper components
+
+FORBIDDEN:
+- Behavior changes
+- Visual redesign
+- Moving code into mdsp_ui (yet)
+
+PREREQUISITES:
+- AnalyzerPro UI stabilized
+
+STATUS:
+OPTIONAL but RECOMMENDED
+
+------------------------------------------------------------
+
+4) FIGMA_TOKEN_IMPORT_V1.txt
+------------------------------------------------------------
+WHEN TO USE:
+- Final Figma design system approved
+- Designer delivers tokens
+- Global visual update required
+
+ALLOWED CHANGES:
+- Theme color values
+- Metrics values
+- Typography scale
+
+FORBIDDEN:
+- Layout rewrites
+- UI refactors
+- Plugin-specific logic
+
+PREREQUISITES:
+- UiContext + tokens already wired
+
+STATUS:
+OPTIONAL / FUTURE
+
+------------------------------------------------------------
+
+================================================================
+RECOMMENDED EXECUTION FLOWS
+================================================================
+
+A) AnalyzerPro stabilization (current project)
+------------------------------------------------
+1. ANALYZERPRO_UI_V1.txt
+2. CONTROL_PRIMITIVES_EXTRACTION_V1.txt (optional)
+
+------------------------------------------------
+
+B) New plugin creation
+------------------------------------------------
+1. PLUGIN_UI_TEMPLATE_V1.txt
+2. CONTROL_PRIMITIVES_EXTRACTION_V1.txt (if needed)
+
+------------------------------------------------
+
+C) Visual redesign from Figma
+------------------------------------------------
+1. FIGMA_TOKEN_IMPORT_V1.txt
+(no other runbooks required)
+
+------------------------------------------------
+
+================================================================
+ANTI-PATTERNS (DO NOT DO)
+================================================================
+
+- Do NOT mix multiple runbooks in one Cursor session
+- Do NOT skip STOP markers
+- Do NOT redesign visuals inside refactor runbooks
+- Do NOT add new tokens ad-hoc
+- Do NOT let Cursor “optimize” beyond scope
+
+================================================================
+EXTENSION POINTS (FUTURE)
+================================================================
+
+Planned runbooks (not yet created):
+- HARDWARE_UI_MAPPING_V1.txt
+- LED_OUTPUT_PIPELINE_V1.txt
+- UI_PERFORMANCE_AUDIT_V1.txt
+- ACCESSIBILITY_PASS_V1.txt
+
+================================================================
+END OF INDEX
+================================================================
