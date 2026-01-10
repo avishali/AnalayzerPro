@@ -29,7 +29,8 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     addAndMakeVisible (outputMeters_);
     addAndMakeVisible (inputMeters_);
     
-    // Initialize rail with control binder
+    // Initialize header and rail with control binder
+    header_.setControlBinder (controls_.getBinder());
     rail_.setControlBinder (controls_.getBinder());
     rail_.setResetPeaksCallback ([this]
     {
@@ -47,13 +48,13 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         }
         if (apvts_ != nullptr)
         {
-            if (auto* p = apvts_->getParameter ("DbRange"))
+            if (auto* param = apvts_->getParameter ("DbRange"))
             {
                 const int idx = juce::jlimit (0, 2, selectedId - 1);
                 const float norm = static_cast<float> (idx) / 2.0f;
-                p->beginChangeGesture();
-                p->setValueNotifyingHost (norm);
-                p->endChangeGesture();
+                param->beginChangeGesture();
+                param->setValueNotifyingHost (norm);
+                param->endChangeGesture();
             }
         }
 
@@ -75,12 +76,8 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         apvts->addParameterListener ("Tilt", this);
     }
 
-    // HeaderBar mode label is now read-only (mirror only)
-    // Right-side Mode control is the single source of truth
-    // Set initial header label to match default mode
-    header_.setDisplayMode (HeaderBar::DisplayMode::FFT);
-    
-    // Set default mode to FFT (right-side control will update header via parameterChanged)
+    // HeaderBar is authoritative for Mode/FFT/Averaging controls
+    // Set default mode to FFT (HeaderBar control will update via parameterChanged)
     analyzerView_.setMode (AnalyzerDisplayView::Mode::FFT);
 
     header_.onDbRangeChanged = [this] (int id)
@@ -93,13 +90,13 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
 
         if (apvts_ != nullptr)
         {
-            if (auto* p = apvts_->getParameter ("DbRange"))
+            if (auto* param = apvts_->getParameter ("DbRange"))
             {
                 const int idx = juce::jlimit (0, 2, id - 1);
                 const float norm = static_cast<float> (idx) / 2.0f;
-                p->beginChangeGesture();
-                p->setValueNotifyingHost (norm);
-                p->endChangeGesture();
+                param->beginChangeGesture();
+                param->setValueNotifyingHost (norm);
+                param->endChangeGesture();
             }
         }
 
@@ -134,6 +131,10 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     }
 
     //setSize (900, 650);  // Slightly bigger to fit all controls
+
+#if JUCE_DEBUG
+    auditApvtsParameters();
+#endif
 }
 
 MainView::~MainView()
@@ -175,36 +176,28 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     // Handle parameter changes on UI thread (safe to call AnalyzerEngine setters)
     if (parameterID == "Mode")
     {
-        // Right-side Mode control is the single source of truth
+        // HeaderBar Mode control is authoritative
         // Convert choice index to AnalyzerDisplayView::Mode (FFT=0, BANDS=1, LOG=2)
         const int index = juce::roundToInt (newValue);
         AnalyzerDisplayView::Mode viewMode = AnalyzerDisplayView::Mode::FFT;
-        HeaderBar::DisplayMode headerMode = HeaderBar::DisplayMode::FFT;
         switch (index)
         {
             case 0:
                 viewMode = AnalyzerDisplayView::Mode::FFT;
-                headerMode = HeaderBar::DisplayMode::FFT;
                 break;
             case 1:
                 viewMode = AnalyzerDisplayView::Mode::BAND;
-                headerMode = HeaderBar::DisplayMode::Band;
                 break;
             case 2:
                 viewMode = AnalyzerDisplayView::Mode::LOG;
-                headerMode = HeaderBar::DisplayMode::Log;
                 break;
             default:
                 viewMode = AnalyzerDisplayView::Mode::FFT;
-                headerMode = HeaderBar::DisplayMode::FFT;
                 break;
         }
         
-        // Update analyzer view (authoritative)
+        // Update analyzer view
         analyzerView_.setMode (viewMode);
-        
-        // Sync header label (read-only mirror)
-        header_.setDisplayMode (headerMode);
         
 #if JUCE_DEBUG
         // Assertion: Verify mode sync
@@ -213,7 +206,7 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
                                 : (currentMode == AnalyzerDisplayView::Mode::BAND) ? 1 : 2;
         if (expectedIndex != index)
         {
-            DBG ("MODE SYNC ERROR: Right-side control index=" << index 
+            DBG ("MODE SYNC ERROR: HeaderBar control index=" << index 
                  << " but AnalyzerDisplayView mode=" << (currentMode == AnalyzerDisplayView::Mode::FFT ? "FFT" : (currentMode == AnalyzerDisplayView::Mode::BAND ? "BANDS" : "LOG")));
             jassertfalse;
         }
@@ -406,12 +399,11 @@ void MainView::resized()
     static constexpr int headerH = 32;
     static constexpr int footerH = 22;
     static constexpr int metersW = 60;  // Fixed width for meters
-    static constexpr int controlsH = 140;  // Reduced height for compact controls
 
     auto bounds = getLocalBounds().reduced (padding);
     debugContent = bounds;
 
-    // Slice order: footer, header, then main content area
+    // Slice order: footer, header, then split remaining into analyzer and controls
     // 1) Footer from bottom
     auto footerArea = bounds.removeFromBottom (footerH);
     debugFooter = footerArea;
@@ -422,32 +414,95 @@ void MainView::resized()
     debugHeader = headerArea;
     header_.setBounds (headerArea);
 
-    // 3) Main content area: meters on left/right (full height), scope + controls in center
-    auto mainArea = bounds;
-    
-    // Left: Input meters (full height, spans entire screen height)
-    auto inputMetersArea = mainArea.removeFromLeft (metersW);
-    inputMeters_.setBounds (inputMetersArea);
-    
-    // Right: Output meters (full height, spans entire screen height)
-    auto outputMetersArea = mainArea.removeFromRight (metersW);
-    outputMeters_.setBounds (outputMetersArea);
-    
-    // Center: Scope (top) + Controls (bottom)
-    auto centerArea = mainArea;
-    debugLeft = centerArea;
-    
-    // Controls at bottom of center area
-    auto controlsArea = centerArea.removeFromBottom (controlsH);
+    // 3) Calculate responsive controls height
+    int controlsH = juce::jlimit (110, 180, bounds.getHeight() / 4);
+
+    // 4) Split remaining area into analyzer (top) and controls (bottom)
+    auto analyzerArea = bounds;
+    auto controlsArea = analyzerArea.removeFromBottom (controlsH);
     debugRail = controlsArea;
     rail_.setBounds (controlsArea);
-    
-    // Scope takes remaining center area (smaller now)
-    auto scopeArea = centerArea;
-    debugAnalyzerTop = scopeArea;
-    analyzerView_.setBounds (scopeArea);
-    
+
+    // 5) Save analyzerArea dimensions before removing meter widths
+    const int analyzerY = analyzerArea.getY();
+    const int analyzerHeight = analyzerArea.getHeight();
+
+    // 6) Place meters aligned with analyzerArea (same height as analyzerView_)
+    auto inputMetersArea = analyzerArea.removeFromLeft (metersW);
+    inputMetersArea.setY (analyzerY);
+    inputMetersArea.setHeight (analyzerHeight);
+    inputMeters_.setBounds (inputMetersArea);
+
+    auto outputMetersArea = analyzerArea.removeFromRight (metersW);
+    outputMetersArea.setY (analyzerY);
+    outputMetersArea.setHeight (analyzerHeight);
+    outputMeters_.setBounds (outputMetersArea);
+
+    // 7) Place analyzer view in remaining center of analyzerArea
+    debugLeft = analyzerArea;
+    debugAnalyzerTop = analyzerArea;
+    analyzerView_.setBounds (analyzerArea);
+
     // Phase view hidden for now (or can be placed elsewhere if needed)
     phaseView_.setBounds (juce::Rectangle<int>());
     debugPhaseBottom = juce::Rectangle<int>();
 }
+
+#if JUCE_DEBUG
+void MainView::auditApvtsParameters()
+{
+    static bool auditRun = false;
+    if (auditRun)
+        return;
+    auditRun = true;
+
+    if (apvts_ == nullptr)
+        return;
+
+    // Collect all APVTS parameter IDs (manual list from createParameterLayout)
+    // Note: APVTS doesn't expose iteration API, so we manually enumerate known parameters
+    std::set<juce::String> apvtsParams;
+    apvtsParams.insert ("Mode");
+    apvtsParams.insert ("FftSize");
+    apvtsParams.insert ("Averaging");
+    apvtsParams.insert ("PeakHold");
+    apvtsParams.insert ("Hold");
+    apvtsParams.insert ("PeakDecay");
+    apvtsParams.insert ("DisplayGain");
+    apvtsParams.insert ("Tilt");
+    apvtsParams.insert ("DbRange");
+
+    // Collect UI-represented parameters (best effort manual set)
+    std::set<juce::String> uiRepresented;
+    uiRepresented.insert ("Mode");
+    uiRepresented.insert ("FftSize");
+    uiRepresented.insert ("Averaging");
+    uiRepresented.insert ("PeakHold");
+    uiRepresented.insert ("Hold");
+    uiRepresented.insert ("PeakDecay");
+    uiRepresented.insert ("DbRange");
+    uiRepresented.insert ("DisplayGain");
+    uiRepresented.insert ("Tilt");
+
+    // Print all APVTS parameters
+    for (const auto& id : apvtsParams)
+    {
+        DBG ("APVTS param: " + id);
+    }
+
+    // Print UI-represented parameters
+    for (const auto& id : uiRepresented)
+    {
+        DBG ("UI represented: " + id);
+    }
+
+    // Find missing parameters
+    for (const auto& id : apvtsParams)
+    {
+        if (uiRepresented.find (id) == uiRepresented.end())
+        {
+            DBG ("MISSING UI FOR PARAM: " + id);
+        }
+    }
+}
+#endif

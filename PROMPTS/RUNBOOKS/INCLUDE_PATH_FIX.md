@@ -34,7 +34,14 @@ target_include_directories(mdsp_ui PUBLIC
 )
 ```
 
-This means linking to `mdsp_ui` should automatically propagate the include path. The explicit addition in AnalyzerPro's CMakeLists.txt ensures it's available even if propagation doesn't work in edge cases.
+**Important**: When `mdsp_ui` is linked (even as PRIVATE), its PUBLIC include directories automatically propagate to `AnalyzerPro` itself. However, since `mdsp_ui` is linked as PRIVATE in AnalyzerPro's CMakeLists.txt, those include paths are only available to AnalyzerPro, not to consumers of AnalyzerPro.
+
+The explicit PUBLIC addition in AnalyzerPro's CMakeLists.txt serves two purposes:
+1. **Defense in depth**: Ensures the include path is available even if propagation has issues
+2. **IDE/Xcode support**: Makes the include path visible to IDEs that parse CMake, ensuring proper code completion and navigation
+3. **Explicit documentation**: Makes it clear where the include path comes from
+
+**Recommendation**: Keep both approaches (PUBLIC include directories in mdsp_ui + explicit PUBLIC addition in AnalyzerPro) for maximum compatibility.
 
 ## Files Using Angle Bracket Includes
 

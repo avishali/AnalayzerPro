@@ -11,7 +11,6 @@ ToggleRow::ToggleRow (mdsp_ui::UiContext& ui, const juce::String& labelText, juc
 {
     const auto& theme = ui_.theme();
     const auto& type = ui_.type();
-    
     label_.setText (labelText, juce::dontSendNotification);
     label_.setFont (type.labelSmallFont());
     label_.setJustificationType (juce::Justification::centredLeft);

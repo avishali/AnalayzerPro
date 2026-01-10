@@ -234,7 +234,6 @@ target_compile_features(${PLUGIN_NAME} PUBLIC cxx_std_17)
 target_include_directories(${PLUGIN_NAME}
     PRIVATE
         Source
-    PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/melechdsp-hq/shared/mdsp_ui/include
 )
 

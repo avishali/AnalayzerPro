@@ -38,9 +38,6 @@ private:
     mdsp_ui::UiContext& ui_;
 
     // Underlying controls (must be declared before primitives that reference them)
-    juce::ComboBox modeCombo;
-    juce::ComboBox fftSizeCombo;
-    juce::ComboBox averagingCombo;
     juce::ComboBox dbRangeCombo;
     juce::ToggleButton peakHoldButton;
     juce::ToggleButton holdButton;
@@ -56,9 +53,6 @@ private:
     AnalyzerPro::ControlPrimitives::SectionHeader metersHeader;
     
     // Control rows (using primitives - reference controls above)
-    AnalyzerPro::ControlPrimitives::ChoiceRow modeRow;
-    AnalyzerPro::ControlPrimitives::ChoiceRow fftSizeRow;
-    AnalyzerPro::ControlPrimitives::ChoiceRow averagingRow;
     AnalyzerPro::ControlPrimitives::ChoiceRow dbRangeRow;
     AnalyzerPro::ControlPrimitives::ToggleRow peakHoldRow;
     AnalyzerPro::ControlPrimitives::ToggleRow holdRow;

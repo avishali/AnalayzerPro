@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_audio_processors/juce_audio_processors.h>
 #include <mdsp_ui/UiContext.h>
 #include "../PluginProcessor.h"
 #include <ui_core/UiCore.h>
@@ -14,6 +15,9 @@
 #include "views/PhaseCorrelationView.h"
 #include "meters/MeterGroupComponent.h"
 #include <memory>
+#if JUCE_DEBUG
+#include <set>
+#endif
 
 //==============================================================================
 /**
@@ -44,6 +48,11 @@ public:
 
     /** Shutdown: stop timers, clear callbacks, detach listeners. Safe to call multiple times. */
     void shutdown();
+
+#if JUCE_DEBUG
+    /** DEBUG: Audit APVTS parameters for missing UI bindings (runs once at startup) */
+    void auditApvtsParameters();
+#endif
 
 private:
     void triggerResetPeaks();

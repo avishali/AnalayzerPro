@@ -257,7 +257,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // Input meters: measure buffer pre-processing.
     const int inChCount = juce::jlimit (0, 2, totalNumInputChannels);
     for (int ch = 0; ch < 2; ++ch)
-    {
+        {
         if (ch >= inChCount)
         {
             inputMeters_[ch].peakDb.store (-120.0f, std::memory_order_relaxed);
@@ -270,8 +270,8 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         float sumSq = 0.0f;
         bool clipped = false;
 
-        for (int i = 0; i < n; ++i)
-        {
+            for (int i = 0; i < n; ++i)
+            {
             const float s = x[i];
             const float a = std::abs (s);
             blockPeak = (a > blockPeak) ? a : blockPeak;
@@ -280,11 +280,11 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
 
         const float blockMeanSq = sumSq / static_cast<float> (n);
-
+        
         // Peak: instantaneous attack, ~300ms exponential release.
         const float peakReleaseCoeff = std::exp (-dtSec / 0.30f);
         inputPeakEnv_[ch] = juce::jmax (blockPeak, inputPeakEnv_[ch] * peakReleaseCoeff);
-
+        
         // RMS: EMA of squared signal (~300ms attack, ~400ms release).
         const float tau = (blockMeanSq > inputRmsSq_[ch]) ? 0.30f : 0.40f;
         const float rmsCoeff = std::exp (-dtSec / tau);
@@ -319,7 +319,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     auto* avgParam     = apvts.getRawParameterValue ("Averaging");
     auto* holdParam    = apvts.getRawParameterValue ("Hold");
     auto* decayParam   = apvts.getRawParameterValue ("PeakDecay");
-
+    
     if (fftSizeParam != nullptr)
     {
         constexpr int sizes[] = { 1024, 2048, 4096, 8192 };
@@ -339,7 +339,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             analyzerEngine.requestFftSize (sizes[index]);
         }
     }
-
+    
     if (avgParam != nullptr)
     {
         constexpr float avgMs[] = { 0.0f, 50.0f, 100.0f, 250.0f, 500.0f, 1000.0f };
@@ -358,7 +358,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             analyzerEngine.setAveragingMs (avgMs[index]);
         }
     }
-
+    
     if (holdParam != nullptr)
     {
         const bool hold = (holdParam->load() > 0.5f);
@@ -368,7 +368,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             analyzerEngine.setHold (hold);
         }
     }
-
+    
     if (decayParam != nullptr)
     {
         const float decay = decayParam->load();
