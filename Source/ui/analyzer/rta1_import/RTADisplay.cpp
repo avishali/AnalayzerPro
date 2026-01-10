@@ -650,7 +650,7 @@ void RTADisplay::paint (juce::Graphics& g)
         mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (getLocalBounds().toFloat()), theme, message, noDataStyle);
         return;
     }
-
+    
     // B3: Render based on view mode using local references (NO state mutations)
     if (s.viewMode == 2)  // Bands mode
     {
@@ -695,35 +695,6 @@ void RTADisplay::paint (juce::Graphics& g)
         }
         paintFFTMode (g, s, theme);
     }
-
-#if JUCE_DEBUG
-    // Draw debug overlay (top-left corner)
-    juce::String modeStr = (debugViewMode == 0) ? "FFT" : ((debugViewMode == 1) ? "LOG" : "BANDS");
-    juce::String bandModeStr = (debugBandMode == 0) ? "1/3 Oct" : "1 Oct";
-    juce::String debugText;
-    debugText += "Mode: " + modeStr;
-    if (debugViewMode == 2)
-        debugText += " (" + bandModeStr + ")";
-    debugText += "\n";
-    debugText += "Gen: " + juce::String (debugStructuralGen) + "\n";
-    debugText += "FFT: " + juce::String (debugFFTSize) + " " + (debugFFTValid ? "ok" : "X") + "\n";
-    debugText += "LOG: " + juce::String (debugLogSize) + " " + (debugLogValid ? "ok" : "X") + "\n";
-    debugText += "BANDS: " + juce::String (debugBandsSize) + " " + (debugBandsValid ? "ok" : "X");
-    if (debugViewMode == 2 && debugBandsSize > 0)
-    {
-        debugText += "\n";
-        debugText += "dB: " + juce::String (debugMinDb, 1) + " to " + juce::String (debugMaxDb, 1);
-        if (debugPeakMaxDb > debugMinDb)
-            debugText += "\nPeak: " + juce::String (debugPeakMinDb, 1) + " to " + juce::String (debugPeakMaxDb, 1);
-    }
-    
-    mdsp_ui::TextOverlayStyle debugStyle;
-    debugStyle.colourOverride = theme.warning;
-    debugStyle.alpha = 0.8f;
-    debugStyle.fontHeightPx = 10.0f;
-    debugStyle.justification = juce::Justification::topLeft;
-    mdsp_ui::TextOverlayRenderer::draw (g, juce::Rectangle<float> (10.0f, 10.0f, 180.0f, 140.0f), theme, debugText, debugStyle);
-#endif
 }
 
 // Helper functions defined above (freqToX, dbToY, computeLogFreqFromIndex, findNearestLogBand)

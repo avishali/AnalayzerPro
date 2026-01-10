@@ -8,9 +8,6 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
       analyzerHeader (ui, "Analyzer"),
       displayHeader (ui, "Display"),
       metersHeader (ui, "Meters"),
-      modeRow (ui, "Mode", modeCombo),
-      fftSizeRow (ui, "FFT Size", fftSizeCombo),
-      averagingRow (ui, "Averaging", averagingCombo),
       dbRangeRow (ui, "dB Range", dbRangeCombo),
       peakHoldRow (ui, "Peak Hold", peakHoldButton),
       holdRow (ui, "Hold", holdButton),
@@ -29,9 +26,6 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     metersHeader.attachToParent (*this);
 
     // Attach control rows to parent
-    modeRow.attachToParent (*this);
-    fftSizeRow.attachToParent (*this);
-    averagingRow.attachToParent (*this);
     dbRangeRow.attachToParent (*this);
     peakHoldRow.attachToParent (*this);
     holdRow.attachToParent (*this);
@@ -40,25 +34,6 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     tiltRow.attachToParent (*this);
 
     // Configure combos (items and defaults)
-    modeCombo.addItem ("FFT", 1);
-    modeCombo.addItem ("BANDS", 2);
-    modeCombo.addItem ("LOG", 3);
-    modeCombo.setSelectedId (1, juce::dontSendNotification);  // Default: FFT
-    
-    fftSizeCombo.addItem ("1024", 1);
-    fftSizeCombo.addItem ("2048", 2);
-    fftSizeCombo.addItem ("4096", 3);
-    fftSizeCombo.addItem ("8192", 4);
-    fftSizeCombo.setSelectedId (2, juce::dontSendNotification);  // Default: 2048
-    
-    averagingCombo.addItem ("Off", 1);
-    averagingCombo.addItem ("50 ms", 2);
-    averagingCombo.addItem ("100 ms", 3);
-    averagingCombo.addItem ("250 ms", 4);
-    averagingCombo.addItem ("500 ms", 5);
-    averagingCombo.addItem ("1 s", 6);
-    averagingCombo.setSelectedId (3, juce::dontSendNotification);  // Default: 100ms
-    
     dbRangeCombo.addItem ("-60 dB", 1);
     dbRangeCombo.addItem ("-90 dB", 2);
     dbRangeCombo.addItem ("-120 dB", 3);
@@ -116,9 +91,6 @@ void ControlRail::setControlBinder (AnalyzerPro::ControlBinder& binder)
     // Bind controls now that binder is available
     if (controlBinder != nullptr)
     {
-        controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerMode, modeCombo);
-        controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerFftSize, fftSizeCombo);
-        controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerAveraging, averagingCombo);
         controlBinder->bindToggle (AnalyzerPro::ControlId::AnalyzerPeakHold, peakHoldButton);
         controlBinder->bindToggle (AnalyzerPro::ControlId::AnalyzerHold, holdButton);
         controlBinder->bindSlider (AnalyzerPro::ControlId::AnalyzerPeakDecay, peakDecaySlider);
@@ -173,9 +145,6 @@ void ControlRail::resized()
     // Section 2: Analyzer
     analyzerHeader.layout (bounds, y);
     
-    modeRow.layout (bounds, y);
-    fftSizeRow.layout (bounds, y);
-    averagingRow.layout (bounds, y);
     dbRangeRow.layout (bounds, y);
     peakHoldRow.layout (bounds, y);
     

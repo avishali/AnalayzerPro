@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <mdsp_ui/UiContext.h>
 #include <atomic>
 
 class MeterComponent : public juce::Component

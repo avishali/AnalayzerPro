@@ -124,9 +124,9 @@ void MeterGroupComponent::resized()
     labelArea_ = headerArea_.removeFromTop (16);  // TODO: Move to metrics
     toggleArea_ = headerArea_;
 
-    metersArea_ = b.reduced (m.strokeThick, m.strokeThick);
+    metersArea_ = b.reduced (static_cast<int> (m.strokeThick), static_cast<int> (m.strokeThick));
 
-    auto toggle = toggleArea_.reduced (m.padSmall, m.strokeThick);
+    auto toggle = toggleArea_.reduced (m.padSmall, static_cast<int> (m.strokeThick));
     const int toggleW = toggle.getWidth();
     const int half = toggleW / 2;
     rmsButton_.setBounds (toggle.removeFromLeft (half));
