@@ -1,13 +1,24 @@
 #include "MainView.h"
 #include "../PluginProcessor.h"
 #include "analyzer/rta1_import/RTADisplay.h"
-#include <mdsp_ui/Theme.h>
+#include <mdsp_ui/UiContext.h>
 
 //==============================================================================
-MainView::MainView (AnalayzerProAudioProcessor& p, juce::AudioProcessorValueTreeState* apvts)
-    : audioProcessor (p), apvts_ (apvts), controls_ (apvts), analyzerView_ (p)
+MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce::AudioProcessorValueTreeState* apvts)
+    : audioProcessor (p),
+      apvts_ (apvts),
+      controls_ (apvts),
+      ui_ (ui),  // Store reference to shared UiContext from PluginEditor
+      header_ (ui_),
+      rail_ (ui_),
+      footer_ (ui_),
+      analyzerView_ (p),
+      outputMeters_ (ui_, p, MeterGroupComponent::GroupType::Output),
+      inputMeters_ (ui_, p, MeterGroupComponent::GroupType::Input)
 {
     setWantsKeyboardFocus (true);
+    setFocusContainerType (juce::Component::FocusContainerType::focusContainer);
+    addKeyListener (this);
 
     // Add layout components
     addAndMakeVisible (header_);
@@ -15,9 +26,40 @@ MainView::MainView (AnalayzerProAudioProcessor& p, juce::AudioProcessorValueTree
     addAndMakeVisible (footer_);
     addAndMakeVisible (analyzerView_);
     addAndMakeVisible (phaseView_);
+    addAndMakeVisible (outputMeters_);
+    addAndMakeVisible (inputMeters_);
     
     // Initialize rail with control binder
     rail_.setControlBinder (controls_.getBinder());
+    rail_.setResetPeaksCallback ([this]
+    {
+        triggerResetPeaks();
+    });
+    rail_.setDbRangeChangedCallback ([this] (int selectedId)
+    {
+        AnalyzerDisplayView::DbRange range = AnalyzerDisplayView::DbRange::Minus120;
+        switch (selectedId)
+        {
+            case 1: range = AnalyzerDisplayView::DbRange::Minus60; break;
+            case 2: range = AnalyzerDisplayView::DbRange::Minus90; break;
+            case 3: range = AnalyzerDisplayView::DbRange::Minus120; break;
+            default: range = AnalyzerDisplayView::DbRange::Minus120; break;
+        }
+        if (apvts_ != nullptr)
+        {
+            if (auto* p = apvts_->getParameter ("DbRange"))
+            {
+                const int idx = juce::jlimit (0, 2, selectedId - 1);
+                const float norm = static_cast<float> (idx) / 2.0f;
+                p->beginChangeGesture();
+                p->setValueNotifyingHost (norm);
+                p->endChangeGesture();
+            }
+        }
+
+        analyzerView_.setDbRange (range);
+        header_.setDbRangeSelectedId (selectedId);
+    });
 
     // Wire parameter changes to AnalyzerEngine and AnalyzerDisplayView
     if (apvts != nullptr)
@@ -25,8 +67,10 @@ MainView::MainView (AnalayzerProAudioProcessor& p, juce::AudioProcessorValueTree
         apvts->addParameterListener ("Mode", this);
         apvts->addParameterListener ("FftSize", this);
         apvts->addParameterListener ("Averaging", this);
+        apvts->addParameterListener ("PeakHold", this);
         apvts->addParameterListener ("Hold", this);
         apvts->addParameterListener ("PeakDecay", this);
+        apvts->addParameterListener ("DbRange", this);
         apvts->addParameterListener ("DisplayGain", this);
         apvts->addParameterListener ("Tilt", this);
     }
@@ -39,7 +83,57 @@ MainView::MainView (AnalayzerProAudioProcessor& p, juce::AudioProcessorValueTree
     // Set default mode to FFT (right-side control will update header via parameterChanged)
     analyzerView_.setMode (AnalyzerDisplayView::Mode::FFT);
 
-    setSize (800, 600);
+    header_.onDbRangeChanged = [this] (int id)
+    {
+        using R = AnalyzerDisplayView::DbRange;
+        R r = R::Minus120;
+        if (id == 1) r = R::Minus60;
+        else if (id == 2) r = R::Minus90;
+        else if (id == 3) r = R::Minus120;
+
+        if (apvts_ != nullptr)
+        {
+            if (auto* p = apvts_->getParameter ("DbRange"))
+            {
+                const int idx = juce::jlimit (0, 2, id - 1);
+                const float norm = static_cast<float> (idx) / 2.0f;
+                p->beginChangeGesture();
+                p->setValueNotifyingHost (norm);
+                p->endChangeGesture();
+            }
+        }
+
+        // Apply immediately for responsiveness (listener will also keep things in sync)
+        analyzerView_.setDbRange (r);
+    };
+
+    header_.onPeakRangeChanged = [this] (int id)
+    {
+        using R = AnalyzerDisplayView::DbRange;
+        R r = R::Minus90;
+        if (id == 1) r = R::Minus60;
+        else if (id == 2) r = R::Minus90;
+        else if (id == 3) r = R::Minus120;
+        analyzerView_.setPeakDbRange (r);
+    };
+
+    header_.onResetPeaks = [this]
+    {
+        triggerResetPeaks();
+    };
+
+    // Apply initial DbRange from APVTS (startup/session restore)
+    if (apvts_ != nullptr)
+    {
+        if (auto* raw = apvts_->getRawParameterValue ("DbRange"))
+        {
+            const int idx = juce::jlimit (0, 2, juce::roundToInt (raw->load()));
+            analyzerView_.setDbRangeFromChoiceIndex (idx);
+            header_.setDbRangeSelectedId (idx + 1);
+        }
+    }
+
+    //setSize (900, 650);  // Slightly bigger to fit all controls
 }
 
 MainView::~MainView()
@@ -60,8 +154,10 @@ void MainView::shutdown()
         apvts_->removeParameterListener ("Mode", this);
         apvts_->removeParameterListener ("FftSize", this);
         apvts_->removeParameterListener ("Averaging", this);
+        apvts_->removeParameterListener ("PeakHold", this);
         apvts_->removeParameterListener ("Hold", this);
         apvts_->removeParameterListener ("PeakDecay", this);
+        apvts_->removeParameterListener ("DbRange", this);
         apvts_->removeParameterListener ("DisplayGain", this);
         apvts_->removeParameterListener ("Tilt", this);
     }
@@ -140,6 +236,11 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
         if (index >= 0 && index < 6)
             audioProcessor.getAnalyzerEngine().setAveragingMs (avgMs[index]);
     }
+    else if (parameterID == "PeakHold")
+    {
+        // Enable/disable peak hold overlay
+        audioProcessor.getAnalyzerEngine().setPeakHoldEnabled (newValue > 0.5f);
+    }
     else if (parameterID == "Hold")
     {
         audioProcessor.getAnalyzerEngine().setHold (newValue > 0.5f);
@@ -147,6 +248,12 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     else if (parameterID == "PeakDecay")
     {
         audioProcessor.getAnalyzerEngine().setPeakDecayDbPerSec (newValue);
+    }
+    else if (parameterID == "DbRange")
+    {
+        const int idx = juce::jlimit (0, 2, juce::roundToInt (newValue));
+        analyzerView_.setDbRangeFromChoiceIndex (idx);
+        header_.setDbRangeSelectedId (idx + 1);
     }
     else if (parameterID == "DisplayGain")
     {
@@ -178,12 +285,64 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     }
 }
 
+bool MainView::keyPressed (const juce::KeyPress& key, juce::Component* originatingComponent)
+{
+    // Do not consume "R" while typing in a text field.
+    if (dynamic_cast<juce::TextEditor*> (originatingComponent) != nullptr)
+        return false;
+
+#if JUCE_MAC
+    const auto mods = juce::ModifierKeys::commandModifier | juce::ModifierKeys::altModifier;
+    const juce::KeyPress optCmdRLower { 'r', mods, 0 };
+    const juce::KeyPress optCmdRUpper { 'R', mods, 0 };
+    if (key == optCmdRLower || key == optCmdRUpper)
+    {
+        triggerResetPeaks();
+        return true;
+    }
+#endif
+
+    const juce::KeyPress dLower { 'd', juce::ModifierKeys{}, 0 };
+    const juce::KeyPress dUpper { 'D', juce::ModifierKeys{}, 0 };
+    if (key == dLower || key == dUpper)
+    {
+        using R = AnalyzerDisplayView::DbRange;
+
+        const auto current = analyzerView_.getDbRange();
+        R next = R::Minus60;
+
+        switch (current)
+        {
+            case R::Minus60:  next = R::Minus90;  break;
+            case R::Minus90:  next = R::Minus120; break;
+            case R::Minus120: next = R::Minus60;  break;
+        }
+
+        analyzerView_.setDbRange (next);
+
+        const int nextId = (next == R::Minus60) ? 1 : (next == R::Minus90) ? 2 : 3;
+        header_.setDbRangeSelectedId (nextId);
+        return true;
+    }
+
+    return false;
+}
+
+void MainView::triggerResetPeaks()
+{
+    audioProcessor.getAnalyzerEngine().resetPeaks();
+    audioProcessor.resetMeterClipLatches();
+    analyzerView_.triggerPeakFlash();
+    analyzerView_.repaint();
+}
+
 void MainView::paint (juce::Graphics& g)
 {
-    // Dark background (proof usage: mdsp_ui::Theme)
-    mdsp_ui::Theme theme;
+    // Background from shared theme (variant-aware)
+    const auto& theme = ui_.theme();
     g.fillAll (theme.background);
 
+#if JUCE_DEBUG
     // Temporary debug overlay
     g.setFont (juce::Font (juce::FontOptions().withHeight (10.0f)));
     g.setColour (juce::Colours::red.withAlpha (0.7f));
@@ -234,6 +393,7 @@ void MainView::paint (juce::Graphics& g)
     g.drawRect (debugPhaseBottom.toFloat(), 1.5f);
     g.drawText (juce::String ("Phase: ") + juce::String (debugPhaseBottom.getWidth()) + "x" + juce::String (debugPhaseBottom.getHeight()),
                 debugPhaseBottom.getX() + 2, debugPhaseBottom.getY() + 2, 200, 12, juce::Justification::centredLeft);
+#endif
 }
 
 void MainView::resized()
@@ -245,40 +405,49 @@ void MainView::resized()
     static constexpr int padding = 10;
     static constexpr int headerH = 32;
     static constexpr int footerH = 22;
-    static constexpr int railW = 220;
+    static constexpr int metersW = 60;  // Fixed width for meters
+    static constexpr int controlsH = 140;  // Reduced height for compact controls
 
     auto bounds = getLocalBounds().reduced (padding);
     debugContent = bounds;
 
-    // Slice order: footer, header, rail, left analyzer stack
+    // Slice order: footer, header, then main content area
     // 1) Footer from bottom
     auto footerArea = bounds.removeFromBottom (footerH);
     debugFooter = footerArea;
     footer_.setBounds (footerArea);
 
-    // 2) Header from top (tight, PAZ-like)
+    // 2) Header from top
     auto headerArea = bounds.removeFromTop (headerH);
     debugHeader = headerArea;
     header_.setBounds (headerArea);
 
-    // 3) Rail from right
-    auto railArea = bounds.removeFromRight (railW);
-    debugRail = railArea;
-    rail_.setBounds (railArea);
-
-    // 4) Left analyzer stack (remaining area)
-    auto leftArea = bounds;
-    debugLeft = leftArea;
-
-    // Split left area: top ~58%, bottom ~42%
-    const int gap = 6;
-    const int topH = juce::roundToInt (leftArea.getHeight() * 0.58f);
-    auto topArea = leftArea.removeFromTop (topH);
-    debugAnalyzerTop = topArea;
-    leftArea.removeFromTop (gap);
-    auto bottomArea = leftArea;
-    debugPhaseBottom = bottomArea;
-
-    analyzerView_.setBounds (topArea);
-    phaseView_.setBounds (bottomArea);
+    // 3) Main content area: meters on left/right (full height), scope + controls in center
+    auto mainArea = bounds;
+    
+    // Left: Input meters (full height, spans entire screen height)
+    auto inputMetersArea = mainArea.removeFromLeft (metersW);
+    inputMeters_.setBounds (inputMetersArea);
+    
+    // Right: Output meters (full height, spans entire screen height)
+    auto outputMetersArea = mainArea.removeFromRight (metersW);
+    outputMeters_.setBounds (outputMetersArea);
+    
+    // Center: Scope (top) + Controls (bottom)
+    auto centerArea = mainArea;
+    debugLeft = centerArea;
+    
+    // Controls at bottom of center area
+    auto controlsArea = centerArea.removeFromBottom (controlsH);
+    debugRail = controlsArea;
+    rail_.setBounds (controlsArea);
+    
+    // Scope takes remaining center area (smaller now)
+    auto scopeArea = centerArea;
+    debugAnalyzerTop = scopeArea;
+    analyzerView_.setBounds (scopeArea);
+    
+    // Phase view hidden for now (or can be placed elsewhere if needed)
+    phaseView_.setBounds (juce::Rectangle<int>());
+    debugPhaseBottom = juce::Rectangle<int>();
 }

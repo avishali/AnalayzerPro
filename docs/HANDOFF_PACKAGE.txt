@@ -1,0 +1,141 @@
+Return only the final content of HANDOFF_PACKAGE.txt.
+No markdown. No explanation.
+C++17/JUCE, CMake project.
+
+HANDOFF PACKAGE — AnalyzerPro Meters (SOP-Compliant)
+
+TASK TITLE
+Add Input/Output Peak+RMS Meters (OUT left, IN right) with numeric readouts and clip latch.
+
+OBJECTIVE
+Implement professional “hardware-grade” peak + RMS meters for AnalyzerPro:
+	•	OUTPUT meters on the LEFT side of the plugin editor
+	•	INPUT meters on the RIGHT side of the plugin editor
+	•	Separate L and R meters (stereo)
+	•	Mono support: single meter per side labeled “MONO”
+	•	Peak + RMS visualized; numeric box below each meter showing selected (RMS or Peak)
+	•	Clip LED latching per channel, cleared by Reset action
+	•	Meters always visible and independent of RTA/FFT mode
+
+PHASE ORDER (MUST FOLLOW)
+	1.	DSP meter data pipeline + MeterState + reset clip latch wiring
+	2.	MeterComponent (single channel) visual implementation
+	3.	MeterGroupComponent (IN/OUT group with L/R or MONO + RMS/PEAK toggle)
+	4.	Editor layout integration (OUT left, IN right; plot remains center and expands)
+	5.	Visual polish + edge-case stabilization (no flicker, no paint allocations, DPI/resize)
+
+MINIMAL SCOPE EXPECTED (BOUNDING)
+	•	Only implement the meter feature described above.
+	•	Do NOT refactor unrelated UI, analyzer DSP, parameter systems, preset systems, or the plot renderer.
+	•	If a change is required outside the “Files to touch” list, STOP and request an updated handoff package.
+
+FILES TO TOUCH (EXPLICIT LIST)
+	•	Source/PluginProcessor.h
+	•	Source/PluginProcessor.cpp
+	•	Source/PluginEditor.h
+	•	Source/PluginEditor.cpp
+	•	Source/ui/meters/MeterComponent.h
+	•	Source/ui/meters/MeterComponent.cpp
+	•	Source/ui/meters/MeterGroupComponent.h
+	•	Source/ui/meters/MeterGroupComponent.cpp
+	•	(Optional wiring only if needed for layout containment)
+	•	Source/ui/MainView.h
+	•	Source/ui/MainView.cpp
+
+FILES NOT TO TOUCH (EXPLICIT LIST)
+	•	Any file not listed in “FILES TO TOUCH”
+	•	CMakeLists.txt (root or subdirectories)
+	•	All files under modules/ (JUCE modules and internal libs)
+	•	Any DSP analyzer implementation files not strictly required for metering
+	•	Preset/state serialization files (unless absolutely required to expose Reset; if required, STOP)
+	•	Theme/design system files (unless strictly needed for meter colors; prefer local constants)
+	•	Any third-party or dependency configuration
+
+BUILD COMMANDS TO RUN (DEBUG + RELEASE)
+Environment assumptions:
+	•	CMake-based JUCE project already configured
+
+Commands (macOS, Ninja; adjust generator only if repo mandates otherwise)
+	1.	Configure Debug:
+cmake -S . -B build/debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
+	2.	Build Debug:
+cmake –build build/debug –config Debug
+	3.	Configure Release:
+cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release
+	4.	Build Release:
+cmake –build build/release –config Release
+
+If your repo uses a different generator (Xcode) or presets, use the repo-standard commands, but keep Debug + Release both passing.
+
+TEST PLAN (MANUAL)
+Hosts (pick at least one AU and one VST3 host available locally):
+	•	AU: Logic Pro or AU Lab
+	•	VST3: Ableton Live or Reaper
+
+Test cases:
+	1.	Stereo metering:
+
+	•	Insert plugin on stereo track with audio playing.
+	•	Verify OUT meters on LEFT show L and R.
+	•	Verify IN meters on RIGHT show L and R.
+	•	Verify RMS body is dominant and peak indicator overlays it.
+	•	Verify numeric boxes show RMS by default and update smoothly.
+
+	2.	Toggle numeric mode:
+
+	•	Switch OUT group toggle to PEAK; numeric readout shows peak values.
+	•	Switch IN group toggle to PEAK; numeric readout shows peak values.
+	•	Switch back to RMS; values correspond.
+
+	3.	Mono metering:
+
+	•	Insert plugin on mono track.
+	•	Verify only one meter per side labeled “MONO”.
+	•	Channel selector (if any) must not affect mono meters.
+
+	4.	Clip latch:
+
+	•	Drive signal to clip (>= 0 dBFS).
+	•	Verify clip LED latches on the correct channel(s).
+	•	Press Reset; verify clip LED clears.
+	•	Confirm Reset does NOT break plot behavior (plot can keep doing what it currently does; minimum requirement is clip latch clears).
+
+	5.	Freeze interaction:
+
+	•	Toggle Freeze (if present).
+	•	Confirm meters continue updating (v1.0 requirement) while plot may freeze as implemented.
+	•	Toggle Freeze off; everything resumes.
+
+	6.	Resizing / DPI:
+
+	•	Resize editor window across min and large sizes.
+	•	Verify meter alignment remains correct, numeric box stays centered below each meter, and plot remains the main area.
+	•	Verify no flicker during resize.
+
+	7.	Performance sanity:
+
+	•	Observe CPU usage; no major spikes attributable to meters.
+	•	Ensure no allocations in paint() (use existing debug tools/alloc checks if available).
+
+DEFINITION OF DONE
+	•	Build passes in Debug and Release with no new warnings.
+	•	Output meters appear on LEFT, input meters on RIGHT.
+	•	Stereo: L and R meters on both sides.
+	•	Mono: single “MONO” meter on both sides.
+	•	Each meter shows RMS body + peak indicator + clip LED.
+	•	Numeric readout boxes below each meter display RMS or Peak dBFS (one decimal, “ dB” suffix) based on group toggle; default is RMS.
+	•	Clip latches per channel and clears via Reset (minimum: clip reset is implemented even if Reset already does more).
+	•	No heap allocations in paint paths; no allocations/locks in audio callback.
+	•	Layout stable: plot remains centered and expands; meter groups have fixed width.
+	•	Visual polish complete: readable, aligned, minimal flicker.
+
+IMPLEMENTATION NOTES / GUARDRAILS
+	•	dBFS range for meter rendering: clamp to [-60, 0].
+	•	If value is not finite or <= -60, render empty and numeric “—”.
+	•	Peak/RMS should be computed in DSP thread (processBlock), not GUI thread.
+	•	Use atomics for meter values; GUI reads atomics directly.
+	•	Do not introduce third-party dependencies.
+	•	If any required change falls outside the “FILES TO TOUCH” list, STOP and request an updated handoff package.
+
+SCOPE CONFIRMATION
+Proceed with exactly the above scope and file boundaries.

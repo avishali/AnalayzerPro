@@ -1,0 +1,86 @@
+MASTER CURSOR RUNBOOK — CONTROL PRIMITIVES EXTRACTION v1
+
+================================================================
+GLOBAL RULES (MANDATORY)
+================================================================
+
+You MUST obey all rules defined in 00_SYSTEM_RULES.txt.
+
+This runbook extracts reusable UI primitives.
+NO behavior change allowed.
+
+STOP after each step.
+
+================================================================
+STEP 0 — SESSION INITIALIZATION
+================================================================
+
+Context:
+AnalyzerPro ControlRail is the reference implementation.
+We will extract patterns, not redesign visuals.
+
+STOP AFTER DONE
+
+================================================================
+STEP 1 — IDENTIFY PRIMITIVES
+================================================================
+
+TASK:
+Identify repeated control patterns in ControlRail.
+
+Expected primitives:
+- SectionHeader
+- ChoiceRow (Label + Combo)
+- ToggleRow (Label + Toggle)
+- SliderRow (Label + Slider + Value)
+- ControlGroup (vertical stack)
+
+Rules:
+- Do NOT move code yet
+- Document patterns mentally via code inspection only
+
+STOP AFTER DONE
+
+================================================================
+STEP 2 — NORMALIZE METRICS USAGE
+================================================================
+
+TASK:
+Ensure all primitives use:
+- ui_.metrics()
+- ui_.theme()
+- ui_.type()
+
+Rules:
+- No magic numbers
+- No local colors
+- No font literals
+
+Acceptance:
+- ControlRail still identical visually
+- Metrics fully centralized
+
+STOP AFTER DONE
+
+================================================================
+STEP 3 — OPTIONAL EXTRACTION (SAFE MODE)
+================================================================
+
+TASK:
+Optionally extract primitives into local helper classes
+INSIDE THE PLUGIN (not mdsp_ui yet).
+
+Rules:
+- No public API exposure
+- No shared headers yet
+- Keep AnalyzerPro compiling at all times
+
+Acceptance:
+- ControlRail simpler
+- No regression
+
+STOP AFTER DONE
+
+================================================================
+END OF RUNBOOK
+================================================================

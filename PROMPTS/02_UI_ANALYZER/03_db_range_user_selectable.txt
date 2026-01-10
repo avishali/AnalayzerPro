@@ -1,0 +1,54 @@
+# TODO
+# Paste the Cursor prompt text for this task here.
+This keeps active prompts clean and auditable.
+
+---
+
+## Non-Negotiable Rules
+
+- **Do NOT** redefine classes in `.cpp` files
+- **Do NOT** rewrite entire files unless explicitly instructed
+- **Do NOT** allocate on the audio thread
+- **Do NOT** mix UI logic into AnalyzerEngine
+- **Do NOT** guess when instructions are unclear
+
+If a prompt contradicts existing architecture:
+> STOP. Ask for clarification.
+
+---
+
+## Why This Exists
+
+This project:
+- Has real-time DSP constraints
+- Is expected to live for years
+- Must remain stable under heavy iteration
+
+These prompts are not bureaucracy — they are how we:
+- Avoid regressions
+- Preserve intent
+- Keep agents useful instead of dangerous
+
+---
+
+## For New Contributors
+
+If you are new to this repo:
+1. Read this file
+2. Read `PROMPTS_INDEX.md`
+3. Start with a small prompt
+4. Ask before making structural changes
+
+---
+
+## Questions?
+
+If you are unsure:
+- Which subsystem a change belongs to
+- Whether a change is RT-safe
+- Whether a prompt already exists
+
+Ask first.  
+We prefer **one good question** over **one bad diff**.
+
+---

@@ -2,83 +2,54 @@
 #include "../../control/ControlIds.h"
 
 //==============================================================================
-ControlRail::ControlRail()
+ControlRail::ControlRail (mdsp_ui::UiContext& ui)
+    : ui_ (ui),
+      navigateHeader (ui, "Navigate"),
+      analyzerHeader (ui, "Analyzer"),
+      displayHeader (ui, "Display"),
+      metersHeader (ui, "Meters"),
+      modeRow (ui, "Mode", modeCombo),
+      fftSizeRow (ui, "FFT Size", fftSizeCombo),
+      averagingRow (ui, "Averaging", averagingCombo),
+      dbRangeRow (ui, "dB Range", dbRangeCombo),
+      peakHoldRow (ui, "Peak Hold", peakHoldButton),
+      holdRow (ui, "Hold", holdButton),
+      peakDecayRow (ui, "Peak Decay", peakDecaySlider, 0.0, 10.0, 0.1, 1.0),
+      displayGainRow (ui, "Display Gain", displayGainSlider, -24.0, 24.0, 0.5, 0.0),
+      tiltRow (ui, "Tilt", tiltCombo)
 {
-    // Section titles (smaller, bold)
-    navigateLabel.setText ("Navigate", juce::dontSendNotification);
-    navigateLabel.setFont (juce::Font (juce::FontOptions().withHeight (15.0f).withStyle ("bold")));
-    navigateLabel.setJustificationType (juce::Justification::centredLeft);
-    navigateLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
-    addAndMakeVisible (navigateLabel);
+    const auto& theme = ui_.theme();
+    const auto& type = ui_.type();
+    const auto& m = ui_.metrics();
 
-    analyzerLabel.setText ("Analyzer", juce::dontSendNotification);
-    analyzerLabel.setFont (juce::Font (juce::FontOptions().withHeight (15.0f).withStyle ("bold")));
-    analyzerLabel.setJustificationType (juce::Justification::centredLeft);
-    analyzerLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
-    addAndMakeVisible (analyzerLabel);
+    // Attach section headers to parent
+    navigateHeader.attachToParent (*this);
+    analyzerHeader.attachToParent (*this);
+    displayHeader.attachToParent (*this);
+    metersHeader.attachToParent (*this);
 
-    displayLabel.setText ("Display", juce::dontSendNotification);
-    displayLabel.setFont (juce::Font (juce::FontOptions().withHeight (15.0f).withStyle ("bold")));
-    displayLabel.setJustificationType (juce::Justification::centredLeft);
-    displayLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
-    addAndMakeVisible (displayLabel);
+    // Attach control rows to parent
+    modeRow.attachToParent (*this);
+    fftSizeRow.attachToParent (*this);
+    averagingRow.attachToParent (*this);
+    dbRangeRow.attachToParent (*this);
+    peakHoldRow.attachToParent (*this);
+    holdRow.attachToParent (*this);
+    peakDecayRow.attachToParent (*this);
+    displayGainRow.attachToParent (*this);
+    tiltRow.attachToParent (*this);
 
-    metersLabel.setText ("Meters", juce::dontSendNotification);
-    metersLabel.setFont (juce::Font (juce::FontOptions().withHeight (15.0f).withStyle ("bold")));
-    metersLabel.setJustificationType (juce::Justification::centredLeft);
-    metersLabel.setColour (juce::Label::textColourId, juce::Colours::lightgrey);
-    addAndMakeVisible (metersLabel);
-
-    // Placeholder labels (smaller, dimmer)
-    placeholderLabel1.setText ("Controls...", juce::dontSendNotification);
-    placeholderLabel1.setFont (juce::Font (juce::FontOptions().withHeight (12.0f)));
-    placeholderLabel1.setJustificationType (juce::Justification::centredLeft);
-    placeholderLabel1.setColour (juce::Label::textColourId, juce::Colours::grey);
-    addAndMakeVisible (placeholderLabel1);
-
-    placeholderLabel3.setText ("Controls...", juce::dontSendNotification);
-    placeholderLabel3.setFont (juce::Font (juce::FontOptions().withHeight (12.0f)));
-    placeholderLabel3.setJustificationType (juce::Justification::centredLeft);
-    placeholderLabel3.setColour (juce::Label::textColourId, juce::Colours::grey);
-    addAndMakeVisible (placeholderLabel3);
-
-    placeholderLabel4.setText ("Controls...", juce::dontSendNotification);
-    placeholderLabel4.setFont (juce::Font (juce::FontOptions().withHeight (12.0f)));
-    placeholderLabel4.setJustificationType (juce::Justification::centredLeft);
-    placeholderLabel4.setColour (juce::Label::textColourId, juce::Colours::grey);
-    addAndMakeVisible (placeholderLabel4);
-    
-    // Analyzer section controls
-    modeLabel.setText ("Mode", juce::dontSendNotification);
-    modeLabel.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
-    modeLabel.setJustificationType (juce::Justification::centredLeft);
-    modeLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
-    addAndMakeVisible (modeLabel);
-    
+    // Configure combos (items and defaults)
     modeCombo.addItem ("FFT", 1);
     modeCombo.addItem ("BANDS", 2);
     modeCombo.addItem ("LOG", 3);
     modeCombo.setSelectedId (1, juce::dontSendNotification);  // Default: FFT
-    addAndMakeVisible (modeCombo);
-    
-    fftSizeLabel.setText ("FFT Size", juce::dontSendNotification);
-    fftSizeLabel.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
-    fftSizeLabel.setJustificationType (juce::Justification::centredLeft);
-    fftSizeLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
-    addAndMakeVisible (fftSizeLabel);
     
     fftSizeCombo.addItem ("1024", 1);
     fftSizeCombo.addItem ("2048", 2);
     fftSizeCombo.addItem ("4096", 3);
     fftSizeCombo.addItem ("8192", 4);
     fftSizeCombo.setSelectedId (2, juce::dontSendNotification);  // Default: 2048
-    addAndMakeVisible (fftSizeCombo);
-    
-    averagingLabel.setText ("Averaging", juce::dontSendNotification);
-    averagingLabel.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
-    averagingLabel.setJustificationType (juce::Justification::centredLeft);
-    averagingLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
-    addAndMakeVisible (averagingLabel);
     
     averagingCombo.addItem ("Off", 1);
     averagingCombo.addItem ("50 ms", 2);
@@ -87,52 +58,53 @@ ControlRail::ControlRail()
     averagingCombo.addItem ("500 ms", 5);
     averagingCombo.addItem ("1 s", 6);
     averagingCombo.setSelectedId (3, juce::dontSendNotification);  // Default: 100ms
-    addAndMakeVisible (averagingCombo);
     
-    holdLabel.setText ("Hold", juce::dontSendNotification);
-    holdLabel.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
-    holdLabel.setJustificationType (juce::Justification::centredLeft);
-    holdLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
-    addAndMakeVisible (holdLabel);
-    
-    holdButton.setButtonText ("Hold");
-    addAndMakeVisible (holdButton);
-    
-    peakDecayLabel.setText ("Peak Decay", juce::dontSendNotification);
-    peakDecayLabel.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
-    peakDecayLabel.setJustificationType (juce::Justification::centredLeft);
-    peakDecayLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
-    addAndMakeVisible (peakDecayLabel);
-    
-    peakDecaySlider.setSliderStyle (juce::Slider::LinearHorizontal);
-    peakDecaySlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 40, 16);
-    peakDecaySlider.setRange (0.0, 10.0, 0.1);
-    peakDecaySlider.setValue (1.0, juce::dontSendNotification);
-    addAndMakeVisible (peakDecaySlider);
-    
-    displayGainLabel.setText ("Display Gain", juce::dontSendNotification);
-    displayGainLabel.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
-    displayGainLabel.setJustificationType (juce::Justification::centredLeft);
-    displayGainLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
-    addAndMakeVisible (displayGainLabel);
-    
-    displayGainSlider.setSliderStyle (juce::Slider::LinearHorizontal);
-    displayGainSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 40, 16);
-    displayGainSlider.setRange (-24.0, 24.0, 0.5);
-    displayGainSlider.setValue (0.0, juce::dontSendNotification);
-    addAndMakeVisible (displayGainSlider);
-    
-    tiltLabel.setText ("Tilt", juce::dontSendNotification);
-    tiltLabel.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
-    tiltLabel.setJustificationType (juce::Justification::centredLeft);
-    tiltLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
-    addAndMakeVisible (tiltLabel);
+    dbRangeCombo.addItem ("-60 dB", 1);
+    dbRangeCombo.addItem ("-90 dB", 2);
+    dbRangeCombo.addItem ("-120 dB", 3);
+    dbRangeCombo.setSelectedId (3, juce::dontSendNotification);  // Default: -120 dB
+    dbRangeCombo.onChange = [this]
+    {
+        triggerDbRangeChanged();
+    };
     
     tiltCombo.addItem ("Flat", 1);
     tiltCombo.addItem ("Pink", 2);
     tiltCombo.addItem ("White", 3);
     tiltCombo.setSelectedId (1, juce::dontSendNotification);  // Default: Flat
-    addAndMakeVisible (tiltCombo);
+
+    // Configure toggles
+    peakHoldButton.setButtonText ("On");
+    peakHoldButton.setToggleState (true, juce::dontSendNotification);  // Default: enabled
+    
+    holdButton.setButtonText ("Hold");
+
+    // Configure reset button
+    resetPeaksButton.setTooltip ("Clear peak trace");
+    resetPeaksButton.onClick = [this]
+    {
+        triggerResetPeaks();
+    };
+    addAndMakeVisible (resetPeaksButton);
+
+    // Placeholder labels (smaller, dimmer)
+    placeholderLabel1.setText ("Controls...", juce::dontSendNotification);
+    placeholderLabel1.setFont (type.placeholderFont());
+    placeholderLabel1.setJustificationType (juce::Justification::centredLeft);
+    placeholderLabel1.setColour (juce::Label::textColourId, theme.grey);
+    addAndMakeVisible (placeholderLabel1);
+
+    placeholderLabel3.setText ("Controls...", juce::dontSendNotification);
+    placeholderLabel3.setFont (type.placeholderFont());
+    placeholderLabel3.setJustificationType (juce::Justification::centredLeft);
+    placeholderLabel3.setColour (juce::Label::textColourId, theme.grey);
+    addAndMakeVisible (placeholderLabel3);
+
+    placeholderLabel4.setText ("Controls...", juce::dontSendNotification);
+    placeholderLabel4.setFont (type.placeholderFont());
+    placeholderLabel4.setJustificationType (juce::Justification::centredLeft);
+    placeholderLabel4.setColour (juce::Label::textColourId, theme.grey);
+    addAndMakeVisible (placeholderLabel4);
 }
 
 ControlRail::~ControlRail() = default;
@@ -147,6 +119,7 @@ void ControlRail::setControlBinder (AnalyzerPro::ControlBinder& binder)
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerMode, modeCombo);
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerFftSize, fftSizeCombo);
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerAveraging, averagingCombo);
+        controlBinder->bindToggle (AnalyzerPro::ControlId::AnalyzerPeakHold, peakHoldButton);
         controlBinder->bindToggle (AnalyzerPro::ControlId::AnalyzerHold, holdButton);
         controlBinder->bindSlider (AnalyzerPro::ControlId::AnalyzerPeakDecay, peakDecaySlider);
         controlBinder->bindSlider (AnalyzerPro::ControlId::AnalyzerDisplayGain, displayGainSlider);
@@ -154,78 +127,76 @@ void ControlRail::setControlBinder (AnalyzerPro::ControlBinder& binder)
     }
 }
 
+void ControlRail::setResetPeaksCallback (std::function<void()> cb)
+{
+    onResetPeaks_ = std::move (cb);
+}
+
+void ControlRail::triggerResetPeaks()
+{
+    if (onResetPeaks_)
+        onResetPeaks_();
+}
+
+void ControlRail::setDbRangeChangedCallback (std::function<void (int)> cb)
+{
+    onDbRangeChanged_ = std::move (cb);
+}
+
+void ControlRail::triggerDbRangeChanged()
+{
+    if (onDbRangeChanged_ != nullptr)
+        onDbRangeChanged_ (dbRangeCombo.getSelectedId());
+}
+
 void ControlRail::paint (juce::Graphics& g)
 {
+    const auto& theme = ui_.theme();
+
     // Dark panel background with subtle contrast
-    g.fillAll (juce::Colour (0xff1a1a1a));
-    g.setColour (juce::Colours::darkgrey.withAlpha (0.3f));
+    g.fillAll (theme.panel);
+    g.setColour (theme.borderDivider);
     g.fillRect (getLocalBounds().removeFromLeft (1));
 }
 
 void ControlRail::resized()
 {
-    auto bounds = getLocalBounds().reduced (6);  // Outer padding
+    const auto& m = ui_.metrics();
+    auto bounds = getLocalBounds().reduced (m.padSmall);  // Reduced outer padding
     int y = bounds.getY();
 
-    const int titleHeight = 18;
-    const int secondaryHeight = 16;
-    const int titleSecondaryGap = 6;
-    const int sectionSpacing = 14;
-
     // Section 1: Navigate
-    navigateLabel.setBounds (bounds.getX(), y, bounds.getWidth(), titleHeight);
-    y += titleHeight + titleSecondaryGap;
-    placeholderLabel1.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
-    y += secondaryHeight + sectionSpacing;
+    navigateHeader.layout (bounds, y);
+    placeholderLabel1.setBounds (bounds.getX(), y, bounds.getWidth(), m.secondaryHeight);
+    y += m.secondaryHeight + m.sectionSpacing;
 
     // Section 2: Analyzer
-    analyzerLabel.setBounds (bounds.getX(), y, bounds.getWidth(), titleHeight);
-    y += titleHeight + titleSecondaryGap;
+    analyzerHeader.layout (bounds, y);
     
-    // Mode
-    modeLabel.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
-    y += secondaryHeight;
-    modeCombo.setBounds (bounds.getX(), y, bounds.getWidth(), 20);
-    y += 20 + 4;
+    modeRow.layout (bounds, y);
+    fftSizeRow.layout (bounds, y);
+    averagingRow.layout (bounds, y);
+    dbRangeRow.layout (bounds, y);
+    peakHoldRow.layout (bounds, y);
     
-    // FFT Size
-    fftSizeLabel.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
-    y += secondaryHeight;
-    fftSizeCombo.setBounds (bounds.getX(), y, bounds.getWidth(), 20);
-    y += 20 + 4;
+    // Hold (special case: reset button next to hold button)
+    holdRow.layout (bounds, y);
+    // Adjust y back to position reset button next to hold button
+    y -= m.buttonSmallH + m.gapSmall;
+    resetPeaksButton.setBounds (bounds.getX() + m.buttonSmallW + m.gapSmall, y, m.buttonW, m.buttonSmallH);
+    y += m.buttonSmallH + m.gapSmall;
     
-    // Averaging
-    averagingLabel.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
-    y += secondaryHeight;
-    averagingCombo.setBounds (bounds.getX(), y, bounds.getWidth(), 20);
-    y += 20 + 4;
-    
-    // Hold
-    holdLabel.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
-    y += secondaryHeight;
-    holdButton.setBounds (bounds.getX(), y, 50, 18);
-    y += 18 + 4;
-    
-    // Peak Decay
-    peakDecayLabel.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
-    y += secondaryHeight;
-    peakDecaySlider.setBounds (bounds.getX(), y, bounds.getWidth(), 18);
-    y += 18 + 4;
-    
-    // Display Gain
-    displayGainLabel.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
-    y += secondaryHeight;
-    displayGainSlider.setBounds (bounds.getX(), y, bounds.getWidth(), 18);
-    y += 18 + sectionSpacing;
+    peakDecayRow.layout (bounds, y);
+    displayGainRow.layout (bounds, y);
+    y += m.sectionSpacing;
 
     // Section 3: Display
-    displayLabel.setBounds (bounds.getX(), y, bounds.getWidth(), titleHeight);
-    y += titleHeight + titleSecondaryGap;
-    placeholderLabel3.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
-    y += secondaryHeight + sectionSpacing;
+    displayHeader.layout (bounds, y);
+    tiltRow.layout (bounds, y);
+    // TiltRow already added gapSmall, so we only need to add sectionSpacing - gapSmall for proper spacing
+    y += m.sectionSpacing - m.gapSmall;
 
-    // Section 4: Meters
-    metersLabel.setBounds (bounds.getX(), y, bounds.getWidth(), titleHeight);
-    y += titleHeight + titleSecondaryGap;
-    placeholderLabel4.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
+    // Section 4: Meters (placeholder)
+    metersHeader.layout (bounds, y);
+    placeholderLabel4.setBounds (bounds.getX(), y, bounds.getWidth(), m.secondaryHeight);
 }

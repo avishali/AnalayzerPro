@@ -1,0 +1,34 @@
+# TODO
+
+
+Use TEMPLATE_MULTI_STEP_FEATURE.txt structure  ￼
+
+TASK: Theme variant readiness (no runtime UI yet)
+
+This task will be split into MULTIPLE prompts.
+DO NOT implement everything at once.
+
+Phase 1:
+	•	Ensure mdsp_ui::UiContext / ThemeVariant exists and is used consistently.
+	•	Ensure no UI component directly instantiates Theme or relies on “dark-only assumptions” in code paths.
+
+Out of scope for this prompt:
+	•	Adding an in-plugin toggle/menu to switch themes.
+	•	Persisting theme choice.
+	•	Loading tokens from JSON/Figma export.
+
+Scope:
+	•	third_party/melechdsp-hq/shared/mdsp_ui/include/mdsp_ui/Theme.h
+	•	third_party/melechdsp-hq/shared/mdsp_ui/src/Theme.cpp (ONLY if needed)
+	•	Source/PluginEditor.h
+	•	Source/PluginEditor.cpp
+
+Rules:
+	•	Stop after Phase 1 is complete.
+	•	Minimal diffs; do not introduce new modules.
+
+Acceptance:
+	•	AnalyzerPro compiles with UiContext defaulting to Dark.
+	•	All UI code can support Light later by swapping tokens, with no further refactors required.
+
+⸻

@@ -1,0 +1,224 @@
+Return only the final content of docs/HANDOFF_PACKAGE.txt.
+No markdown. No explanation.
+C++17/JUCE, CMake project.
+
+HANDOFF PACKAGE — AnalyzerPro Next Iteration (Select One Track)
+
+INSTRUCTIONS
+This handoff package is valid for exactly ONE of the tracks below. Pick one track by setting:
+SELECTED_TRACK = A  (or B or C)
+
+If SELECTED_TRACK is not set to A/B/C, STOP and request selection.
+Default if unspecified: A.
+
+SELECTED_TRACK = A
+
+TRACK A — Hardware LED Mapping (Meters → Hardware Output Adapter)
+
+TASK TITLE
+Map AnalyzerPro meters to future hardware LED outputs via a minimal abstraction layer.
+
+OBJECTIVE
+Create a tiny, stable interface that converts existing meter data (peak/rms + clip latch) into hardware-friendly LED levels, without changing existing UI behavior. This is preparation for external hardware (encoders/LED rings/segment meters) and should be usable by a future “PluginHardwareOutputAdapter” implementation.
+
+REQUIREMENTS
+	•	Do not change existing meter visuals or meter DSP behavior.
+	•	Introduce a single abstraction that:
+	•	reads current meter states (in/out, L/R or mono)
+	•	converts dBFS to normalized LED levels (0..1)
+	•	exposes clip latch state
+	•	supports configurable LED segment counts (e.g., 12, 16, 24) and optional peak indicator segment
+	•	Provide a reference “software sink” implementation that logs or stores values (no actual hardware I/O).
+	•	No allocations on audio thread.
+	•	No new dependencies.
+
+LED MAPPING RULES
+	•	Input: dBFS in range [-60, 0]
+	•	Convert to normalized linear meter:
+	•	level01 = clamp((dB - (-60)) / 60, 0, 1)
+	•	Segment mapping:
+	•	numSegments = configurable
+	•	litSegments = round(level01 * numSegments)
+	•	output should include both:
+	•	continuous level01
+	•	discrete litSegments
+	•	Peak indicator:
+	•	Provide peak01 separately from rms01
+	•	Optional: peakHold segment index computed from peak01
+	•	Mono handling:
+	•	If mono, only one channel published per side (IN/OUT)
+
+FILES TO TOUCH (EXPLICIT LIST)
+	•	Source/PluginProcessor.h
+	•	Source/PluginProcessor.cpp
+	•	Source/PluginEditor.h
+	•	Source/PluginEditor.cpp
+	•	Source/hardware/HardwareMeterMapper.h
+	•	Source/hardware/HardwareMeterMapper.cpp
+	•	Source/hardware/IHardwareMeterSink.h
+	•	Source/hardware/SoftwareMeterSink.h
+	•	Source/hardware/SoftwareMeterSink.cpp
+	•	(Optional wiring only if needed)
+	•	Source/PluginHardwareOutputAdapter.h
+	•	Source/PluginHardwareOutputAdapter.cpp
+	•	Source/ui/meters/MeterComponent.cpp
+	•	Source/ui/layout/HeaderBar.cpp
+
+FILES NOT TO TOUCH (EXPLICIT LIST)
+	•	Any file not listed in “FILES TO TOUCH”
+	•	Any file under modules/
+	•	Any file under Source/ui/ except PluginEditor.* (only if you need to plumb settings)
+	•	Any analyzer plot/rendering code
+	•	CMakeLists.txt (root or subdirectories)
+
+BUILD COMMANDS TO RUN (DEBUG + RELEASE)
+	1.	Configure Debug:
+cmake -S . -B build/debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
+	2.	Build Debug:
+cmake –build build/debug –config Debug
+	3.	Configure Release:
+cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release
+	4.	Build Release:
+cmake –build build/release –config Release
+
+TEST PLAN (MANUAL)
+	1.	Build Debug + Release.
+	2.	Run plugin in a host and confirm:
+
+	•	Existing meters and analyzer behavior unchanged.
+
+	3.	Enable the SoftwareMeterSink (compile-time or runtime switch as implemented):
+
+	•	Verify it receives updates for:
+	•	IN L/R and OUT L/R in stereo
+	•	IN MONO and OUT MONO in mono
+	•	Verify values are clamped to [-60, 0] dBFS and normalized to 0..1.
+	•	Verify clip latch state is reflected.
+
+	4.	Verify no audio glitches; CPU unchanged.
+
+DEFINITION OF DONE
+	•	Build passes Debug + Release with no new warnings.
+	•	Existing UI meters unchanged visually and behaviorally.
+	•	New HardwareMeterMapper converts meter states into:
+	•	rms01, peak01 (0..1)
+	•	litSegments (0..N)
+	•	clipLatched
+	•	SoftwareMeterSink demonstrates receipt of values without hardware access.
+	•	No allocations/locks introduced on audio thread.
+
+MINIMAL SCOPE EXPECTED
+	•	Only add the mapping layer + sink; no theme work; no plot changes; no UI redesign.
+
+END TRACK A
+
+TRACK B — Meter Theming (Consistency + Theme Tokens)
+
+TASK TITLE
+Refactor meter visuals to use theme tokens and unify IN/OUT styling, without changing behavior.
+
+OBJECTIVE
+Cleanly route meter colors, fonts, padding, and corner radii through existing theme/design system (mdsp_ui / project theme), so meters match the rest of AnalyzerPro and can be adjusted centrally.
+
+REQUIREMENTS
+	•	No functional change to DSP metering.
+	•	No layout change (OUT left, IN right stays).
+	•	Replace hard-coded colors with theme tokens.
+	•	Ensure minimum contrast and FOH readability.
+	•	Optional: add a single “High Contrast Meters” UI-only toggle (not host-automatable).
+
+FILES TO TOUCH (EXPLICIT LIST)
+	•	Source/ui/meters/MeterComponent.h
+	•	Source/ui/meters/MeterComponent.cpp
+	•	Source/ui/meters/MeterGroupComponent.h
+	•	Source/ui/meters/MeterGroupComponent.cpp
+	•	Source/PluginEditor.h
+	•	Source/PluginEditor.cpp
+	•	(If theme tokens must be added)
+	•	Source/ui/theme/Theme.h
+	•	Source/ui/theme/Theme.cpp
+	•	Source/ui/meters/MeterComponent.cpp
+	•	Source/ui/layout/HeaderBar.cpp
+
+FILES NOT TO TOUCH (EXPLICIT LIST)
+	•	Any file not listed in “FILES TO TOUCH”
+	•	Any file under modules/
+	•	DSP analyzer and meter math code
+	•	CMakeLists.txt
+
+BUILD COMMANDS TO RUN (DEBUG + RELEASE)
+(same as Track A)
+
+TEST PLAN (MANUAL)
+	1.	Build Debug + Release.
+	2.	Verify meters visually unchanged except theming (colors/contrast).
+	3.	Verify high DPI and resizing; no flicker introduced.
+	4.	If High Contrast toggle exists: verify it persists in state and affects only meters.
+
+DEFINITION OF DONE
+	•	Build passes Debug + Release.
+	•	Meter colors/styles come from theme tokens, not literals.
+	•	Visual readability improved; no behavior change.
+
+MINIMAL SCOPE EXPECTED
+	•	Theme token plumbing only; no new meter features.
+
+END TRACK B
+
+TRACK C — Analyzer Polish (Plot UX: Cursor + Markers + Readout Bar)
+
+TASK TITLE
+Polish analyzer plot UX: cursor readout, marker A/B delta, and interaction stability.
+
+OBJECTIVE
+Improve plot usability (RTA/FFT) by tightening cursor readout, marker manipulation, and readout bar clarity. This is strictly UX polish: no new view modes.
+
+REQUIREMENTS
+	•	No changes to meter behavior or layout.
+	•	Ensure cursor readout is stable and accurate.
+	•	Improve marker drag hit-testing and snapping behavior (FFT optional snap).
+	•	Ensure delta readout between A and B is always correct and clearly presented.
+	•	Reduce jitter/flicker in readout updates.
+
+FILES TO TOUCH (EXPLICIT LIST)
+	•	Source/ui/analyzer/PlotView.h
+	•	Source/ui/analyzer/PlotView.cpp
+	•	Source/ui/analyzer/ReadoutBar.h
+	•	Source/ui/analyzer/ReadoutBar.cpp
+	•	Source/ui/analyzer/Markers.h
+	•	Source/ui/analyzer/Markers.cpp
+	•	Source/PluginEditor.h
+	•	Source/PluginEditor.cpp
+	•	Source/ui/meters/MeterComponent.cpp
+	•	Source/ui/layout/HeaderBar.cpp
+
+FILES NOT TO TOUCH (EXPLICIT LIST)
+	•	Any file not listed in “FILES TO TOUCH”
+	•	DSP analyzer computation (FFT/RTA engines)
+	•	Meter code
+	•	CMakeLists.txt
+	•	modules/
+
+BUILD COMMANDS TO RUN (DEBUG + RELEASE)
+(same as Track A)
+
+TEST PLAN (MANUAL)
+	1.	Build Debug + Release.
+	2.	In host, verify:
+
+	•	Cursor shows freq + dB reliably
+	•	Markers A/B can be placed, dragged, removed
+	•	Delta readout correct
+	•	No jitter during steady signals
+
+	3.	Verify rapid mode switches and resizing do not break readouts.
+
+DEFINITION OF DONE
+	•	Build passes Debug + Release.
+	•	Improved plot UX with no regressions.
+	•	No DSP behavior changes.
+
+MINIMAL SCOPE EXPECTED
+	•	Cursor/marker/readout polish only; no new controls beyond minor toggles.
+
+END TRACK C

@@ -12,6 +12,38 @@
 #endif
 
 //==============================================================================
+static float dbRangeToMinDb (AnalyzerDisplayView::DbRange r) noexcept
+{
+    switch (r)
+    {
+        case AnalyzerDisplayView::DbRange::Minus60:  return -60.0f;
+        case AnalyzerDisplayView::DbRange::Minus90:  return -90.0f;
+        case AnalyzerDisplayView::DbRange::Minus120: return -120.0f;
+    }
+    return -120.0f;
+}
+
+// UI-only sentinel used to detect invalid peak values coming from legacy paths.
+// This is NOT a display floor and must not track user-selected dB range.
+static constexpr float kUiPeakInvalidSentinelDb = -90.0f;
+
+static inline bool isInvalidPeakDb (float db) noexcept
+{
+    return db <= kUiPeakInvalidSentinelDb;
+}
+
+static float mapDbToDisplayDb (float db,
+                               float srcMinDb,
+                               float dstMinDb) noexcept
+{
+    // Map a dB value from [srcMinDb..0] into [dstMinDb..0] so that it renders at the same Y
+    // when the plot range is dstMinDb..0.
+    const float clamped = juce::jlimit (srcMinDb, 0.0f, db);
+    const float y01 = clamped / srcMinDb;        // both negative => 0..1
+    const float mapped = y01 * dstMinDb;         // dstMinDb negative
+    return juce::jlimit (dstMinDb, 0.0f, mapped);
+}
+
 AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     : audioProcessor (processor)
 #if JUCE_DEBUG
@@ -21,7 +53,12 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     addAndMakeVisible (rtaDisplay);
     // Initialize RTADisplay with default ranges
     rtaDisplay.setFrequencyRange (20.0f, 20000.0f);
-    rtaDisplay.setDbRange (0.0f, -90.0f);
+    targetMinDb_ = dbRangeToMinDb (dbRange_);
+    minDbAnim_.reset (60.0, 0.20);
+    minDbAnim_.setCurrentAndTargetValue (targetMinDb_);
+    lastAppliedMinDb_ = targetMinDb_;
+    rtaDisplay.setDbRange (0.0f, lastAppliedMinDb_);
+    appliedDbRange_ = dbRange_;
     
     // Initialize band centers
     bandCentersHz_ = generateThirdOctaveBands();
@@ -38,9 +75,46 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     updateModeOverlayText();
 #endif
     
-    // Start timer for snapshot updates (~50 Hz)
-    startTimer (20);  // 20ms = 50 Hz
+    // Start timer for snapshot updates (~60 Hz) and dB range animation
+    startTimerHz (60);
     
+}
+
+void AnalyzerDisplayView::setDbRange (DbRange r)
+{
+    if (dbRange_ == r)
+        return;
+
+    dbRange_ = r;
+    targetMinDb_ = dbRangeToMinDb (dbRange_);
+
+    minDbAnim_.reset (60.0, 0.20);
+    minDbAnim_.setTargetValue (targetMinDb_);
+    repaint();
+}
+
+void AnalyzerDisplayView::setDbRangeFromChoiceIndex (int idx)
+{
+    idx = juce::jlimit (0, 2, idx);
+    setDbRange (static_cast<DbRange> (idx));
+}
+
+void AnalyzerDisplayView::setPeakDbRange (DbRange r)
+{
+    if (peakDbRange_ == r)
+        return;
+
+    peakDbRange_ = r;
+    peakScaleDirty_ = true;
+    repaint();
+}
+
+void AnalyzerDisplayView::triggerPeakFlash()
+{
+    peakFlashActive_ = true;
+    peakFlashUntilMs_ = juce::Time::getMillisecondCounterHiRes() + 150.0;
+    peakScaleDirty_ = true;
+    repaint();
 }
 
 AnalyzerDisplayView::~AnalyzerDisplayView()
@@ -108,7 +182,9 @@ void AnalyzerDisplayView::paint (juce::Graphics& g)
 {
     // Background is handled by RTADisplay
     juce::ignoreUnused (g);
-    mdsp_ui::Theme theme;
+    // Default theme (Dark variant) for debug overlays
+    // Note: AnalyzerDisplayView doesn't use UiContext yet (Phase 2 may add it)
+    const mdsp_ui::Theme theme (mdsp_ui::ThemeVariant::Dark);
 #if JUCE_DEBUG
     // Debug overlay: mode, sequence, bins, fftSize, meta, drop reason (top-left)
     g.setFont (juce::Font (juce::FontOptions().withHeight (10.0f)));
@@ -152,20 +228,6 @@ void AnalyzerDisplayView::paint (juce::Graphics& g)
         g.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
         g.drawText (devModeDebugLine_, 8, 38, 700, 14, juce::Justification::centredLeft);
     }
-    
-    // TEMP ROUTING PROBE: remove after FFT confirmed.
-    // Input signal probe: channel count, RMS, and peak levels
-    // Interpretation: If RMS/PEAK stay near -160 dB while playing -> host not sending audio (routing/bypass issue)
-    //                 If RMS/PEAK move but FFT doesn't -> analyzer feed wrong (feeding zeros/muted buffer)
-    const float inputRms = audioProcessor.getUiInputRmsDb();
-    const float inputPeak = audioProcessor.getUiInputPeakDb();
-    const int inputCh = audioProcessor.getUiNumCh();
-    const juce::String inputProbeText = juce::String ("IN ch=") + juce::String (inputCh)
-                                      + juce::String (" RMS=") + juce::String (inputRms, 1) + "dB"
-                                      + juce::String (" PEAK=") + juce::String (inputPeak, 1) + "dB";
-    g.setColour (theme.success.withAlpha (0.90f));
-    g.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
-    g.drawText (inputProbeText, 8, 56, 500, 14, juce::Justification::centredLeft);
 #endif
 }
 
@@ -438,6 +500,97 @@ void AnalyzerDisplayView::timerCallback()
     if (isShutdown)
         return;
 
+    // Animate dB range changes (grid + FFT + peak mapping all derive from RTADisplay bottomDb).
+    const float minDb = minDbAnim_.getNextValue();
+    if (std::abs (minDb - lastAppliedMinDb_) > 1.0e-4f)
+    {
+        rtaDisplay.setDbRange (0.0f, minDb);
+        lastAppliedMinDb_ = minDb;
+    }
+
+    const bool flashActive = (peakFlashActive_ && juce::Time::getMillisecondCounterHiRes() < peakFlashUntilMs_);
+    if (peakFlashActive_ && !flashActive)
+    {
+        peakFlashActive_ = false;
+        peakScaleDirty_ = true; // ensure we remap once without the flash boost
+    }
+
+    // If the FFT range is animating or Peak Range changed, remap peaks into the current FFT/grid space.
+    if ((minDbAnim_.isSmoothing() || peakScaleDirty_ || flashActive) && hasLastValid_)
+    {
+        const float fftMinDb = lastAppliedMinDb_;
+        const float peakMinDb = dbRangeToMinDb (peakDbRange_);
+
+        switch (currentMode_)
+        {
+            case Mode::FFT:
+            {
+                const bool hasPeaks = (!fftPeakDb_.empty() && fftPeakDb_.size() == fftDb_.size());
+                if (hasPeaks)
+                {
+                    fftPeakDbDisplay_.resize (fftPeakDb_.size());
+                    for (size_t i = 0; i < fftPeakDb_.size(); ++i)
+                    {
+                        float peakDb = fftPeakDb_[i];
+                        if (isInvalidPeakDb (peakDb))
+                            peakDb = fftDb_[i];
+                        float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+                        if (flashActive)
+                            mapped = juce::jmin (0.0f, mapped + 2.0f);
+                        fftPeakDbDisplay_[i] = mapped;
+                    }
+                    rtaDisplay.setFFTData (fftDb_, &fftPeakDbDisplay_);
+                }
+                break;
+            }
+            case Mode::BAND:
+            {
+                const bool hasPeaks = (!bandsPeakDb_.empty() && bandsPeakDb_.size() == bandsDb_.size());
+                if (hasPeaks)
+                {
+                    bandsPeakDbDisplay_.resize (bandsPeakDb_.size());
+                    for (size_t i = 0; i < bandsPeakDb_.size(); ++i)
+                    {
+                        float peakDb = bandsPeakDb_[i];
+                        if (isInvalidPeakDb (peakDb))
+                            peakDb = bandsDb_[i];
+                        float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+                        if (flashActive)
+                            mapped = juce::jmin (0.0f, mapped + 2.0f);
+                        bandsPeakDbDisplay_[i] = mapped;
+                    }
+                    rtaDisplay.setBandData (bandsDb_, &bandsPeakDbDisplay_);
+                }
+                break;
+            }
+            case Mode::LOG:
+            {
+                const bool hasPeaks = (!logPeakDb_.empty() && logPeakDb_.size() == logDb_.size());
+                if (hasPeaks)
+                {
+                    logPeakDbDisplay_.resize (logPeakDb_.size());
+                    for (size_t i = 0; i < logPeakDb_.size(); ++i)
+                    {
+                        float peakDb = logPeakDb_[i];
+                        if (isInvalidPeakDb (peakDb))
+                            peakDb = logDb_[i];
+                        float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+                        if (flashActive)
+                            mapped = juce::jmin (0.0f, mapped + 2.0f);
+                        logPeakDbDisplay_[i] = mapped;
+                    }
+                    rtaDisplay.setLogData (logDb_, &logPeakDbDisplay_);
+                }
+                break;
+            }
+        }
+
+        peakScaleDirty_ = false;
+    }
+
+    if (minDbAnim_.isSmoothing())
+        repaint();
+
     // Apply any pending FFT resize on the message thread (RT-safe: allocations happen here, not on audio thread).
     audioProcessor.getAnalyzerEngine().applyPendingFftSizeIfNeeded();
     
@@ -619,8 +772,31 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                               + juce::String (" max=") + juce::String (maxVal, 1) + "dB";
 #endif
             
+            // Remap peak trace into FFT/grid dB space using the separate Peak Range.
+            if (usePeaks)
+            {
+                const float fftMinDb = lastAppliedMinDb_;
+                const float peakMinDb = dbRangeToMinDb (peakDbRange_);
+                fftPeakDbDisplay_.resize (validBinsSize);
+
+                const bool flash = (peakFlashActive_ && juce::Time::getMillisecondCounterHiRes() < peakFlashUntilMs_);
+                for (size_t i = 0; i < validBinsSize; ++i)
+                {
+                    float peakDb = fftPeakDb_[i];
+
+                    // UI-only fix: if engine floor is hit, fall back to current trace to avoid a flat line.
+                    if (isInvalidPeakDb (peakDb))
+                        peakDb = fftDb_[i];
+
+                    float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+                    if (flash)
+                        mapped = juce::jmin (0.0f, mapped + 2.0f); // subtle visual flash
+                    fftPeakDbDisplay_[i] = mapped;
+                }
+            }
+
             // Feed RTADisplay with FFT data (ONLY in FFT mode)
-            rtaDisplay.setFFTData (fftDb_, usePeaks ? &fftPeakDb_ : nullptr);
+            rtaDisplay.setFFTData (fftDb_, usePeaks ? &fftPeakDbDisplay_ : nullptr);
             
             // Force repaint after data update
             rtaDisplay.repaint();
@@ -654,7 +830,28 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             
             // Feed RTADisplay with band data
             const bool usePeaks = !bandsPeakDb_.empty() && bandsPeakDb_.size() == bandsDb_.size() && bandsDb_.size() == bandCentersHz_.size();
-            rtaDisplay.setBandData (bandsDb_, usePeaks ? &bandsPeakDb_ : nullptr);
+            if (usePeaks)
+            {
+                const float fftMinDb = lastAppliedMinDb_;
+                const float peakMinDb = dbRangeToMinDb (peakDbRange_);
+                bandsPeakDbDisplay_.resize (bandsPeakDb_.size());
+                const bool flash = (peakFlashActive_ && juce::Time::getMillisecondCounterHiRes() < peakFlashUntilMs_);
+                for (size_t i = 0; i < bandsPeakDb_.size(); ++i)
+                {
+                    float peakDb = bandsPeakDb_[i];
+                    if (isInvalidPeakDb (peakDb))
+                        peakDb = bandsDb_[i];
+                    float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+                    if (flash)
+                        mapped = juce::jmin (0.0f, mapped + 2.0f);
+                    bandsPeakDbDisplay_[i] = mapped;
+                }
+                rtaDisplay.setBandData (bandsDb_, &bandsPeakDbDisplay_);
+            }
+            else
+            {
+                rtaDisplay.setBandData (bandsDb_, nullptr);
+            }
             
 #if JUCE_DEBUG
             // Debug logging (once per second)
@@ -691,7 +888,28 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             
             // Feed RTADisplay with log data
             const bool usePeaks = !logPeakDb_.empty() && logPeakDb_.size() == logDb_.size();
-            rtaDisplay.setLogData (logDb_, usePeaks ? &logPeakDb_ : nullptr);
+            if (usePeaks)
+            {
+                const float fftMinDb = lastAppliedMinDb_;
+                const float peakMinDb = dbRangeToMinDb (peakDbRange_);
+                logPeakDbDisplay_.resize (logPeakDb_.size());
+                const bool flash = (peakFlashActive_ && juce::Time::getMillisecondCounterHiRes() < peakFlashUntilMs_);
+                for (size_t i = 0; i < logPeakDb_.size(); ++i)
+                {
+                    float peakDb = logPeakDb_[i];
+                    if (isInvalidPeakDb (peakDb))
+                        peakDb = logDb_[i];
+                    float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+                    if (flash)
+                        mapped = juce::jmin (0.0f, mapped + 2.0f);
+                    logPeakDbDisplay_[i] = mapped;
+                }
+                rtaDisplay.setLogData (logDb_, &logPeakDbDisplay_);
+            }
+            else
+            {
+                rtaDisplay.setLogData (logDb_, nullptr);
+            }
             
 #if JUCE_DEBUG
             // Debug logging (once per second)

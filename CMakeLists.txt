@@ -189,6 +189,10 @@ target_sources(${PLUGIN_NAME}
         Source/parameters/Parameters.h
         Source/ui/MainView.cpp
         Source/ui/MainView.h
+        Source/ui/meters/MeterComponent.cpp
+        Source/ui/meters/MeterComponent.h
+        Source/ui/meters/MeterGroupComponent.cpp
+        Source/ui/meters/MeterGroupComponent.h
         Source/hardware/PluginHardwareAdapter.cpp
         Source/hardware/PluginHardwareAdapter.h
         Source/hardware/PluginHardwareOutputAdapter.cpp
@@ -203,6 +207,10 @@ target_sources(${PLUGIN_NAME}
         Source/ui/layout/HeaderBar.cpp
         Source/ui/layout/ControlRail.cpp
         Source/ui/layout/FooterBar.cpp
+        Source/ui/layout/control_primitives/SectionHeader.cpp
+        Source/ui/layout/control_primitives/ChoiceRow.cpp
+        Source/ui/layout/control_primitives/ToggleRow.cpp
+        Source/ui/layout/control_primitives/SliderRow.cpp
         Source/ui/views/AnalyzerGridPlaceholder.cpp
         Source/ui/views/PhaseCorrelationView.cpp
         Source/audio/DeviceRoutingHelper.cpp
@@ -226,6 +234,8 @@ target_compile_features(${PLUGIN_NAME} PUBLIC cxx_std_17)
 target_include_directories(${PLUGIN_NAME}
     PRIVATE
         Source
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/melechdsp-hq/shared/mdsp_ui/include
 )
 
 target_compile_definitions(${PLUGIN_NAME}

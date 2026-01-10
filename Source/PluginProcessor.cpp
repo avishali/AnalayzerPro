@@ -31,13 +31,19 @@ namespace
         engine.setPeakDecayDbPerSec (decayDbPerSec);
     }
 }
-// TEMP ROUTING PROBE: remove after FFT confirmed.
-// Audio input probe variables (atomic for thread-safe UI access)
 namespace
 {
-    std::atomic<float> uiInputRmsDb  { -160.0f };
-    std::atomic<float> uiInputPeakDb { -160.0f };
-    std::atomic<int>   uiNumCh       { 0 };
+    static inline float linToDb (float lin) noexcept
+    {
+        constexpr float kEps = 1.0e-9f;
+        const float v = (lin > kEps) ? lin : kEps;
+        return 20.0f * std::log10 (v);
+    }
+
+    static inline float clampStoredDb (float db) noexcept
+    {
+        return std::isfinite (db) ? juce::jmax (db, -120.0f) : -120.0f;
+    }
 }
 
 //==============================================================================
@@ -58,14 +64,18 @@ AnalayzerProAudioProcessor::AnalayzerProAudioProcessor()
     // Cache raw parameter pointers once (valid for lifetime of APVTS)
     pFftSize_   = apvts.getRawParameterValue ("FftSize");
     pAveraging_ = apvts.getRawParameterValue ("Averaging");
+    pPeakHold_  = apvts.getRawParameterValue ("PeakHold");
     pHold_      = apvts.getRawParameterValue ("Hold");
     pPeakDecay_ = apvts.getRawParameterValue ("PeakDecay");
+    pDbRange_   = apvts.getRawParameterValue ("DbRange");
 
     #if JUCE_DEBUG
     jassert (pFftSize_   != nullptr);
     jassert (pAveraging_ != nullptr);
+    jassert (pPeakHold_  != nullptr);
     jassert (pHold_      != nullptr);
     jassert (pPeakDecay_ != nullptr);
+    jassert (pDbRange_   != nullptr);
     #endif
 #if JucePlugin_Build_Standalone
     // Auto-configure macOS loopback routing for standalone builds
@@ -162,6 +172,23 @@ void AnalayzerProAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
 #endif
     analyzerEngine.prepare (sampleRate, samplesPerBlock);
 
+    meterSampleRate_ = (sampleRate > 1.0 ? sampleRate : 48000.0);
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        inputPeakEnv_[ch] = 0.0f;
+        outputPeakEnv_[ch] = 0.0f;
+        inputRmsSq_[ch] = 0.0f;
+        outputRmsSq_[ch] = 0.0f;
+
+        inputMeters_[ch].peakDb.store (-120.0f, std::memory_order_relaxed);
+        inputMeters_[ch].rmsDb.store (-120.0f, std::memory_order_relaxed);
+        inputMeters_[ch].clipLatched.store (false, std::memory_order_relaxed);
+
+        outputMeters_[ch].peakDb.store (-120.0f, std::memory_order_relaxed);
+        outputMeters_[ch].rmsDb.store (-120.0f, std::memory_order_relaxed);
+        outputMeters_[ch].clipLatched.store (false, std::memory_order_relaxed);
+    }
+
     lastFftSizeIndex_ = -1;
     lastAveragingIndex_ = -1;
     lastHold_ = false;
@@ -209,6 +236,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     if (JUCE_UNLIKELY (pFftSize_ == nullptr ||
                        pAveraging_ == nullptr ||
+                       pPeakHold_ == nullptr ||
                        pHold_ == nullptr ||
                        pPeakDecay_ == nullptr))
     {
@@ -223,94 +251,53 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
     
-#if JUCE_DEBUG
-    if (totalNumInputChannels == 0)
-        DBG ("processBlock: NO INPUT CHANNELS");
-#endif
-
-#if JUCE_DEBUG
-    // TEMP DAW INPUT PROBE: verify non-zero samples from host (remove after verification)
-    // NOTE: Ignore system log noise (HALC_ProxyIOContext, ViewBridge, CursorUI, Secure coding, etc.)
-    static uint32_t dawProbeCounter = 0;
-    if ((++dawProbeCounter % 60) == 0)  // ~1 time per second at 48kHz/512 samples
-    {
-        const int numCh = buffer.getNumChannels();
-        const int n = buffer.getNumSamples();
-        float maxAbsL = 0.0f;
-        float maxAbsR = 0.0f;
-        
-        if (numCh > 0 && n > 0)
-        {
-            // Channel 0 (L)
-            const float* ch0 = buffer.getReadPointer (0);
-            for (int i = 0; i < n; ++i)
-            {
-                const float absVal = std::abs (ch0[i]);
-                maxAbsL = juce::jmax (maxAbsL, absVal);
-            }
-            
-            // Channel 1 (R) if present
-            if (numCh > 1)
-            {
-                const float* ch1 = buffer.getReadPointer (1);
-                for (int i = 0; i < n; ++i)
-                {
-                    const float absVal = std::abs (ch1[i]);
-                    maxAbsR = juce::jmax (maxAbsR, absVal);
-                }
-            }
-        }
-        
-        DBG ("DAW_INPUT: ch=" << numCh << " n=" << n << " maxAbs=[" << maxAbsL << "," << maxAbsR << "]");
-    }
-#endif
-    
-    // TEMP ROUTING PROBE: remove after FFT confirmed.
-    // Measure input RMS and peak BEFORE any modifications (to verify host is sending audio)
-    const int numCh = totalNumInputChannels;
     const int n = buffer.getNumSamples();
-    float peak = 0.0f;
-    float sumSquares = 0.0f;
-    
-    if (numCh > 0 && n > 0)
+    const float dtSec = static_cast<float> (n / juce::jmax (1.0, meterSampleRate_));
+
+    // Input meters: measure buffer pre-processing.
+    const int inChCount = juce::jlimit (0, 2, totalNumInputChannels);
+    for (int ch = 0; ch < 2; ++ch)
     {
-        // Compute peak and RMS across all input channels
-        for (int ch = 0; ch < numCh; ++ch)
+        if (ch >= inChCount)
         {
-            const float* x = buffer.getReadPointer (ch);
-            for (int i = 0; i < n; ++i)
-            {
-                const float absVal = std::abs (x[i]);
-                peak = juce::jmax (peak, absVal);
-                sumSquares += x[i] * x[i];
-            }
+            inputMeters_[ch].peakDb.store (-120.0f, std::memory_order_relaxed);
+            inputMeters_[ch].rmsDb.store (-120.0f, std::memory_order_relaxed);
+            continue;
         }
-        
-        // Compute RMS (average across all channels)
-        const float rms = std::sqrt (sumSquares / static_cast<float> (n * juce::jmax (1, numCh)));
-        
-        // Convert to dB and store (relaxed order is sufficient for UI updates)
-        uiNumCh.store (numCh, std::memory_order_relaxed);
-        uiInputPeakDb.store (juce::Decibels::gainToDecibels (peak, -160.0f), std::memory_order_relaxed);
-        uiInputRmsDb.store (juce::Decibels::gainToDecibels (rms, -160.0f), std::memory_order_relaxed);
-        
-        // TEMP ROUTING PROBE: throttled DBG print (once per 1000ms)
-        static uint32_t lastPrintMs = 0;
-        const auto nowMs = juce::Time::getMillisecondCounter();
-        if (nowMs - lastPrintMs > 1000)
+
+        const float* x = buffer.getReadPointer (ch);
+        float blockPeak = 0.0f;
+        float sumSq = 0.0f;
+        bool clipped = false;
+
+        for (int i = 0; i < n; ++i)
         {
-            lastPrintMs = nowMs;
-            DBG ("INPUT: ch=" << numCh
-                 << " RMS=" << uiInputRmsDb.load (std::memory_order_relaxed)
-                 << " PEAK=" << uiInputPeakDb.load (std::memory_order_relaxed));
+            const float s = x[i];
+            const float a = std::abs (s);
+            blockPeak = (a > blockPeak) ? a : blockPeak;
+            sumSq += s * s;
+            clipped = clipped || (a >= 1.0f);
         }
-    }
-    else
-    {
-        // No input channels: reset probe values
-        uiNumCh.store (0, std::memory_order_relaxed);
-        uiInputPeakDb.store (-160.0f, std::memory_order_relaxed);
-        uiInputRmsDb.store (-160.0f, std::memory_order_relaxed);
+
+        const float blockMeanSq = sumSq / static_cast<float> (n);
+
+        // Peak: instantaneous attack, ~300ms exponential release.
+        const float peakReleaseCoeff = std::exp (-dtSec / 0.30f);
+        inputPeakEnv_[ch] = juce::jmax (blockPeak, inputPeakEnv_[ch] * peakReleaseCoeff);
+
+        // RMS: EMA of squared signal (~300ms attack, ~400ms release).
+        const float tau = (blockMeanSq > inputRmsSq_[ch]) ? 0.30f : 0.40f;
+        const float rmsCoeff = std::exp (-dtSec / tau);
+        inputRmsSq_[ch] = (rmsCoeff * inputRmsSq_[ch]) + ((1.0f - rmsCoeff) * blockMeanSq);
+
+        const float peakDb = clampStoredDb (linToDb (inputPeakEnv_[ch]));
+        float rmsDb = clampStoredDb (linToDb (std::sqrt (inputRmsSq_[ch])));
+        rmsDb = juce::jmin (rmsDb, peakDb); // RMS must never exceed peak visually.
+
+        inputMeters_[ch].peakDb.store (peakDb, std::memory_order_relaxed);
+        inputMeters_[ch].rmsDb.store (rmsDb, std::memory_order_relaxed);
+        if (clipped)
+            inputMeters_[ch].clipLatched.store (true, std::memory_order_relaxed);
     }
 
     // Clear any output channels that don't contain input data
@@ -398,6 +385,91 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // IMPORTANT: AnalyzerEngine must be fed from the input signal (pre-mute, pre-gain, pre-output).
     // Feed analyzer (audio thread, real-time safe)
     analyzerEngine.processBlock (buffer);
+
+    // Output meters: measure buffer post-processing (after gain / processing).
+    const int outChCount = juce::jlimit (0, 2, totalNumOutputChannels);
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        if (ch >= outChCount)
+        {
+            outputMeters_[ch].peakDb.store (-120.0f, std::memory_order_relaxed);
+            outputMeters_[ch].rmsDb.store (-120.0f, std::memory_order_relaxed);
+            continue;
+        }
+
+        const float* y = buffer.getReadPointer (ch);
+        float blockPeak = 0.0f;
+        float sumSq = 0.0f;
+        bool clipped = false;
+
+        for (int i = 0; i < n; ++i)
+        {
+            const float s = y[i];
+            const float a = std::abs (s);
+            blockPeak = (a > blockPeak) ? a : blockPeak;
+            sumSq += s * s;
+            clipped = clipped || (a >= 1.0f);
+        }
+
+        const float blockMeanSq = sumSq / static_cast<float> (n);
+
+        const float peakReleaseCoeff = std::exp (-dtSec / 0.30f);
+        outputPeakEnv_[ch] = juce::jmax (blockPeak, outputPeakEnv_[ch] * peakReleaseCoeff);
+
+        const float tau = (blockMeanSq > outputRmsSq_[ch]) ? 0.30f : 0.40f;
+        const float rmsCoeff = std::exp (-dtSec / tau);
+        outputRmsSq_[ch] = (rmsCoeff * outputRmsSq_[ch]) + ((1.0f - rmsCoeff) * blockMeanSq);
+
+        const float peakDb = clampStoredDb (linToDb (outputPeakEnv_[ch]));
+        float rmsDb = clampStoredDb (linToDb (std::sqrt (outputRmsSq_[ch])));
+        rmsDb = juce::jmin (rmsDb, peakDb);
+
+        outputMeters_[ch].peakDb.store (peakDb, std::memory_order_relaxed);
+        outputMeters_[ch].rmsDb.store (rmsDb, std::memory_order_relaxed);
+        if (clipped)
+            outputMeters_[ch].clipLatched.store (true, std::memory_order_relaxed);
+    }
+
+    // Hardware meter mapping (RT-safe): convert current meter states to LED-friendly levels.
+    {
+        HardwareMeterLevelsFrame frame;
+        frame.input.channelCount = inChCount;
+        frame.output.channelCount = outChCount;
+
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            const float inPeakDb = inputMeters_[ch].peakDb.load (std::memory_order_relaxed);
+            const float inRmsDb  = inputMeters_[ch].rmsDb.load (std::memory_order_relaxed);
+            const bool  inClip   = inputMeters_[ch].clipLatched.load (std::memory_order_relaxed);
+            frame.input.ch[ch] = hardwareMeterMapper_.mapChannel (inRmsDb, inPeakDb, inClip);
+
+            const float outPeakDb = outputMeters_[ch].peakDb.load (std::memory_order_relaxed);
+            const float outRmsDb  = outputMeters_[ch].rmsDb.load (std::memory_order_relaxed);
+            const bool  outClip   = outputMeters_[ch].clipLatched.load (std::memory_order_relaxed);
+            frame.output.ch[ch] = hardwareMeterMapper_.mapChannel (outRmsDb, outPeakDb, outClip);
+        }
+
+        softwareMeterSink_.publishMeterLevels (frame);
+    }
+}
+
+int AnalayzerProAudioProcessor::getMeterInputChannelCount() const noexcept
+{
+    return juce::jlimit (1, 2, getTotalNumInputChannels());
+}
+
+int AnalayzerProAudioProcessor::getMeterOutputChannelCount() const noexcept
+{
+    return juce::jlimit (1, 2, getTotalNumOutputChannels());
+}
+
+void AnalayzerProAudioProcessor::resetMeterClipLatches() noexcept
+{
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        inputMeters_[ch].clipLatched.store (false, std::memory_order_relaxed);
+        outputMeters_[ch].clipLatched.store (false, std::memory_order_relaxed);
+    }
 }
 
 //==============================================================================
@@ -462,7 +534,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
         2,  // Default: 100ms (index 2)
         "Averaging"));
     
-    // Analyzer Hold (bool, default false)
+    // Analyzer Peak Hold (bool, default true - peaks enabled by default)
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        "PeakHold", "Peak Hold",
+        true,  // Default: enabled
+        "Peak Hold"));
+    
+    // Analyzer Hold (bool, default false - freezes decay)
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         "Hold", "Hold",
         false,  // Default: off
@@ -488,25 +566,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
         juce::StringArray { "Flat", "Pink", "White" },
         0,  // Default: Flat (index 0)
         "Tilt"));
+
+    // Analyzer dB Range (choice: -60=0, -90=1, -120=2)
+    params.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "DbRange", "dB Range",
+        juce::StringArray { "-60 dB", "-90 dB", "-120 dB" },
+        2,  // Default: -120 dB (index 2)
+        "dB Range"));
     
     return { params.begin(), params.end() };
-}
-
-//==============================================================================
-// TEMP ROUTING PROBE: remove after FFT confirmed.
-float AnalayzerProAudioProcessor::getUiInputRmsDb() const noexcept
-{
-    return uiInputRmsDb.load (std::memory_order_relaxed);
-}
-
-float AnalayzerProAudioProcessor::getUiInputPeakDb() const noexcept
-{
-    return uiInputPeakDb.load (std::memory_order_relaxed);
-}
-
-int AnalayzerProAudioProcessor::getUiNumCh() const noexcept
-{
-    return uiNumCh.load (std::memory_order_relaxed);
 }
 
 //==============================================================================
