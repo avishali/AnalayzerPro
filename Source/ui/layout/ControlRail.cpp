@@ -8,20 +8,14 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
       analyzerHeader (ui, "Analyzer"),
       displayHeader (ui, "Display"),
       metersHeader (ui, "Meters"),
-      modeRow (ui, "Mode", modeCombo),
-      fftSizeRow (ui, "FFT Size", fftSizeCombo),
-      averagingRow (ui, "Averaging", averagingCombo),
       dbRangeRow (ui, "dB Range", dbRangeCombo),
-      peakHoldRow (ui, "Peak Hold", peakHoldButton),
-      holdRow (ui, "Hold", holdButton),
-      peakDecayRow (ui, "Peak Decay", peakDecaySlider, 0.0, 10.0, 0.1, 1.0),
       displayGainRow (ui, "Display Gain", displayGainSlider, -24.0, 24.0, 0.5, 0.0),
-      tiltRow (ui, "Tilt", tiltCombo)
+      tiltRow (ui, "Tilt", tiltCombo),
+      gainRow (ui, "Gain", gainSlider, 0.0, 2.0, 0.01, 1.0),
+      peakControlsRow_ (ui)
 {
     const auto& theme = ui_.theme();
     const auto& type = ui_.type();
-    const auto& m = ui_.metrics();
-
     // Attach section headers to parent
     navigateHeader.attachToParent (*this);
     analyzerHeader.attachToParent (*this);
@@ -29,36 +23,13 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     metersHeader.attachToParent (*this);
 
     // Attach control rows to parent
-    modeRow.attachToParent (*this);
-    fftSizeRow.attachToParent (*this);
-    averagingRow.attachToParent (*this);
     dbRangeRow.attachToParent (*this);
-    peakHoldRow.attachToParent (*this);
-    holdRow.attachToParent (*this);
-    peakDecayRow.attachToParent (*this);
     displayGainRow.attachToParent (*this);
     tiltRow.attachToParent (*this);
+    gainRow.attachToParent (*this);
+    addAndMakeVisible (peakControlsRow_);
 
     // Configure combos (items and defaults)
-    modeCombo.addItem ("FFT", 1);
-    modeCombo.addItem ("BANDS", 2);
-    modeCombo.addItem ("LOG", 3);
-    modeCombo.setSelectedId (1, juce::dontSendNotification);  // Default: FFT
-    
-    fftSizeCombo.addItem ("1024", 1);
-    fftSizeCombo.addItem ("2048", 2);
-    fftSizeCombo.addItem ("4096", 3);
-    fftSizeCombo.addItem ("8192", 4);
-    fftSizeCombo.setSelectedId (2, juce::dontSendNotification);  // Default: 2048
-    
-    averagingCombo.addItem ("Off", 1);
-    averagingCombo.addItem ("50 ms", 2);
-    averagingCombo.addItem ("100 ms", 3);
-    averagingCombo.addItem ("250 ms", 4);
-    averagingCombo.addItem ("500 ms", 5);
-    averagingCombo.addItem ("1 s", 6);
-    averagingCombo.setSelectedId (3, juce::dontSendNotification);  // Default: 100ms
-    
     dbRangeCombo.addItem ("-60 dB", 1);
     dbRangeCombo.addItem ("-90 dB", 2);
     dbRangeCombo.addItem ("-120 dB", 3);
@@ -73,19 +44,10 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     tiltCombo.addItem ("White", 3);
     tiltCombo.setSelectedId (1, juce::dontSendNotification);  // Default: Flat
 
-    // Configure toggles
-    peakHoldButton.setButtonText ("On");
-    peakHoldButton.setToggleState (true, juce::dontSendNotification);  // Default: enabled
-    
-    holdButton.setButtonText ("Hold");
-
-    // Configure reset button
-    resetPeaksButton.setTooltip ("Clear peak trace");
-    resetPeaksButton.onClick = [this]
+    gainSlider.onValueChange = [this]
     {
-        triggerResetPeaks();
+        triggerGainChanged();
     };
-    addAndMakeVisible (resetPeaksButton);
 
     // Placeholder labels (smaller, dimmer)
     placeholderLabel1.setText ("Controls...", juce::dontSendNotification);
@@ -99,12 +61,6 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     placeholderLabel3.setJustificationType (juce::Justification::centredLeft);
     placeholderLabel3.setColour (juce::Label::textColourId, theme.grey);
     addAndMakeVisible (placeholderLabel3);
-
-    placeholderLabel4.setText ("Controls...", juce::dontSendNotification);
-    placeholderLabel4.setFont (type.placeholderFont());
-    placeholderLabel4.setJustificationType (juce::Justification::centredLeft);
-    placeholderLabel4.setColour (juce::Label::textColourId, theme.grey);
-    addAndMakeVisible (placeholderLabel4);
 }
 
 ControlRail::~ControlRail() = default;
@@ -116,12 +72,7 @@ void ControlRail::setControlBinder (AnalyzerPro::ControlBinder& binder)
     // Bind controls now that binder is available
     if (controlBinder != nullptr)
     {
-        controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerMode, modeCombo);
-        controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerFftSize, fftSizeCombo);
-        controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerAveraging, averagingCombo);
-        controlBinder->bindToggle (AnalyzerPro::ControlId::AnalyzerPeakHold, peakHoldButton);
-        controlBinder->bindToggle (AnalyzerPro::ControlId::AnalyzerHold, holdButton);
-        controlBinder->bindSlider (AnalyzerPro::ControlId::AnalyzerPeakDecay, peakDecaySlider);
+        peakControlsRow_.setControlBinder (*controlBinder);
         controlBinder->bindSlider (AnalyzerPro::ControlId::AnalyzerDisplayGain, displayGainSlider);
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerTilt, tiltCombo);
     }
@@ -129,13 +80,7 @@ void ControlRail::setControlBinder (AnalyzerPro::ControlBinder& binder)
 
 void ControlRail::setResetPeaksCallback (std::function<void()> cb)
 {
-    onResetPeaks_ = std::move (cb);
-}
-
-void ControlRail::triggerResetPeaks()
-{
-    if (onResetPeaks_)
-        onResetPeaks_();
+    peakControlsRow_.setResetCallback (std::move (cb));
 }
 
 void ControlRail::setDbRangeChangedCallback (std::function<void (int)> cb)
@@ -143,10 +88,26 @@ void ControlRail::setDbRangeChangedCallback (std::function<void (int)> cb)
     onDbRangeChanged_ = std::move (cb);
 }
 
+void ControlRail::setGainChangedCallback (std::function<void (float)> cb)
+{
+    onGainChanged_ = std::move (cb);
+}
+
+void ControlRail::setGainValue (float gain)
+{
+    gainSlider.setValue (gain, juce::dontSendNotification);
+}
+
 void ControlRail::triggerDbRangeChanged()
 {
     if (onDbRangeChanged_ != nullptr)
         onDbRangeChanged_ (dbRangeCombo.getSelectedId());
+}
+
+void ControlRail::triggerGainChanged()
+{
+    if (onGainChanged_ != nullptr)
+        onGainChanged_ (static_cast<float> (gainSlider.getValue()));
 }
 
 void ControlRail::paint (juce::Graphics& g)
@@ -157,6 +118,39 @@ void ControlRail::paint (juce::Graphics& g)
     g.fillAll (theme.panel);
     g.setColour (theme.borderDivider);
     g.fillRect (getLocalBounds().removeFromLeft (1));
+}
+
+int ControlRail::getPreferredHeight() const noexcept
+{
+    const auto& m = ui_.metrics();
+
+    int height = 0;
+
+    // Section 1: Navigate
+    height += m.titleHeight + m.titleSecondaryGap;
+    height += m.secondaryHeight;
+    height += m.sectionSpacing;
+
+    // Section 2: Analyzer
+    height += m.titleHeight + m.titleSecondaryGap;
+    height += m.secondaryHeight + m.comboH + m.gapSmall;      // dB Range
+    height += peakControlsRow_.getPreferredHeight();
+    height += m.secondaryHeight + m.sliderH + m.gapSmall;      // Display Gain
+    height += m.sectionSpacing;
+
+    // Section 3: Display
+    height += m.titleHeight + m.titleSecondaryGap;
+    height += m.secondaryHeight + m.comboH + m.gapSmall;       // Tilt
+    height += m.sectionSpacing - m.gapSmall;
+
+    // Section 4: Meters
+    height += m.titleHeight + m.titleSecondaryGap;
+    height += m.secondaryHeight + m.sliderH + m.gapSmall; // Gain
+
+    // Add top/bottom padding from resized()
+    height += m.padSmall * 2;
+
+    return height;
 }
 
 void ControlRail::resized()
@@ -173,20 +167,8 @@ void ControlRail::resized()
     // Section 2: Analyzer
     analyzerHeader.layout (bounds, y);
     
-    modeRow.layout (bounds, y);
-    fftSizeRow.layout (bounds, y);
-    averagingRow.layout (bounds, y);
     dbRangeRow.layout (bounds, y);
-    peakHoldRow.layout (bounds, y);
-    
-    // Hold (special case: reset button next to hold button)
-    holdRow.layout (bounds, y);
-    // Adjust y back to position reset button next to hold button
-    y -= m.buttonSmallH + m.gapSmall;
-    resetPeaksButton.setBounds (bounds.getX() + m.buttonSmallW + m.gapSmall, y, m.buttonW, m.buttonSmallH);
-    y += m.buttonSmallH + m.gapSmall;
-    
-    peakDecayRow.layout (bounds, y);
+    peakControlsRow_.layout (bounds, y);
     displayGainRow.layout (bounds, y);
     y += m.sectionSpacing;
 
@@ -198,5 +180,5 @@ void ControlRail::resized()
 
     // Section 4: Meters (placeholder)
     metersHeader.layout (bounds, y);
-    placeholderLabel4.setBounds (bounds.getX(), y, bounds.getWidth(), m.secondaryHeight);
+    gainRow.layout (bounds, y);
 }

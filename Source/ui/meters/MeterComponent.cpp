@@ -5,7 +5,7 @@
 
 namespace
 {
-    constexpr float kMeterMinDb = -60.0f;
+    constexpr float kMeterMinDb = -90.0f;
     constexpr float kMeterMaxDb = 0.0f;
 
     static inline juce::String utf8 (const char* s)

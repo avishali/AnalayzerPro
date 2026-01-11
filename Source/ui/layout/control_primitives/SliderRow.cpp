@@ -12,7 +12,7 @@ SliderRow::SliderRow (mdsp_ui::UiContext& ui,
                       double maxValue,
                       double stepValue,
                       double defaultValue)
-    : ui_ (ui),
+    : CompactControlRow (ui),
       slider_ (slider)
 {
     const auto& theme = ui_.theme();
@@ -28,21 +28,45 @@ SliderRow::SliderRow (mdsp_ui::UiContext& ui,
     slider_.setTextBoxStyle (juce::Slider::TextBoxRight, false, m.sliderTextBoxW, m.sliderTextBoxH);
     slider_.setRange (minValue, maxValue, stepValue);
     slider_.setValue (defaultValue, juce::dontSendNotification);
+
+    CompactControlRow::LayoutSpec spec;
+    spec.rowH = m.secondaryHeight + m.sliderH + m.gapSmall;
+    spec.padX = 0;
+    spec.padY = 0;
+    spec.gap = 0;
+    spec.labelW = 0;
+    spec.readoutW = 0;
+    spec.minControlW = 0;
+    setLayoutSpec (spec);
+    setShowLabel (false);
+    setShowReadout (false);
+
+    addAndMakeVisible (label_);
+    addAndMakeVisible (slider_);
 }
 
 void SliderRow::attachToParent (juce::Component& parent)
 {
-    parent.addAndMakeVisible (label_);
-    parent.addAndMakeVisible (slider_);
+    parent.addAndMakeVisible (*this);
 }
 
 void SliderRow::layout (juce::Rectangle<int> bounds, int& y)
 {
     const auto& m = ui_.metrics();
-    label_.setBounds (bounds.getX(), y, bounds.getWidth(), m.secondaryHeight);
+    setBounds (bounds.getX(), y, bounds.getWidth(), getPreferredHeight());
+    y += m.secondaryHeight + m.sliderH + m.gapSmall;
+}
+
+void SliderRow::resized()
+{
+    CompactControlRow::resized();
+
+    const auto& m = ui_.metrics();
+    const auto content = getControlBounds();
+    int y = content.getY();
+    label_.setBounds (content.getX(), y, content.getWidth(), m.secondaryHeight);
     y += m.secondaryHeight;
-    slider_.setBounds (bounds.getX(), y, bounds.getWidth(), m.sliderH);
-    y += m.sliderH + m.gapSmall;
+    slider_.setBounds (content.getX(), y, content.getWidth(), m.sliderH);
 }
 
 } // namespace ControlPrimitives

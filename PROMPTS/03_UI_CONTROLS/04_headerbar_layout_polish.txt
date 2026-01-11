@@ -1,2 +1,27 @@
-# TODO
-# Paste the Cursor prompt text for this task here.
+TASK: UI layout stabilization (HeaderBar + ControlRail sizing)
+
+Subsystem:
+    • HeaderBar / ControlRail / MainView layout
+
+Scope:
+    • Source/ui/layout/HeaderBar.cpp
+    • Source/ui/layout/ControlRail.h
+    • Source/ui/layout/ControlRail.cpp
+    • Source/ui/MainView.cpp
+
+Rules:
+    • Layout only: no visual style changes.
+    • Keep paint() cheap and allocation-free.
+    • No DSP/threading changes.
+    • Minimal diffs.
+
+Goals:
+    1) Fix HeaderBar controls going out of bounds at common window sizes.
+    2) Keep Mode + FFT size + Averaging in the top header zone and visible.
+    3) Ensure ControlRail content fits with no overlaps/clipping.
+    4) Normalize spacing across HeaderBar/ControlRail/FooterBar (use shared metrics).
+
+Acceptance:
+    • No controls out of bounds at min size or typical larger sizes.
+    • All APVTS parameters already present remain visible in the UI.
+    • Build passes with no new warnings.

@@ -11,8 +11,8 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
     addAndMakeVisible (mainView);
 
     // PAZ-like base size
-    static constexpr int kBaseW = 766;
-    static constexpr int kBaseH = 476;
+    static constexpr int kBaseW = 1000;
+    static constexpr int kBaseH = 800;
     
     setResizable (true, true);
     setResizeLimits (kBaseW, kBaseH, 1000, 800);

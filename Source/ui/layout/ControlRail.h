@@ -5,8 +5,8 @@
 #include "../../control/ControlBinder.h"
 #include "control_primitives/SectionHeader.h"
 #include "control_primitives/ChoiceRow.h"
-#include "control_primitives/ToggleRow.h"
 #include "control_primitives/SliderRow.h"
+#include "control_rows/PeakControlsRow.h"
 #include <functional>
 
 //==============================================================================
@@ -23,17 +23,20 @@ public:
     void setControlBinder (AnalyzerPro::ControlBinder& binder);
     void setResetPeaksCallback (std::function<void()> cb);
     void setDbRangeChangedCallback (std::function<void (int)> cb);
+    void setGainChangedCallback (std::function<void (float)> cb);
+    void setGainValue (float gain);
     void paint (juce::Graphics& g) override;
     void resized() override;
+    int getPreferredHeight() const noexcept;
 
 private:
     AnalyzerPro::ControlBinder* controlBinder = nullptr;
 
-    void triggerResetPeaks();
-    std::function<void()> onResetPeaks_;
-
     void triggerDbRangeChanged();
     std::function<void (int)> onDbRangeChanged_;
+
+    void triggerGainChanged();
+    std::function<void (float)> onGainChanged_;
     
     mdsp_ui::UiContext& ui_;
 
@@ -42,12 +45,9 @@ private:
     juce::ComboBox fftSizeCombo;
     juce::ComboBox averagingCombo;
     juce::ComboBox dbRangeCombo;
-    juce::ToggleButton peakHoldButton;
-    juce::ToggleButton holdButton;
-    juce::Slider peakDecaySlider;
     juce::Slider displayGainSlider;
     juce::ComboBox tiltCombo;
-    juce::TextButton resetPeaksButton { "Reset" };
+    juce::Slider gainSlider;
     
     // Section headers (using primitives)
     AnalyzerPro::ControlPrimitives::SectionHeader navigateHeader;
@@ -60,11 +60,10 @@ private:
     AnalyzerPro::ControlPrimitives::ChoiceRow fftSizeRow;
     AnalyzerPro::ControlPrimitives::ChoiceRow averagingRow;
     AnalyzerPro::ControlPrimitives::ChoiceRow dbRangeRow;
-    AnalyzerPro::ControlPrimitives::ToggleRow peakHoldRow;
-    AnalyzerPro::ControlPrimitives::ToggleRow holdRow;
-    AnalyzerPro::ControlPrimitives::SliderRow peakDecayRow;
     AnalyzerPro::ControlPrimitives::SliderRow displayGainRow;
     AnalyzerPro::ControlPrimitives::ChoiceRow tiltRow;
+    AnalyzerPro::ControlPrimitives::SliderRow gainRow;
+    PeakControlsRow peakControlsRow_;
     
     // Navigate section (placeholder)
     juce::Label placeholderLabel1;
@@ -72,8 +71,5 @@ private:
     // Display section (placeholder)
     juce::Label placeholderLabel3;
     
-    // Meters section (placeholder)
-    juce::Label placeholderLabel4;
-
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ControlRail)
 };

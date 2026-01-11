@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <mdsp_ui/UiContext.h>
+#include "CompactControlRow.h"
 
 namespace AnalyzerPro
 {
@@ -17,7 +18,7 @@ namespace ControlPrimitives
         row.attachToParent (parent);
         row.layout (bounds, y);
 */
-class SliderRow
+class SliderRow : public CompactControlRow
 {
 public:
     SliderRow (mdsp_ui::UiContext& ui,
@@ -30,12 +31,12 @@ public:
     
     void attachToParent (juce::Component& parent);
     void layout (juce::Rectangle<int> bounds, int& y);
+    void resized() override;
     
     juce::Label& getLabel() { return label_; }
     juce::Slider& getSlider() { return slider_; }
 
 private:
-    mdsp_ui::UiContext& ui_;
     juce::Label label_;
     juce::Slider& slider_;
 };

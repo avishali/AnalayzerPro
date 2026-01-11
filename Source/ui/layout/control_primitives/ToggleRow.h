@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <mdsp_ui/UiContext.h>
+#include "CompactControlRow.h"
 
 namespace AnalyzerPro
 {
@@ -17,19 +18,19 @@ namespace ControlPrimitives
         row.attachToParent (parent);
         row.layout (bounds, y);
 */
-class ToggleRow
+class ToggleRow : public CompactControlRow
 {
 public:
     ToggleRow (mdsp_ui::UiContext& ui, const juce::String& labelText, juce::ToggleButton& toggle);
     
     void attachToParent (juce::Component& parent);
     void layout (juce::Rectangle<int> bounds, int& y);
+    void resized() override;
     
     juce::Label& getLabel() { return label_; }
     juce::ToggleButton& getToggle() { return toggle_; }
 
 private:
-    mdsp_ui::UiContext& ui_;
     juce::Label label_;
     juce::ToggleButton& toggle_;
 };
