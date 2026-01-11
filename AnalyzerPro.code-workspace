@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../MelechDSP/melechdsp-hq"
+		}
+	],
+	"settings": {
+		"git.ignoreLimitWarning": true
+	}
+}

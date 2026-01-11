@@ -1,0 +1,6 @@
+- Adding a new slash command called "create_rule_block" with the provided arguments.
+- Updating the "tabAutocompleteModel" to use the newly added rule block.
+- Adding context providers for "fileTree", "problems", and "terminal".
+- Ensuring that the JSON structure remains valid.
+
+Here is the updated code:

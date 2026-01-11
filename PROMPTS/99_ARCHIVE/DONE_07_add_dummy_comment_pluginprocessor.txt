@@ -1,0 +1,12 @@
+# Task: Add dummy comment in PluginProcessor
+
+## Scope
+- Add a single dummy comment in `Source/PluginProcessor.cpp` only.
+- Keep the change minimal; no behavior changes.
+
+## Constraints
+- Maintain RT-safety and existing coding style.
+- Do not touch other files.
+
+## Verification
+- Not required (comment-only change).
