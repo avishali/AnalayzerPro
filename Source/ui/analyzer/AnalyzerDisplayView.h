@@ -50,6 +50,9 @@ public:
 
     void paint (juce::Graphics& g) override;
     void resized() override;
+    
+    void mouseDown (const juce::MouseEvent& event) override;
+    void mouseDrag (const juce::MouseEvent& event) override;
 
     void setMode (Mode mode);
     Mode getMode() const noexcept { return currentMode_; }
@@ -61,6 +64,8 @@ public:
     void setPeakDbRange (DbRange r);
     DbRange getPeakDbRange() const noexcept { return peakDbRange_; }
     void triggerPeakFlash();
+    
+    std::function<void(DbRange)> onDbRangeUserChanged;
 
     RTADisplay& getRTADisplay() noexcept { return rtaDisplay; }
     const RTADisplay& getRTADisplay() const noexcept { return rtaDisplay; }
@@ -100,6 +105,10 @@ private:
     DbRange peakDbRange_ = DbRange::Minus90;
     bool peakScaleDirty_ = false;
 
+    juce::Point<float> dragStartPos_;
+    DbRange dragStartDbRange_ = DbRange::Minus120;
+    // int dragStartFftSize_ = 2048; // Unused until X-axis interaction implemented
+
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> minDbAnim_;
     float targetMinDb_ = -120.0f;
     float lastAppliedMinDb_ = -120.0f;
@@ -110,7 +119,7 @@ private:
 
     bool peakFlashActive_ = false;
     double peakFlashUntilMs_ = 0.0;
-    uint32_t lastSequence_ = 0;  // Track sequence to avoid unnecessary updates
+    // uint32_t lastSequence_ = 0;  // Unused
     AnalyzerSnapshot snapshot_;
     AnalyzerSnapshot lastValidSnapshot_;  // Hold last valid frame for grace period
     bool hasLastValid_ = false;

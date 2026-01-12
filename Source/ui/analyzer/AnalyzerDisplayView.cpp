@@ -231,6 +231,68 @@ void AnalyzerDisplayView::paint (juce::Graphics& g)
 #endif
 }
 
+//==============================================================================
+void AnalyzerDisplayView::mouseDown (const juce::MouseEvent& e)
+{
+    dragStartPos_ = e.position;
+    dragStartDbRange_ = dbRange_;
+}
+
+void AnalyzerDisplayView::mouseDrag (const juce::MouseEvent& e)
+{
+    const float dy = e.position.y - dragStartPos_.y;
+    
+    // Y-Axis interaction: Drag Vertical to change DbRange
+    // Threshold: 60 pixels per step feels sufficient
+    // Drag Up (negative Y) -> Increase Range (more negative, e.g. -120dB)
+    // Drag Down (positive Y) -> Decrease Range (less negative, e.g. -60dB)
+    // Map:
+    // -60  (Index 0)
+    // -90  (Index 1)
+    // -120 (Index 2)
+    
+    // If we drag DOWN (+Y), we want to go from -120(2) to -60(0). So current - steps.
+    // If we drag UP (-Y), we want to go from -60(0) to -120(2). So current + steps.
+    
+    // logic: 
+    // deltaY positive (Down): should reduce index?
+    // -120 to -60 is moving "Up" visually? No.
+    // Range -120 is "Larger" range.
+    // Range -60 is "Smaller" range (Zooms in).
+    // Usually Drag Down -> Zoom In. Drag Up -> Zoom Out.
+    // Zoom In = -60. Zoom Out = -120.
+    // So Down (+Y) -> Index 0 (-60).
+    // Up (-Y) -> Index 2 (-120).
+    
+    // Index increases with visual height?
+    // 0: -60
+    // 1: -90
+    // 2: -120
+    
+    // Step = dy / 60.
+    // If dy = +60 (Down), Step = 1.
+    // If I want Down -> Index 0.
+    // If Start is 2 (-120). Down(+60) -> 1 (-90).
+    // So target = Start - Step.
+    
+    const int steps = static_cast<int> (dy / 60.0f);
+    
+    if (steps != 0)
+    {
+        int startIdx = static_cast<int> (dragStartDbRange_);
+        int targetIdx = juce::jlimit (0, 2, startIdx - steps);
+        
+        DbRange nextRange = static_cast<DbRange> (targetIdx);
+        
+        if (nextRange != dbRange_)
+        {
+            setDbRange (nextRange);
+            if (onDbRangeUserChanged)
+                onDbRangeUserChanged (nextRange);
+        }
+    }
+}
+
 void AnalyzerDisplayView::resized()
 {
     rtaDisplay.setBounds (getLocalBounds());

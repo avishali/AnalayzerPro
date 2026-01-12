@@ -1,0 +1,196 @@
+MELECHDSP RUNBOOK — ADD_STEREO_SCOPE_V1
+Project: AnalyzerPro
+Scope: DSP + UI feature (Stereo Scope like PAZ Analyzer)
+
+================================================================
+GLOBAL RULES
+================================================================
+
+You MUST obey 00_SYSTEM_RULES.txt.
+
+This runbook explicitly allows DSP + UI changes.
+Still enforce:
+- Minimal diffs
+- No unrelated refactors
+- No formatting-only changes
+
+STOP after each step.
+
+================================================================
+OBJECTIVE
+================================================================
+
+Add a Stereo Scope visualization comparable in function (not appearance) to “PAZ Analyzer”:
+- Displays stereo image over time (L/R correlation / stereo width visualization)
+- Real-time, stable, no jitter
+- Works with existing AnalyzerPro design system (UiContext tokens)
+- Performs safely in real-time (no allocations in audio thread)
+
+Non-goals (for v1):
+- Perfect PAZ feature parity
+- Preset system changes
+- Export/screenshot
+- Multiple scope modes (keep one scope mode only)
+
+================================================================
+FEATURE DEFINITION (v1)
+================================================================
+
+Stereo Scope v1 should provide:
+1) A stereo vectorscope-style plot (X = L, Y = R) OR (X = Mid, Y = Side)
+   - Choose one mapping and document it in code comments.
+2) Optional persistence/decay (simple trail)
+3) Fixed, stable scaling (with gentle auto-gain optional but conservative)
+4) Visual grid + center lines
+5) Runs at UI rate (timer/repaint), fed from lock-free audio capture
+
+================================================================
+STEP 0 — DESIGN CHOICES (LOCK BEFORE CODING)
+================================================================
+
+Choose and lock these decisions in code comments at the top of the new scope class:
+
+A) Mapping (pick ONE):
+- Option 1: X=L, Y=R
+- Option 2: X=Mid, Y=Side
+
+B) Buffer strategy (pick ONE):
+- Ring buffer of points per channel block (recommended)
+- Downsampled history buffer (recommended)
+
+C) Persistence (pick ONE):
+- No persistence (instant dots only)
+- Simple trail with alpha decay (recommended)
+
+D) Placement:
+- Add as a new view in the center area (toggleable), OR
+- Replace existing placeholder/phase view
+
+For v1, prefer:
+- Mapping: Mid/Side
+- Buffer: lock-free ring buffer
+- Persistence: simple decay
+- Placement: a new “Stereo” tab/button in header OR a toggle in ControlRail
+(If you already have a Phase view placeholder, you may reuse its region.)
+
+STOP AFTER DONE
+
+================================================================
+STEP 1 — DSP CAPTURE PIPELINE (REAL-TIME SAFE)
+================================================================
+
+TASK:
+Capture stereo sample pairs in the audio thread and expose them to the UI without locks.
+
+Rules:
+- No allocations on audio thread
+- No locks on audio thread
+- No JUCE heavyweight calls on audio thread
+- Minimize copying
+
+Implementation requirements:
+1) Create a dedicated data structure:
+   - StereoScopeRingBuffer (fixed capacity)
+   - Stores pairs: (float a, float b) where a/b are L/R or M/S
+2) On processBlock:
+   - Read samples (or a decimated subset)
+   - Push to ring buffer
+3) Provide UI thread read access:
+   - Copy out a snapshot of N points into a preallocated UI buffer
+   - Use atomic write indices (single-producer/single-consumer)
+
+Acceptance:
+- Compiles
+- Verified no allocations in processBlock
+- Stable output when audio runs
+
+STOP AFTER DONE
+
+================================================================
+STEP 2 — UI COMPONENT: StereoScopeView (DRAW ONLY)
+================================================================
+
+TASK:
+Implement a new UI component that renders the stereo scope using UiContext tokens.
+
+Rules:
+- The view must take mdsp_ui::UiContext& in constructor (ui_)
+- No hardcoded colors/spacing/fonts; use ui_.theme(), ui_.metrics(), ui_.type()
+- No allocations in paint()
+- Use cached Paths if needed (but build/update them outside paint when possible)
+
+Rendering requirements:
+1) Draw background panel (Theme background/panel)
+2) Draw grid (minor/major) using Theme grid colors
+3) Draw center axes lines
+4) Draw points/trail with reasonable alpha
+5) Clip to plot bounds
+
+Data pull requirements:
+- The view requests point snapshots from the processor/engine-side provider
+- UI timer triggers repaint (existing UI repaint cadence is OK)
+
+Acceptance:
+- Compiles
+- Renders stable scope
+- Resizes correctly
+
+STOP AFTER DONE
+
+================================================================
+STEP 3 — INTEGRATION INTO MAINVIEW LAYOUT
+================================================================
+
+TASK:
+Integrate StereoScopeView into MainView and ensure layout consistency.
+
+Rules:
+- MainView owns layout only
+- Use ui_.metrics() for any sizing/padding
+- Do not change overall AnalyzerPro layout unless required
+
+Implementation options:
+A) Add a toggle/tab (HeaderBar recommended) to switch center view:
+   - Analyzer (existing)
+   - Stereo (new scope)
+B) Alternatively add a split view (NOT recommended for v1)
+
+Acceptance:
+- Toggle works
+- No regressions in existing Analyzer view
+
+STOP AFTER DONE
+
+================================================================
+STEP 4 — PARAMETERS / CONTROLS (OPTIONAL FOR v1, BUT CLEAN)
+================================================================
+
+TASK:
+Add minimal controls (only if needed) to make scope usable:
+- Persistence amount (0..1) OR on/off
+- Gain/scale (optional)
+- Mode label
+
+Rules:
+- Keep it minimal
+- Use existing ControlRail patterns and UiContext tokens
+
+STOP AFTER DONE
+
+================================================================
+STEP 5 — VALIDATION / PERFORMANCE CHECK
+================================================================
+
+Checklist:
+- No allocations in audio thread
+- No locks in audio thread
+- UI paint has no allocations
+- CPU stable at typical buffer sizes
+- Visual stable across resizing
+- Works in mono/stereo input cases (define behavior: if mono, show line/point)
+
+STOP AFTER DONE
+
+================================================================
+END OF RUNBOOK
+================================================================

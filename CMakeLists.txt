@@ -207,10 +207,6 @@ target_sources(${PLUGIN_NAME}
         Source/ui/layout/HeaderBar.cpp
         Source/ui/layout/ControlRail.cpp
         Source/ui/layout/FooterBar.cpp
-        Source/ui/layout/control_primitives/SectionHeader.cpp
-        Source/ui/layout/control_primitives/ChoiceRow.cpp
-        Source/ui/layout/control_primitives/ToggleRow.cpp
-        Source/ui/layout/control_primitives/SliderRow.cpp
         Source/ui/views/AnalyzerGridPlaceholder.cpp
         Source/ui/views/PhaseCorrelationView.cpp
         Source/audio/DeviceRoutingHelper.cpp

@@ -8,7 +8,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
       analyzerHeader (ui, "Analyzer"),
       displayHeader (ui, "Display"),
       metersHeader (ui, "Meters"),
-      dbRangeRow (ui, "dB Range", dbRangeCombo),
+      // dbRangeRow removed
       peakHoldRow (ui, "Peak Hold", peakHoldButton),
       holdRow (ui, "Hold", holdButton),
       peakDecayRow (ui, "Peak Decay", peakDecaySlider, 0.0, 10.0, 0.1, 1.0),
@@ -17,7 +17,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
 {
     const auto& theme = ui_.theme();
     const auto& type = ui_.type();
-    const auto& m = ui_.metrics();
+    // const auto& m = ui_.metrics(); // Unused in constructor
 
     // Attach section headers to parent
     navigateHeader.attachToParent (*this);
@@ -26,7 +26,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     metersHeader.attachToParent (*this);
 
     // Attach control rows to parent
-    dbRangeRow.attachToParent (*this);
+    // dbRangeRow.attachToParent (*this);
     peakHoldRow.attachToParent (*this);
     holdRow.attachToParent (*this);
     peakDecayRow.attachToParent (*this);
@@ -34,14 +34,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     tiltRow.attachToParent (*this);
 
     // Configure combos (items and defaults)
-    dbRangeCombo.addItem ("-60 dB", 1);
-    dbRangeCombo.addItem ("-90 dB", 2);
-    dbRangeCombo.addItem ("-120 dB", 3);
-    dbRangeCombo.setSelectedId (3, juce::dontSendNotification);  // Default: -120 dB
-    dbRangeCombo.onChange = [this]
-    {
-        triggerDbRangeChanged();
-    };
+    // DbRange combo removed
     
     tiltCombo.addItem ("Flat", 1);
     tiltCombo.addItem ("Pink", 2);
@@ -110,16 +103,7 @@ void ControlRail::triggerResetPeaks()
         onResetPeaks_();
 }
 
-void ControlRail::setDbRangeChangedCallback (std::function<void (int)> cb)
-{
-    onDbRangeChanged_ = std::move (cb);
-}
-
-void ControlRail::triggerDbRangeChanged()
-{
-    if (onDbRangeChanged_ != nullptr)
-        onDbRangeChanged_ (dbRangeCombo.getSelectedId());
-}
+// DbRange callbacks removed
 
 void ControlRail::paint (juce::Graphics& g)
 {
@@ -145,7 +129,7 @@ void ControlRail::resized()
     // Section 2: Analyzer
     analyzerHeader.layout (bounds, y);
     
-    dbRangeRow.layout (bounds, y);
+    // dbRangeRow.layout (bounds, y);
     peakHoldRow.layout (bounds, y);
     
     // Hold (special case: reset button next to hold button)

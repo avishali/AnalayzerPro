@@ -14,13 +14,21 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     titleLabel.setColour (juce::Label::textColourId, theme.lightGrey);
     addAndMakeVisible (titleLabel);
 
-    // Mode control (authoritative)
-    modeCombo_.addItem ("FFT", 1);
-    modeCombo_.addItem ("BANDS", 2);
-    modeCombo_.addItem ("LOG", 3);
-    modeCombo_.setSelectedId (1, juce::dontSendNotification);
-    modeCombo_.setTooltip ("Analyzer Mode");
-    addAndMakeVisible (modeCombo_);
+    // Mode Toggles (replacing combo)
+    auto initModeBtn = [&](juce::TextButton& b, const juce::String& text, int id)
+    {
+        b.setButtonText (text);
+        b.setRadioGroupId (1001);
+        b.setClickingTogglesState (true);
+        b.setColour (juce::TextButton::buttonColourId, theme.background.brighter (0.05f));
+        b.setColour (juce::TextButton::buttonOnColourId, theme.accent);
+        b.onClick = [this, id] { if (onModeChanged) onModeChanged (id); };
+        addAndMakeVisible (b);
+    };
+    initModeBtn (fftButton_, "FFT", 1);
+    initModeBtn (bandButton_, "BAND", 2);
+    initModeBtn (logButton_, "LOG", 3);
+    fftButton_.setToggleState (true, juce::dontSendNotification);
 
     // FFT Size control
     fftSizeCombo_.addItem ("1024", 1);
@@ -54,18 +62,8 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     menuButton.setEnabled (false);
     addAndMakeVisible (menuButton);
 
-    dbRangeBox_.addItem ("-60 dB", 1);
-    dbRangeBox_.addItem ("-90 dB", 2);
-    dbRangeBox_.addItem ("-120 dB", 3);
-    dbRangeBox_.setSelectedId (3, juce::dontSendNotification);
-    dbRangeBox_.setTooltip ("dB Range");
-    dbRangeBox_.onChange = [this]
-    {
-        if (onDbRangeChanged)
-            onDbRangeChanged (dbRangeBox_.getSelectedId());
-    };
-    addAndMakeVisible (dbRangeBox_);
-
+    // DbRange Removed from UI
+    
     peakRangeBox_.addItem ("-60 dB", 1);
     peakRangeBox_.addItem ("-90 dB", 2);
     peakRangeBox_.addItem ("-120 dB", 3);
@@ -112,6 +110,7 @@ void HeaderBar::resized()
     static constexpr int controlH = 22;
     static constexpr int comboW = 112;
     static constexpr int smallBtnW = 22;
+    static constexpr int modeBtnW = 60; // Button width for toggles
     
     const auto& m = ui_.metrics();
     auto area = getLocalBounds().reduced (headerPadX, 0);
@@ -119,10 +118,11 @@ void HeaderBar::resized()
     const int controlTop = centerY - controlH / 2;
     const int buttonTop = centerY - controlH / 2;
 
-    // Right zone: dB Range + Peak Range + Reset + Preset/Save/Menu buttons
-    const int rightZoneWidth = comboW * 2  // dB Range + Peak Range combos
+    // Right zone: Peak Range + Reset + Preset/Save/Menu buttons
+    // Removed DbRange
+    const int rightZoneWidth = comboW        // Peak Range only
                               + headerGap
-                              + smallBtnW  // Reset button
+                              + smallBtnW    // Reset button
                               + headerGap
                               + m.headerButtonW * 3  // Preset/Save/Menu
                               + headerGap * 2;
@@ -145,15 +145,18 @@ void HeaderBar::resized()
     rightZone.removeFromRight (headerGap);
     
     peakRangeBox_.setBounds (rightZone.removeFromRight (comboW).getX(), controlTop, comboW, controlH);
-    rightZone.removeFromRight (headerGap);
-    
-    dbRangeBox_.setBounds (rightZone.removeFromRight (comboW).getX(), controlTop, comboW, controlH);
 
-    // Left zone: Mode + FFT Size + Averaging
-    const int leftZoneWidth = comboW * 3 + headerGap * 2;
+    // Left zone: Mode Buttons (x3) + FFT Size + Averaging
+    const int leftZoneWidth = (modeBtnW * 3 + headerGap) // Mode Group
+                              + headerGap
+                              + comboW * 2               // FFT + Avg
+                              + headerGap * 2;
     auto leftZone = area.removeFromLeft (leftZoneWidth);
     
-    modeCombo_.setBounds (leftZone.removeFromLeft (comboW).getX(), controlTop, comboW, controlH);
+    // Mode Buttons
+    fftButton_.setBounds (leftZone.removeFromLeft (modeBtnW).getX(), controlTop, modeBtnW, controlH);
+    bandButton_.setBounds (leftZone.removeFromLeft (modeBtnW).getX(), controlTop, modeBtnW, controlH);
+    logButton_.setBounds (leftZone.removeFromLeft (modeBtnW).getX(), controlTop, modeBtnW, controlH);
     leftZone.removeFromLeft (headerGap);
     
     fftSizeCombo_.setBounds (leftZone.removeFromLeft (comboW).getX(), controlTop, comboW, controlH);
@@ -174,18 +177,22 @@ void HeaderBar::setControlBinder (AnalyzerPro::ControlBinder& binder)
     
     if (controlBinder != nullptr)
     {
-        controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerMode, modeCombo_);
+        // Mode binding is now Manual (via onModeChanged callback)
+        // controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerMode, modeCombo_);
+        
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerFftSize, fftSizeCombo_);
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerAveraging, averagingCombo_);
     }
 }
 
-void HeaderBar::setDbRangeSelectedId (int id)
-{
-    dbRangeBox_.setSelectedId (id, juce::dontSendNotification);
-}
-
 void HeaderBar::setPeakRangeSelectedId (int id)
 {
     peakRangeBox_.setSelectedId (id, juce::dontSendNotification);
+}
+
+void HeaderBar::setMode (int modeIndex)
+{
+    if (modeIndex == 1) fftButton_.setToggleState (true, juce::dontSendNotification);
+    else if (modeIndex == 2) bandButton_.setToggleState (true, juce::dontSendNotification);
+    else if (modeIndex == 3) logButton_.setToggleState (true, juce::dontSendNotification);
 }

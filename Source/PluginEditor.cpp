@@ -6,8 +6,12 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
     : AudioProcessorEditor (&p),
       audioProcessor (p),
       ui_ (mdsp_ui::ThemeVariant::Dark),  // Default to Dark theme (Phase 1)
+      lnf_ (ui_),
       mainView (ui_, p, &p.getAPVTS())
 {
+    // Apply custom LookAndFeel globally
+    juce::LookAndFeel::setDefaultLookAndFeel (&lnf_);
+
     addAndMakeVisible (mainView);
 
     // PAZ-like base size

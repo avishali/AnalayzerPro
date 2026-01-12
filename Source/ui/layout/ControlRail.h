@@ -3,10 +3,10 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <mdsp_ui/UiContext.h>
 #include "../../control/ControlBinder.h"
-#include "control_primitives/SectionHeader.h"
-#include "control_primitives/ChoiceRow.h"
-#include "control_primitives/ToggleRow.h"
-#include "control_primitives/SliderRow.h"
+#include <mdsp_ui/controls/SectionHeader.h>
+#include <mdsp_ui/controls/ChoiceRow.h>
+#include <mdsp_ui/controls/ToggleRow.h>
+#include <mdsp_ui/controls/SliderRow.h>
 #include <functional>
 
 //==============================================================================
@@ -22,7 +22,7 @@ public:
 
     void setControlBinder (AnalyzerPro::ControlBinder& binder);
     void setResetPeaksCallback (std::function<void()> cb);
-    void setDbRangeChangedCallback (std::function<void (int)> cb);
+    // DbRange removed
     void paint (juce::Graphics& g) override;
     void resized() override;
 
@@ -32,13 +32,12 @@ private:
     void triggerResetPeaks();
     std::function<void()> onResetPeaks_;
 
-    void triggerDbRangeChanged();
-    std::function<void (int)> onDbRangeChanged_;
+    // DbRange callback removed
     
     mdsp_ui::UiContext& ui_;
 
     // Underlying controls (must be declared before primitives that reference them)
-    juce::ComboBox dbRangeCombo;
+    // juce::ComboBox dbRangeCombo; // Removed
     juce::ToggleButton peakHoldButton;
     juce::ToggleButton holdButton;
     juce::Slider peakDecaySlider;
@@ -47,18 +46,18 @@ private:
     juce::TextButton resetPeaksButton { "Reset" };
     
     // Section headers (using primitives)
-    AnalyzerPro::ControlPrimitives::SectionHeader navigateHeader;
-    AnalyzerPro::ControlPrimitives::SectionHeader analyzerHeader;
-    AnalyzerPro::ControlPrimitives::SectionHeader displayHeader;
-    AnalyzerPro::ControlPrimitives::SectionHeader metersHeader;
+    mdsp_ui::SectionHeader navigateHeader;
+    mdsp_ui::SectionHeader analyzerHeader;
+    mdsp_ui::SectionHeader displayHeader;
+    mdsp_ui::SectionHeader metersHeader;
     
     // Control rows (using primitives - reference controls above)
-    AnalyzerPro::ControlPrimitives::ChoiceRow dbRangeRow;
-    AnalyzerPro::ControlPrimitives::ToggleRow peakHoldRow;
-    AnalyzerPro::ControlPrimitives::ToggleRow holdRow;
-    AnalyzerPro::ControlPrimitives::SliderRow peakDecayRow;
-    AnalyzerPro::ControlPrimitives::SliderRow displayGainRow;
-    AnalyzerPro::ControlPrimitives::ChoiceRow tiltRow;
+    // mdsp_ui::ChoiceRow dbRangeRow; // Removed
+    mdsp_ui::ToggleRow peakHoldRow;
+    mdsp_ui::ToggleRow holdRow;
+    mdsp_ui::SliderRow peakDecayRow;
+    mdsp_ui::SliderRow displayGainRow;
+    mdsp_ui::ChoiceRow tiltRow;
     
     // Navigate section (placeholder)
     juce::Label placeholderLabel1;
