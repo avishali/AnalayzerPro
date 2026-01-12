@@ -1,0 +1,117 @@
+YOU ARE WORKING IN A PROFESSIONAL AUDIO PLUGIN CODEBASE (AnalyzerPro / MelechDSP).
+
+THIS IS A CONTROLLED, LONG-LIVED PROJECT.
+CORRECTNESS, RT SAFETY, AND MINIMAL DIFFS ARE MANDATORY.
+
+GLOBAL BEHAVIOR RULES (NON-NEGOTIABLE):
+
+1) DO NOT:
+   - Redefine classes inside .cpp files.
+   - Rewrite entire files unless explicitly instructed.
+   - Invent new architecture, managers, or abstractions.
+   - Allocate, resize, or create objects on the audio thread.
+   - Move logic between Engine and UI layers.
+
+2) REAL-TIME SAFETY:
+   - AnalyzerEngine and DSP code must be RT-safe.
+   - No malloc/new/vector.resize/FFT creation in processBlock().
+   - Expensive operations must be deferred or message-thread–applied.
+
+3) UI VS ENGINE CONTRACT:
+   - Engine owns DSP, math, buffers, analysis state.
+   - UI owns mapping, clamping, animation, visualization, UX.
+   - UI may NEVER modify engine buffers directly.
+   - Engine may NEVER know about grids, dB ranges, animation, or colors.
+
+4) SCOPE DISCIPLINE:
+   - Touch ONLY the files explicitly listed in the task.
+   - If more files seem required, STOP and ASK.
+   - Prefer minimal diffs over “clean” rewrites.
+
+5) PARAMETERS:
+   - APVTS is the single source of truth.
+   - Cache raw parameter pointers when appropriate.
+   - Avoid per-block or per-frame parameter churn.
+
+6) STYLE:
+   - Prefer explicit code over clever code.
+   - Prefer named constants over magic numbers.
+   - Preserve existing naming and conventions.
+   - No speculative refactors.
+
+7) FAIL FAST:
+   - If a task is ambiguous, DO NOT GUESS.
+   - If instructions conflict, STOP and ASK.
+
+----------------------------------------------------------------
+
+TASK EXECUTION MODEL (MANDATORY):
+
+- ONE PROMPT = ONE TASK.
+- Large features MUST be split into phased prompts.
+- Each prompt must declare:
+    * Subsystem
+    * Scope (exact files)
+    * Rules
+    * Steps
+    * Acceptance criteria
+
+Use the following TEMPLATE TYPES as appropriate:
+
+ENGINE TASK:
+- DSP, AnalyzerEngine, RT-critical logic
+- No UI changes allowed
+
+UI ANALYZER TASK:
+- AnalyzerDisplayView / RTADisplay
+- Visualization only (FFT, peaks, grid, animation)
+
+UI CONTROLS TASK:
+- HeaderBar / MainView / Editor
+- Buttons, combos, shortcuts, wiring
+
+PERFORMANCE TASK:
+- Churn reduction, caching, guards
+- Behavior must remain identical
+
+REFACTOR GUARD TASK:
+- Readability, constants, intent clarification
+- Zero behavior change
+
+MULTI-PHASE FEATURE:
+- Implement ONE phase only
+- Do not pre-empt later phases
+
+----------------------------------------------------------------
+
+CURRENT PROJECT CONTEXT (IMPORTANT):
+
+- FFT resizing is deferred (request/apply model).
+- FFT bin count contract is fftSize/2+1.
+- AnalyzerDisplayView owns all dB mapping and visualization.
+- RTADisplay is dumb: it draws what it is given.
+- User-selectable dB ranges exist (-60 / -90 / -120).
+- FFT and Peak ranges may be independent.
+- Peak reset exists with:
+    * HeaderBar icon button
+    * ⌥⌘R shortcut
+    * Subtle UI-only flash feedback
+- Peak flash is UI-only and must not touch engine state.
+- Legacy peak invalid sentinel exists and is UI-only.
+
+----------------------------------------------------------------
+
+WHEN IMPLEMENTING ANY TASK:
+
+- Make the smallest correct change.
+- Do not “improve” unrelated code.
+- Do not reformat entire files.
+- Do not remove comments unless instructed.
+- Always satisfy Acceptance criteria exactly.
+
+If at any point you are unsure:
+STOP.
+ASK FOR CLARIFICATION.
+DO NOT PROCEED.
+
+BEGIN TASK ONLY AFTER CONFIRMING ALL OF THE ABOVE.

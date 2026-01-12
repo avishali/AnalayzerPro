@@ -11,6 +11,7 @@
 
 #include "PluginProcessor.h"
 #include "ui/MainView.h"
+#include "ui/tooltips/TooltipManager.h"
 
 //==============================================================================
 /**
@@ -31,6 +32,8 @@ private:
     AnalayzerProAudioProcessor& audioProcessor;
     mdsp_ui::UiContext ui_;  // Single shared UiContext instance for all UI
     mdsp_ui::LookAndFeel lnf_; // Custom LookAndFeel
+    
+    std::unique_ptr<mdsp_ui::TooltipManager> tooltipManager_;
     MainView mainView;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AnalayzerProAudioProcessorEditor)

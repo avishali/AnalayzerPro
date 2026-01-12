@@ -1,41 +1,43 @@
-MASTER CURSOR RUNBOOK — FIGMA TOKEN IMPORT v1
+MELECHDSP UI RUNBOOK — FIGMA_TOKEN_IMPORT_V1
+Project: All plugins
+Scope: Design token updates ONLY
 
 ================================================================
-GLOBAL RULES (MANDATORY)
+GLOBAL RULES
 ================================================================
 
-You MUST obey all rules defined in 00_SYSTEM_RULES.txt.
+Obey 00_SYSTEM_RULES.txt.
 
-This runbook ONLY affects design tokens.
-NO UI layout changes allowed.
-
-STOP after each step.
+NO UI layout changes.
+NO refactors.
 
 ================================================================
-STEP 0 — SESSION INITIALIZATION
+OBJECTIVE
+================================================================
+
+Apply Figma design tokens to mdsp_ui without touching UI code.
+
+================================================================
+STEP 0 — SESSION SETUP
 ================================================================
 
 Context:
-Figma design tokens are now finalized.
-We will map tokens into mdsp_ui without touching UI code.
+Figma system is finalized.
+Tokens are available.
 
 STOP AFTER DONE
 
 ================================================================
-STEP 1 — COLOR TOKEN MAPPING
+STEP 1 — THEME TOKEN MAPPING
 ================================================================
 
 TASK:
-Map Figma color tokens to mdsp_ui::Theme.
+Update mdsp_ui::Theme palettes.
 
 Rules:
 - Semantic mapping only
 - Do NOT rename Theme fields
-- Do NOT add plugin-specific colors
-
-Acceptance:
-- Dark and Light palettes compile
-- UI switches palette via UiContext only
+- Update values only
 
 STOP AFTER DONE
 
@@ -44,15 +46,11 @@ STEP 2 — METRICS TOKEN MAPPING
 ================================================================
 
 TASK:
-Map Figma spacing/radius tokens to mdsp_ui::Metrics.
+Update mdsp_ui::Metrics values.
 
 Rules:
-- Maintain existing field names
-- Adjust values only
-
-Acceptance:
-- UI spacing updates globally
-- No layout breakage
+- No field renames
+- No new fields unless explicitly approved
 
 STOP AFTER DONE
 
@@ -61,15 +59,11 @@ STEP 3 — TYPOGRAPHY TOKEN MAPPING
 ================================================================
 
 TASK:
-Map Figma typography scale to mdsp_ui::Typography.
+Update mdsp_ui::Typography scale.
 
 Rules:
-- Use font sizes only
-- Font families may be stubbed initially
-
-Acceptance:
-- Text scales correctly
-- No clipping or overflow
+- Font sizes only
+- Font families may be stubbed
 
 STOP AFTER DONE
 
@@ -78,11 +72,13 @@ STEP 4 — VALIDATION
 ================================================================
 
 TASK:
-Verify AnalyzerPro and one additional plugin (if available).
+Validate at least:
+- AnalyzerPro
+- One additional plugin (if available)
 
-Acceptance:
-- No UI refactors required
-- Token-only changes applied
+Rules:
+- No UI refactors allowed
+- Token-only changes
 
 STOP AFTER DONE
 

@@ -14,6 +14,7 @@ ap::control::ParamIdMap ap::control::makeDefaultParamIdMap()
     m[ap::control::ControlId::AnalyzerPeakDecay] = "PeakDecay";
     m[ap::control::ControlId::AnalyzerDisplayGain] = "DisplayGain";
     m[ap::control::ControlId::AnalyzerTilt] = "Tilt";
+    m[ap::control::ControlId::MasterBypass] = "Bypass";
     
     return [m](ap::control::ControlId id) -> juce::String
     {

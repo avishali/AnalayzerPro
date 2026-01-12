@@ -12,15 +12,38 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
     // Apply custom LookAndFeel globally
     juce::LookAndFeel::setDefaultLookAndFeel (&lnf_);
 
+
+    // Init Tooltips
+    tooltipManager_ = std::make_unique<mdsp_ui::TooltipManager> (*this, ui_);
+    mainView.setTooltipManager (tooltipManager_.get());
+
     addAndMakeVisible (mainView);
 
-    // PAZ-like base size
-    static constexpr int kBaseW = 766;
-    static constexpr int kBaseH = 476;
+    // Restore State Size or Default to Screen 70%
+    const int storedW = p.getEditorWidth();
+    const int storedH = p.getEditorHeight();
     
-    setResizable (true, true);
-    setResizeLimits (kBaseW, kBaseH, 1000, 800);
-    setSize (kBaseW, kBaseH);
+    setResizeLimits (800, 400, 10000, 10000);
+
+    if (storedW > 0 && storedH > 0)
+    {
+        // Use stored size
+        setSize (storedW, storedH);
+    }
+    else
+    {
+        // First Run: Default 1300px Width, 70% Height (User Requested)
+        auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
+        if (display != nullptr)
+        {
+            const auto area = display->userArea;
+            setSize (1300, static_cast<int> (area.getHeight() * 0.7));
+        }
+        else
+        {
+            setSize (1300, 700);
+        }
+    }
 }
 
 
@@ -43,4 +66,5 @@ void AnalayzerProAudioProcessorEditor::paint (juce::Graphics& g)
 void AnalayzerProAudioProcessorEditor::resized()
 {
     mainView.setBounds (getLocalBounds());
+    audioProcessor.setEditorSize (getWidth(), getHeight());
 }

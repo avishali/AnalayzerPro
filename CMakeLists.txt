@@ -213,6 +213,10 @@ target_sources(${PLUGIN_NAME}
         Source/ui/views/PhaseCorrelationView.cpp
         Source/audio/DeviceRoutingHelper.cpp
         Source/audio/DeviceRoutingHelper.h
+        Source/ui/tooltips/TooltipManager.cpp
+        Source/ui/tooltips/TooltipOverlayComponent.cpp
+        Source/state/PresetManager.cpp
+        Source/state/StateManager.cpp
         # ui_core OBJECT sources get added below via TARGET_OBJECTS
 )
 

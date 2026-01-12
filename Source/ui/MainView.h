@@ -3,6 +3,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <mdsp_ui/UiContext.h>
+#include "ui/tooltips/TooltipManager.h" // Added include
 #include "../PluginProcessor.h"
 #include <ui_core/UiCore.h>
 #include "hardware/PluginHardwareAdapter.h"
@@ -45,10 +46,15 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    
+    void setTooltipManager (mdsp_ui::TooltipManager* manager);
 
     /** Shutdown: stop timers, clear callbacks, detach listeners. Safe to call multiple times. */
     void shutdown();
-
+    
+    // Tooltips
+    mdsp_ui::TooltipManager* tooltipManager_ = nullptr;
+    
 #if JUCE_DEBUG
     /** DEBUG: Audit APVTS parameters for missing UI bindings (runs once at startup) */
     void auditApvtsParameters();

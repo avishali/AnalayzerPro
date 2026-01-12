@@ -1,83 +1,81 @@
-MASTER CURSOR RUNBOOK — CONTROL PRIMITIVES EXTRACTION v1
+MELECHDSP UI RUNBOOK — CONTROL_PRIMITIVES_EXTRACTION
+Project: AnalyzerPro (reference)
+Scope: Internal UI cleanup (NO redesign)
 
 ================================================================
-GLOBAL RULES (MANDATORY)
+GLOBAL RULES
 ================================================================
 
-You MUST obey all rules defined in 00_SYSTEM_RULES.txt.
+Obey 00_SYSTEM_RULES.txt.
 
-This runbook extracts reusable UI primitives.
-NO behavior change allowed.
-
-STOP after each step.
+NO behavior change.
+NO visual redesign.
 
 ================================================================
-STEP 0 — SESSION INITIALIZATION
+OBJECTIVE
+================================================================
+
+Prepare reusable control primitives without breaking AnalyzerPro.
+
+This is a refactor for clarity and reuse.
+
+================================================================
+STEP 0 — SESSION SETUP
 ================================================================
 
 Context:
-AnalyzerPro ControlRail is the reference implementation.
-We will extract patterns, not redesign visuals.
+ControlRail is the reference implementation.
 
 STOP AFTER DONE
 
 ================================================================
-STEP 1 — IDENTIFY PRIMITIVES
+STEP 1 — PATTERN IDENTIFICATION
 ================================================================
 
 TASK:
-Identify repeated control patterns in ControlRail.
+Identify repeated control patterns inside ControlRail.
 
-Expected primitives:
-- SectionHeader
-- ChoiceRow (Label + Combo)
-- ToggleRow (Label + Toggle)
-- SliderRow (Label + Slider + Value)
-- ControlGroup (vertical stack)
+Expected patterns:
+- Section headers
+- Label + Combo rows
+- Label + Toggle rows
+- Slider + Value rows
+- Grouped vertical stacks
 
 Rules:
-- Do NOT move code yet
-- Document patterns mentally via code inspection only
+- Do NOT extract yet
+- Do NOT change code
+- Inspection only
 
 STOP AFTER DONE
 
 ================================================================
-STEP 2 — NORMALIZE METRICS USAGE
+STEP 2 — METRICS NORMALIZATION
 ================================================================
 
 TASK:
-Ensure all primitives use:
+Ensure all control layout uses:
 - ui_.metrics()
 - ui_.theme()
 - ui_.type()
 
 Rules:
-- No magic numbers
-- No local colors
-- No font literals
-
-Acceptance:
-- ControlRail still identical visually
-- Metrics fully centralized
+- Remove remaining magic numbers
+- No layout change
 
 STOP AFTER DONE
 
 ================================================================
-STEP 3 — OPTIONAL EXTRACTION (SAFE MODE)
+STEP 3 — SAFE EXTRACTION (OPTIONAL)
 ================================================================
 
 TASK:
-Optionally extract primitives into local helper classes
-INSIDE THE PLUGIN (not mdsp_ui yet).
+Optionally extract primitives as PRIVATE helpers.
 
 Rules:
-- No public API exposure
-- No shared headers yet
-- Keep AnalyzerPro compiling at all times
-
-Acceptance:
-- ControlRail simpler
-- No regression
+- Keep inside plugin (not mdsp_ui yet)
+- No new public headers
+- No behavior change
 
 STOP AFTER DONE
 

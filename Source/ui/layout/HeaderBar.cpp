@@ -1,5 +1,7 @@
 #include "HeaderBar.h"
+#include "HeaderBar.h"
 #include "../../control/ControlIds.h"
+#include "../../control/ControlBinder.h"
 
 //==============================================================================
 HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
@@ -50,44 +52,87 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     averagingCombo_.setTooltip ("Averaging");
     addAndMakeVisible (averagingCombo_);
 
-    presetButton.setButtonText ("Preset");
-    presetButton.setEnabled (false);
-    addAndMakeVisible (presetButton);
-
-    saveButton.setButtonText ("Save");
-    saveButton.setEnabled (false);
-    addAndMakeVisible (saveButton);
-
-    menuButton.setButtonText ("Menu");
-    menuButton.setEnabled (false);
-    addAndMakeVisible (menuButton);
-
-    // DbRange Removed from UI
-    
-    peakRangeBox_.addItem ("-60 dB", 1);
-    peakRangeBox_.addItem ("-90 dB", 2);
-    peakRangeBox_.addItem ("-120 dB", 3);
-    peakRangeBox_.setSelectedId (2, juce::dontSendNotification);
-    peakRangeBox_.setTooltip ("Peak Range");
-    peakRangeBox_.onChange = [this]
-    {
-        if (onPeakRangeChanged)
-            onPeakRangeChanged (peakRangeBox_.getSelectedId());
-    };
-    addAndMakeVisible (peakRangeBox_);
-
-    resetPeaksButton_.setButtonText (juce::String (juce::CharPointer_UTF8 ("⟲")));
-    resetPeaksButton_.setTooltip (juce::String (juce::CharPointer_UTF8 ("Reset Peaks (⌥⌘R)")));
-    resetPeaksButton_.setColour (juce::TextButton::buttonColourId, theme.transparentBlack);
-    resetPeaksButton_.setColour (juce::TextButton::buttonOnColourId, theme.transparentBlack);
-    resetPeaksButton_.setColour (juce::TextButton::textColourOffId, theme.lightGrey);
-    resetPeaksButton_.setColour (juce::TextButton::textColourOnId, theme.lightGrey);
     resetPeaksButton_.onClick = [this]
     {
         if (onResetPeaks)
             onResetPeaks();
     };
     addAndMakeVisible (resetPeaksButton_);
+    
+    // Preset & State Buttons
+    presetButton.setButtonText ("Preset");
+    presetButton.setTooltip ("Load Preset");
+    presetButton.setColour (juce::TextButton::buttonColourId, theme.panel);
+    presetButton.onClick = [this]
+    {
+        if (presetManager)
+        {
+            juce::PopupMenu m;
+            m.addItem ("Factory", [this] { presetManager->loadFactoryPreset(); });
+            m.addItem ("Default", [this] { presetManager->loadDefaultPreset(); });
+            m.addSeparator();
+            
+            auto presets = presetManager->getPresetList();
+            for (const auto& p : presets)
+                m.addItem (p, [this, p] { presetManager->loadPreset (p); });
+
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetButton));
+        }
+    };
+    addAndMakeVisible (presetButton);
+
+    saveButton.setButtonText ("Save");
+    saveButton.setTooltip ("Save Preset");
+    saveButton.setColour (juce::TextButton::buttonColourId, theme.panel);
+    saveButton.onClick = [this]
+    {
+        if (presetManager)
+        {
+            auto w = std::make_shared<juce::AlertWindow> ("Save Preset", "Enter name:", juce::MessageBoxIconType::NoIcon);
+            w->addTextEditor ("name", presetManager->getCurrentPresetName());
+            w->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+            w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+            w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w] (int result)
+            {
+                if (result == 1)
+                {
+                    auto name = w->getTextEditorContents ("name");
+                    if (name.isNotEmpty())
+                        presetManager->savedPreset (name);
+                }
+            }));
+        }
+    };
+    addAndMakeVisible (saveButton);
+
+    // A/B Slots
+    auto initSlotBtn = [&](juce::TextButton& b, const juce::String& text, AnalyzerPro::state::StateManager::Slot slot)
+    {
+        b.setButtonText (text);
+        b.setRadioGroupId (2002);
+        b.setClickingTogglesState (true);
+        b.setColour (juce::TextButton::buttonColourId, theme.panel);
+        b.setColour (juce::TextButton::buttonOnColourId, theme.accent);
+        b.onClick = [this, slot]
+        {
+            if (stateManager)
+                stateManager->setActiveSlot (slot);
+        };
+        addAndMakeVisible (b);
+    };
+    initSlotBtn (slotAButton, "A", AnalyzerPro::state::StateManager::Slot::A);
+    initSlotBtn (slotBButton, "B", AnalyzerPro::state::StateManager::Slot::B);
+    slotAButton.setToggleState (true, juce::dontSendNotification);
+
+    // Bypass
+    bypassButton.setButtonText ("BYPASS");
+    bypassButton.setClickingTogglesState (true);
+    bypassButton.setColour (juce::ToggleButton::tickColourId, theme.accent); 
+    bypassButton.setColour (juce::TextButton::buttonColourId, theme.panel); // If using TextButton vs ToggleButton logic
+    // Wait, declaration is ToggleButton.
+    // Let's style it like others?
+    // ToggleButton style is different. Let's assume standard toggle behavior for now.
+    addAndMakeVisible (bypassButton);
 }
 
 HeaderBar::~HeaderBar() = default;
@@ -120,19 +165,30 @@ void HeaderBar::resized()
 
     // Right zone: Peak Range + Reset + Preset/Save/Menu buttons
     // Removed DbRange
-    const int rightZoneWidth = comboW        // Peak Range only
+    // Right zone: Peak Range + Reset + Preset/Save + A/B + Bypass
+    const int rightZoneWidth = comboW        // Peak Range
                               + headerGap
-                              + smallBtnW    // Reset button
+                              + smallBtnW    // Reset
                               + headerGap
-                              + m.headerButtonW * 3  // Preset/Save/Menu
-                              + headerGap * 2;
+                              + m.headerButtonW * 2  // Preset/Save
+                              + headerGap
+                              + smallBtnW * 2 // A/B
+                              + headerGap
+                              + m.headerButtonW; // Bypass
+
     auto rightZone = area.removeFromRight (rightZoneWidth);
     
-    // Right zone layout (right-to-left)
+    // Bypass
     auto buttonArea = rightZone.removeFromRight (m.headerButtonW);
-    menuButton.setBounds (buttonArea.getX(), buttonTop, m.headerButtonW, controlH);
+    bypassButton.setBounds (buttonArea.getX(), controlTop, m.headerButtonW, controlH);
+    rightZone.removeFromRight (headerGap);
+
+    // A/B
+    slotBButton.setBounds (rightZone.removeFromRight (smallBtnW).getX(), controlTop, smallBtnW, controlH);
+    slotAButton.setBounds (rightZone.removeFromRight (smallBtnW).getX(), controlTop, smallBtnW, controlH);
     rightZone.removeFromRight (headerGap);
     
+    // Save/Preset
     buttonArea = rightZone.removeFromRight (m.headerButtonW);
     saveButton.setBounds (buttonArea.getX(), buttonTop, m.headerButtonW, controlH);
     rightZone.removeFromRight (headerGap);
@@ -141,6 +197,7 @@ void HeaderBar::resized()
     presetButton.setBounds (buttonArea.getX(), buttonTop, m.headerButtonW, controlH);
     rightZone.removeFromRight (headerGap);
     
+    // Reset / PeakRange
     resetPeaksButton_.setBounds (rightZone.removeFromRight (smallBtnW).getX(), controlTop, smallBtnW, smallBtnW);
     rightZone.removeFromRight (headerGap);
     
@@ -182,6 +239,49 @@ void HeaderBar::setControlBinder (AnalyzerPro::ControlBinder& binder)
         
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerFftSize, fftSizeCombo_);
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerAveraging, averagingCombo_);
+        
+        controlBinder->bindToggle (AnalyzerPro::ControlId::MasterBypass, bypassButton);
+    }
+}
+
+void HeaderBar::setManagers (AnalyzerPro::state::PresetManager* pm, AnalyzerPro::state::StateManager* sm)
+{
+    presetManager = pm;
+    stateManager = sm;
+    
+    if (stateManager)
+    {
+        stateManager->onSlotChanged = [this] (AnalyzerPro::state::StateManager::Slot slot)
+        {
+            // Update UI on message thread (callback likely on msg thread but safe to force)
+            juce::MessageManager::callAsync ([this, slot]
+            {
+                if (slot == AnalyzerPro::state::StateManager::Slot::A)
+                    slotAButton.setToggleState (true, juce::dontSendNotification);
+                else
+                    slotBButton.setToggleState (true, juce::dontSendNotification);
+            });
+        };
+        
+        // Init state
+        updateActiveSlot();
+    }
+    
+    presetButton.setEnabled (presetManager != nullptr);
+    saveButton.setEnabled (presetManager != nullptr);
+    slotAButton.setEnabled (stateManager != nullptr);
+    slotBButton.setEnabled (stateManager != nullptr);
+}
+
+void HeaderBar::updateActiveSlot()
+{
+    if (stateManager)
+    {
+        auto slot = stateManager->getActiveSlot();
+        if (slot == AnalyzerPro::state::StateManager::Slot::A)
+            slotAButton.setToggleState (true, juce::dontSendNotification);
+        else
+            slotBButton.setToggleState (true, juce::dontSendNotification);
     }
 }
 

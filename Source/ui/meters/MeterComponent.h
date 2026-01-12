@@ -27,6 +27,7 @@ public:
     // Pull latest values from atomics (safe on message thread).
     void updateFromAtomics();
 
+    void mouseDown (const juce::MouseEvent&) override;
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -41,7 +42,8 @@ private:
     const std::atomic<bool>* clipLatched_ = nullptr;
 
     juce::String label_;
-    juce::String numericText_;
+    juce::String numericTextPeak_;
+    juce::String numericTextRms_;
 
     float cachedPeakDb_ = -120.0f;
     float cachedRmsDb_  = -120.0f;
@@ -49,6 +51,10 @@ private:
 
     float cachedPeakNorm_ = 0.0f;
     float cachedRmsNorm_  = 0.0f;
+
+    // Max Holds for Numeric Display
+    float maxPeakDb_ = -120.0f;
+    float maxRmsDb_  = -120.0f;
 
     DisplayMode displayMode_ = DisplayMode::RMS;
 

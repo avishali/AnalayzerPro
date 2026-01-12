@@ -26,12 +26,27 @@ MeterGroupComponent::MeterGroupComponent (mdsp_ui::UiContext& ui,
     rmsButton_.setConnectedEdges (juce::Button::ConnectedOnRight);
     peakButton_.setConnectedEdges (juce::Button::ConnectedOnLeft);
 
-    rmsButton_.onClick  = [this] { setDisplayMode (MeterComponent::DisplayMode::RMS); };
-    peakButton_.onClick = [this] { setDisplayMode (MeterComponent::DisplayMode::Peak); };
+    // Button Listeners: Update Source of Truth (Processor)
+    rmsButton_.onClick = [this]
+    {
+        if (type_ == GroupType::Input)
+            processor_.setInputMeterMode (AnalayzerProAudioProcessor::MeterMode::RMS);
+        else
+            processor_.setOutputMeterMode (AnalayzerProAudioProcessor::MeterMode::RMS);
+    };
+
+    peakButton_.onClick = [this]
+    {
+        if (type_ == GroupType::Input)
+            processor_.setInputMeterMode (AnalayzerProAudioProcessor::MeterMode::Peak);
+        else
+            processor_.setOutputMeterMode (AnalayzerProAudioProcessor::MeterMode::Peak);
+    };
 
     addAndMakeVisible (rmsButton_);
     addAndMakeVisible (peakButton_);
 
+    // Initial sync (will be corrected by timer if needed)
     setDisplayMode (MeterComponent::DisplayMode::RMS);
 
     // Build meter components (wiring to processor state).
@@ -44,7 +59,11 @@ MeterGroupComponent::MeterGroupComponent (mdsp_ui::UiContext& ui,
     addAndMakeVisible (*meter0_);
     addAndMakeVisible (*meter1_);
 
-    startTimerHz (40);
+    // Force sync meters to ensure they are visible on startup
+    if (meter0_) meter0_->setDisplayMode (displayMode_);
+    if (meter1_) meter1_->setDisplayMode (displayMode_);
+
+    startTimerHz (30); // 30Hz visual update
 }
 
 MeterGroupComponent::~MeterGroupComponent()
@@ -75,10 +94,14 @@ void MeterGroupComponent::setDisplayMode (MeterComponent::DisplayMode mode)
 {
     displayMode_ = mode;
 
-    const bool rmsOn = (mode == MeterComponent::DisplayMode::RMS);
-    rmsButton_.setToggleState (rmsOn, juce::NotificationType::dontSendNotification);
-    peakButton_.setToggleState (! rmsOn, juce::NotificationType::dontSendNotification);
+    if (meter0_) meter0_->setDisplayMode (mode);
+    if (meter1_) meter1_->setDisplayMode (mode);
 
+    // Update buttons
+    rmsButton_.setToggleState (mode == MeterComponent::DisplayMode::RMS, juce::dontSendNotification);
+    peakButton_.setToggleState (mode == MeterComponent::DisplayMode::Peak, juce::dontSendNotification);
+    
+    // Style buttons
     const auto& theme = ui_.theme();
     auto applyButtonStyle = [&] (juce::TextButton& b, bool on)
     {
@@ -88,23 +111,39 @@ void MeterGroupComponent::setDisplayMode (MeterComponent::DisplayMode mode)
         b.setColour (juce::TextButton::textColourOnId, theme.text.withAlpha (0.95f));
     };
 
+    const bool rmsOn = (mode == MeterComponent::DisplayMode::RMS);
     applyButtonStyle (rmsButton_, rmsOn);
     applyButtonStyle (peakButton_, ! rmsOn);
-
-    if (meter0_ != nullptr) meter0_->setDisplayMode (mode);
-    if (meter1_ != nullptr) meter1_->setDisplayMode (mode);
 }
 
 void MeterGroupComponent::timerCallback()
 {
-    const int desired = (type_ == GroupType::Output) ? processor_.getMeterOutputChannelCount()
-                                                     : processor_.getMeterInputChannelCount();
-    setChannelCount (desired);
+    // Poll channel count
+    const int newCount = (type_ == GroupType::Input) ? processor_.getMeterInputChannelCount()
+                                                     : processor_.getMeterOutputChannelCount();
+    if (newCount != channelCount_)
+    {
+        setChannelCount (newCount);
+    }
+    
+    // Poll Meter Mode
+    const auto procMode = (type_ == GroupType::Input) ? processor_.getInputMeterMode()
+                                                      : processor_.getOutputMeterMode();
+    
+    // Map Processor mode to UI mode
+    MeterComponent::DisplayMode targetUiMode = MeterComponent::DisplayMode::RMS;
+    if (procMode == AnalayzerProAudioProcessor::MeterMode::Peak)
+        targetUiMode = MeterComponent::DisplayMode::Peak;
+        
+    // Update if changed
+    if (targetUiMode != displayMode_)
+    {
+        setDisplayMode (targetUiMode);
+    }
 
     if (meter0_ != nullptr) meter0_->updateFromAtomics();
     if (meter1_ != nullptr) meter1_->updateFromAtomics();
 }
-
 void MeterGroupComponent::paint (juce::Graphics& g)
 {
     const auto& theme = ui_.theme();

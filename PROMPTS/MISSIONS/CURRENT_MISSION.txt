@@ -1,0 +1,10 @@
+No code changes occur here.
+
+---
+
+### Phase 1 — Implementation (IMPLEMENTER)
+
+- Reads CURRENT_MISSION.txt
+- Executes only IMPLEMENTER instructions
+- Modifies code strictly within scope
+- Writes:
