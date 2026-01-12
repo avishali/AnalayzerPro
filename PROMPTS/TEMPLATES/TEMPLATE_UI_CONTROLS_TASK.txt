@@ -1,81 +1,33 @@
-# TODO
-# Paste the Cursor prompt text for this task here.
-
-
-
-
-TASK: Wire UiContext through MainView to all child UI components
+TASK: <Short, explicit UI control task>
 
 Subsystem:
-	•	MainView / HeaderBar / FooterBar / ControlRail / MeterGroup
+- HeaderBar / Rail / MainView / Editor
 
 Scope:
-	•	Source/ui/MainView.h
-	•	Source/ui/MainView.cpp
-	•	Source/ui/layout/HeaderBar.h
-	•	Source/ui/layout/HeaderBar.cpp
-	•	Source/ui/layout/FooterBar.h
-	•	Source/ui/layout/FooterBar.cpp
-	•	Source/ui/layout/ControlRail.h
-	•	Source/ui/layout/ControlRail.cpp
-	•	Source/ui/meters/MeterGroupComponent.h
-	•	Source/ui/meters/MeterGroupComponent.cpp
+- <Exact file list>
 
 Rules:
-	•	UI wiring only.
-	•	Keep behavior identical.
-	•	Do not touch parameter binding logic except to pass ui_ references.
+- UI wiring only.
+- Engine calls via existing public API only.
+- No DSP logic here.
 
 Context:
-MainView owns layout and now has ui_. Child components must receive the same UiContext so that theme/metrics are consistent. This is a standard dependency injection pass.
+<Describe the user interaction and UX intent.>
 
 Steps:
-	1.	Update constructors to accept mdsp_ui::UiContext& ui. Store as mdsp_ui::UiContext& ui_;.
-	2.	In MainView member initialization, pass ui_ to header_, footer_, rail_, inputMeters_, outputMeters_ as needed.
-	3.	Ensure no ownership changes: UiContext is owned by PluginEditor and referenced everywhere else.
+1) <Add control / button / combo>
+2) <Wire callback>
+3) <Keyboard shortcut (if applicable)>
 
 UX Requirements:
-	•	No visible UX change.
-	•	No new controls, no shortcuts.
+- Discoverable but not intrusive.
+- No modal dialogs unless explicitly required.
 
 Do NOT:
-	•	Duplicate state owned by APVTS.
-	•	Add new layout constants.
+- Duplicate state already owned by APVTS.
+- Add magic numbers for layout without comment.
 
 Acceptance:
-	•	Build passes.
-	•	All UI children draw using ui_.theme() and size using ui_.metrics().
-
-⸻
-
-3) MULTI-STEP FEATURE — Prepare for dark/light switching later (Phase 1 only)
-
-Use TEMPLATE_MULTI_STEP_FEATURE.txt structure  ￼
-
-TASK: Theme variant readiness (no runtime UI yet)
-
-This task will be split into MULTIPLE prompts.
-DO NOT implement everything at once.
-
-Phase 1:
-	•	Ensure mdsp_ui::UiContext / ThemeVariant exists and is used consistently.
-	•	Ensure no UI component directly instantiates Theme or relies on “dark-only assumptions” in code paths.
-
-Out of scope for this prompt:
-	•	Adding an in-plugin toggle/menu to switch themes.
-	•	Persisting theme choice.
-	•	Loading tokens from JSON/Figma export.
-
-Scope:
-	•	third_party/melechdsp-hq/shared/mdsp_ui/include/mdsp_ui/Theme.h
-	•	third_party/melechdsp-hq/shared/mdsp_ui/src/Theme.cpp (ONLY if needed)
-	•	Source/PluginEditor.h
-	•	Source/PluginEditor.cpp
-
-Rules:
-	•	Stop after Phase 1 is complete.
-	•	Minimal diffs; do not introduce new modules.
-
-Acceptance:
-	•	AnalyzerPro compiles with UiContext defaulting to Dark.
-	•	All UI code can support Light later by swapping tokens, with no further refactors required.
+- Control works as described.
+- No layout breakage at minimum window size.
+- No conflicts with text input focus.

@@ -1,0 +1,236 @@
+RUNBOOK
+MULTI_AGENT_EXECUTION_V1
+
+VERSION
+1.0
+
+OWNER
+MelechDSP / Avishay
+
+STATUS
+MANDATORY for all multi-agent missions
+
+================================================================================
+PURPOSE
+================================================================================
+This runbook defines the ONLY approved procedure for executing multi-agent
+missions using Antigravity with ChatGPT as the architectural authority.
+
+It enforces:
+- Deterministic execution
+- Strict scope control
+- No copy/paste between tools
+- Clear separation of responsibilities
+- Auditable outcomes
+- Hard STOP guarantees
+
+Deviation from this runbook is NOT allowed.
+
+================================================================================
+ROLES
+================================================================================
+
+ARCHITECT (Human + ChatGPT)
+- Designs architecture and intent
+- Writes CURRENT_MISSION.txt
+- Reviews LAST_RESULT.md
+- Approves or rejects outcome
+
+IMPLEMENTER (Antigravity Agent)
+- Makes code changes only
+- No verification
+- No refactors beyond mission
+- Writes IMPLEMENTER_RESULT.md
+- Stops
+
+VERIFIER (Antigravity Agent)
+- Performs verification only
+- No code edits
+- Audits scope + acceptance criteria
+- Writes VERIFIER_RESULT.md
+- Writes merged LAST_RESULT.md
+- Stops
+
+================================================================================
+FILE CONTRACT (ABSOLUTE)
+================================================================================
+
+The following files define the entire mission lifecycle:
+
+INPUT (single source of truth):
+- PROMPTS/MISSIONS/CURRENT_MISSION.txt
+
+INTERMEDIATE (role outputs):
+- PROMPTS/MISSIONS/IMPLEMENTER_RESULT.md
+- PROMPTS/MISSIONS/VERIFIER_RESULT.md
+
+FINAL (authoritative outcome):
+- PROMPTS/MISSIONS/LAST_RESULT.md
+
+No other files may be used for coordination.
+
+If any file is missing, malformed, or partially written:
+MISSION IS INVALID.
+
+================================================================================
+PRE-FLIGHT CHECK (REQUIRED BEFORE ANY AGENT RUNS)
+================================================================================
+
+Architect MUST verify:
+
+[ ] CURRENT_MISSION.txt exists
+[ ] Mission ID is unique
+[ ] Multi-Agent Mode is ENABLED
+[ ] Scope is explicitly defined
+[ ] Forbidden actions are listed
+[ ] STOP RULE is present
+[ ] No ambiguous language ("if needed", "optionally", "etc")
+
+If any check fails:
+DO NOT RUN AGENTS.
+
+================================================================================
+EXECUTION SEQUENCE (STRICT ORDER)
+================================================================================
+
+STEP 1 — IMPLEMENTER EXECUTION
+--------------------------------
+1. Run Antigravity agent in IMPLEMENTER role.
+2. Instruction:
+   “Execute CURRENT_MISSION.txt as IMPLEMENTER.
+    Write only IMPLEMENTER_RESULT.md.
+    Do NOT run builds or tests.
+    STOP after writing the file.”
+
+3. Implementer MUST:
+   - Modify code only within scope
+   - Avoid speculative improvements
+   - Avoid formatting-only diffs
+   - Avoid touching build files unless explicitly allowed
+
+4. Implementer writes:
+   PROMPTS/MISSIONS/IMPLEMENTER_RESULT.md
+
+5. Implementer STOPS.
+
+If Implementer:
+- Touches out-of-scope files
+- Performs verification
+- Continues after writing result
+
+→ MISSION FAILS.
+
+--------------------------------
+STEP 2 — VERIFIER EXECUTION
+--------------------------------
+1. Run Antigravity agent in VERIFIER role.
+2. Instruction:
+   “Read CURRENT_MISSION.txt and IMPLEMENTER_RESULT.md.
+    Perform verification ONLY.
+    Write VERIFIER_RESULT.md.
+    Write merged LAST_RESULT.md.
+    STOP.”
+
+3. Verifier MUST:
+   - Audit modified files vs scope
+   - Run required build command
+   - Validate acceptance criteria line-by-line
+   - Perform UI/runtime checks if applicable
+   - NEVER modify code
+
+4. Verifier writes:
+   - PROMPTS/MISSIONS/VERIFIER_RESULT.md
+   - PROMPTS/MISSIONS/LAST_RESULT.md
+
+5. Verifier STOPS.
+
+If Verifier:
+- Modifies code
+- Suggests fixes inside result file
+- Continues after writing results
+
+→ MISSION FAILS.
+
+================================================================================
+MERGE RULES (LAST_RESULT.md)
+================================================================================
+
+LAST_RESULT.md is the ONLY file reviewed by the Architect.
+
+It MUST:
+- Match Mission ID exactly
+- Include Implementer + Verifier names
+- Contain merged summary
+- Contain build result
+- Contain acceptance criteria PASS/FAIL
+- Contain STOP confirmations for both roles
+
+If:
+- Implementer and Verifier reports disagree
+- Any acceptance criterion FAILS
+- Build result is FAILURE
+
+→ MISSION IS REJECTED.
+
+================================================================================
+FAILURE HANDLING (MANDATORY)
+================================================================================
+
+If a mission FAILS:
+
+- Do NOT patch inline
+- Do NOT rerun agents
+- Do NOT modify CURRENT_MISSION.txt
+
+Architect must:
+1. Review LAST_RESULT.md
+2. Decide:
+   - Abort mission permanently, OR
+   - Create a NEW mission with a NEW Mission ID
+
+Failures are never fixed in-place.
+
+================================================================================
+APPROVAL RULE
+================================================================================
+
+A mission is considered SUCCESSFUL only if:
+
+- LAST_RESULT.md exists
+- Build Result = SUCCESS
+- All acceptance criteria = PASS
+- No out-of-scope changes
+- STOP confirmations present
+
+Only then may:
+- Code be merged
+- Next mission be authored
+
+================================================================================
+ANTI-PATTERNS (FORBIDDEN)
+================================================================================
+
+- Running both agents simultaneously
+- Letting Verifier “just fix a small thing”
+- Editing code after Implementer step
+- Using chat logs as source of truth
+- Skipping LAST_RESULT.md review
+- Reusing a Mission ID
+- “Quick” changes outside the runbook
+
+================================================================================
+WHY THIS RUNBOOK EXISTS
+================================================================================
+
+This system exists to:
+- Prevent silent architectural drift
+- Prevent agent overreach
+- Preserve intent across time
+- Make every change auditable
+- Allow safe scaling to more agents
+
+Speed comes from discipline, not shortcuts.
+
+================================================================================
+END OF RUNBOOK
+================================================================================

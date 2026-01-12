@@ -1,0 +1,230 @@
+MELECHDSP RUNBOOK — HOVER_TOOLTIP_SYSTEM_V1
+Project: AnalyzerPro (and reusable for future plugins)
+Scope: UI/UX feature (tooltips), NO DSP changes
+
+================================================================
+GLOBAL RULES
+================================================================
+
+Obey 00_SYSTEM_RULES.txt.
+
+UI ONLY.
+No DSP/engine/snapshot/parameter-definition changes.
+
+Minimal diffs.
+No formatting-only edits.
+
+STOP after each step.
+
+================================================================
+OBJECTIVE
+================================================================
+
+Add a hover tooltip system that displays contextual information when the user
+hovers over:
+- A parameter control (slider, toggle, combo)
+- A labeled UI area (analyzer plot, meters, stereo scope, etc.)
+
+Requirements:
+- Consistent styling via mdsp_ui::UiContext (Theme/Metrics/Typography)
+- Works across all major controls
+- No jitter, no flicker
+- No per-frame allocations in paint()
+- Tooltip delays and hide behavior feel professional
+
+Non-goals (v1):
+- Rich markdown tooltips
+- Interactive tooltips
+- Tooltip pinning
+- Localization
+
+================================================================
+FEATURE DEFINITION (v1)
+================================================================
+
+Tooltip behavior:
+- Show after hover delay: 250ms
+- Hide after: mouse exit (immediate) OR small grace (100ms)
+- Follow mouse or anchor to component/area (choose ONE)
+- Clamp inside editor bounds
+- Single tooltip instance globally (not per-control)
+
+Content:
+- Title (parameter name or area name)
+- Optional: current value string
+- Optional: short description (1–2 lines max)
+
+================================================================
+STEP 0 — LOCK DESIGN CHOICES
+================================================================
+
+Choose and lock in code comments:
+
+A) Positioning:
+- Option 1 (recommended): Anchor near hovered component bounds
+- Option 2: Follow mouse
+
+B) Ownership:
+- Single TooltipManager owned by PluginEditor OR MainView
+  (recommended: PluginEditor owns it; MainView provides registration hooks)
+
+C) Registration:
+- Option 1 (recommended): Each control calls setTooltipText() and manager reads it
+- Option 2: Explicit registration API: registerComponent(component, TooltipSpec)
+
+Use Option 2 if you want tooltips on non-control “areas”.
+
+STOP AFTER DONE
+
+================================================================
+STEP 1 — CREATE TOOLTIP DATA MODEL
+================================================================
+
+TASK:
+Define a simple tooltip spec that can represent both controls and areas.
+
+Implementation:
+- Create TooltipSpec struct with:
+  - id (string or int)
+  - title (string)
+  - description (string, optional)
+  - valueProvider (optional callable) OR a function pointer hook
+  - anchorRectProvider (callable returning bounds in editor coords)
+
+Rules:
+- No allocations in paint()
+- Prefer pre-stored strings; only value string may update on show/timer
+
+STOP AFTER DONE
+
+================================================================
+STEP 2 — TOOLTIP COMPONENT (RENDER ONLY)
+================================================================
+
+TASK:
+Implement TooltipOverlayComponent that draws the tooltip bubble.
+
+Requirements:
+- Constructor takes mdsp_ui::UiContext& (ui_)
+- Uses ui_.theme(), ui_.metrics(), ui_.type() only
+- Rounded panel + subtle outline/shadow
+- Text layout:
+  - Title: type.titleH (or labelH if you keep it small)
+  - Body: type.bodyH
+- Clamp tooltip rect to editor bounds
+- No allocations in paint()
+
+Rules:
+- Use cached TextLayout or layout in show/update steps, not per paint
+
+STOP AFTER DONE
+
+================================================================
+STEP 3 — TOOLTIP MANAGER (EVENT + TIMING)
+================================================================
+
+TASK:
+Implement TooltipManager that:
+- Tracks current hovered target
+- Starts a hover timer (250ms)
+- Shows/hides TooltipOverlayComponent
+- Updates value string at a modest rate (e.g., 10 Hz) only while visible
+
+Behavior rules:
+- Do not flicker when moving within the same component
+- Hide when leaving the component/area
+- If moving quickly across controls, tooltip should not spam appear
+
+Implementation rules:
+- Use juce::Timer in manager (UI thread)
+- Do not attach timers to each control
+
+STOP AFTER DONE
+
+================================================================
+STEP 4 — INTEGRATION POINT (PLUGINEDITOR OR MAINVIEW)
+================================================================
+
+TASK:
+Choose one owner and wire it.
+
+Recommended:
+- PluginEditor owns TooltipManager + TooltipOverlayComponent
+- MainView provides:
+  - registration for area tooltips (analyzer plot, meters)
+  - helper to map component bounds to editor coords
+
+Required:
+- Tooltip overlay must appear above all controls
+- Must not break existing mouse handling
+- Must not steal focus unnecessarily
+
+STOP AFTER DONE
+
+================================================================
+STEP 5 — PARAMETER CONTROL TOOLTIP HOOKUP
+================================================================
+
+TASK:
+Attach tooltips to parameter controls.
+
+Rules:
+- Use a consistent convention:
+  Title = parameter name
+  Value = formatted current value
+  Description = short line from a per-parameter map (optional)
+
+Implementation options:
+A) If using JUCE built-in tooltip strings:
+- Set each control’s tooltip text via setTooltip()
+- Manager reads control tooltip + value
+
+B) If using explicit TooltipSpec registration:
+- Register each control with TooltipManager:
+  - title, description, valueProvider
+
+Acceptance:
+- Hovering each major control shows a tooltip
+- Tooltip reflects value changes while visible
+
+STOP AFTER DONE
+
+================================================================
+STEP 6 — AREA TOOLTIP HOOKUP (ANALYZER / METERS / SCOPE)
+================================================================
+
+TASK:
+Add hover tooltip “hot zones” for UI areas:
+- Analyzer plot
+- Input meters group
+- Output meters group
+- Stereo scope (if present)
+- Phase view (if present)
+
+Implementation:
+- Each area provides an anchor rect and tooltip content
+- Hook via MainView mouseMove / hit testing OR invisible overlay components
+
+Rules:
+- No re-layout changes
+- Keep hover zones aligned to actual bounds
+
+STOP AFTER DONE
+
+================================================================
+STEP 7 — VALIDATION
+================================================================
+
+Checklist:
+- No crashes when resizing while tooltip visible
+- Tooltip stays inside bounds (clamped)
+- No flicker on small mouse movements
+- Works across all controls
+- No allocations in paint()
+- CPU stable (timers modest)
+
+STOP AFTER DONE
+
+================================================================
+END OF RUNBOOK
+================================================================

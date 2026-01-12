@@ -6,6 +6,8 @@
 #include "analyzer/AnalyzerEngine.h"
 #include "hardware/HardwareMeterMapper.h"
 #include "hardware/SoftwareMeterSink.h"
+#include "state/PresetManager.h"
+#include "state/StateManager.h"
 #include <limits>
 
 
@@ -24,6 +26,12 @@ public:
         std::atomic<float> peakDb     { -120.0f };
         std::atomic<float> rmsDb      { -120.0f };
         std::atomic<bool>  clipLatched{ false };
+    };
+
+    enum class MeterMode
+    {
+        RMS = 0,
+        Peak = 1
     };
 
     //==============================================================================
@@ -83,9 +91,28 @@ public:
     int getMeterInputChannelCount() const noexcept;
     int getMeterOutputChannelCount() const noexcept;
 
+    void setInputMeterMode (MeterMode mode) noexcept { inputMeterMode_.store (static_cast<int> (mode), std::memory_order_relaxed); }
+    MeterMode getInputMeterMode() const noexcept { return static_cast<MeterMode> (inputMeterMode_.load (std::memory_order_relaxed)); }
+
+    void setOutputMeterMode (MeterMode mode) noexcept { outputMeterMode_.store (static_cast<int> (mode), std::memory_order_relaxed); }
+    MeterMode getOutputMeterMode() const noexcept { return static_cast<MeterMode> (outputMeterMode_.load (std::memory_order_relaxed)); }
+
     // Reset clears clip latch only (does not affect analyzer state/history).
     void resetMeterClipLatches() noexcept;
     const SoftwareMeterSink& getSoftwareMeterSink() const noexcept { return softwareMeterSink_; }
+
+    void setEditorSize (int width, int height) noexcept { parameters.setEditorSize (width, height); }
+    int getEditorWidth() const noexcept { return parameters.getEditorWidth(); }
+    int getEditorHeight() const noexcept { return parameters.getEditorHeight(); }
+    
+    //==============================================================================
+    AnalyzerPro::state::PresetManager& getPresetManager() { return *presetManager; }
+    AnalyzerPro::state::StateManager& getStateManager() { return *stateManager; }
+    
+    //==============================================================================
+    // Bypass Helpers
+    bool getBypassState() const;
+    void setBypassState (bool bypassed);
 
 private:
     //==============================================================================
@@ -103,12 +130,21 @@ private:
     std::atomic<float>* pHold_      = nullptr;
     std::atomic<float>* pPeakDecay_ = nullptr;
     std::atomic<float>* pDbRange_   = nullptr;
+    std::atomic<float>* pBypass_    = nullptr;
         
     // APVTS for analyzer controls
     juce::AudioProcessorValueTreeState apvts;
+    
+    // State Managers
+    std::unique_ptr<AnalyzerPro::state::PresetManager> presetManager;
+    std::unique_ptr<AnalyzerPro::state::StateManager> stateManager;
 
     MeterState inputMeters_[2];
     MeterState outputMeters_[2];
+    
+    std::atomic<int> inputMeterMode_ { 0 }; // 0=RMS
+    std::atomic<int> outputMeterMode_ { 0 }; // 0=RMS
+
     float inputPeakEnv_[2] { 0.0f, 0.0f };
     float outputPeakEnv_[2]{ 0.0f, 0.0f };
     float inputRmsSq_[2]   { 0.0f, 0.0f };

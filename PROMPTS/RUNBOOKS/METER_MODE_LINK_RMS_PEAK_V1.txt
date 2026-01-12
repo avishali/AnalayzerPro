@@ -1,0 +1,137 @@
+MELECHDSP RUNBOOK — METER_MODE_LINK_RMS_PEAK_V1
+Project: AnalyzerPro
+Scope: UI + meter logic + visualization sync
+
+================================================================
+GLOBAL RULES
+================================================================
+
+Obey 00_SYSTEM_RULES.txt.
+
+This runbook allows:
+- UI wiring
+- Meter computation mode wiring
+- Visualization sync (but NO DSP redesign)
+
+STOP after each step.
+
+================================================================
+OBJECTIVE
+================================================================
+
+Link the RMS/PEAK buttons in the input/output meters so that:
+
+1) Clicking RMS/PEAK changes the meter calculation mode
+2) The meter visuals (bars/readouts) reflect the selected mode
+3) Any related visuals that depend on meter level (if any) reflect the same mode
+4) The state is consistent across:
+   - Input meters group
+   - Output meters group
+   - UI buttons and labels
+
+Define expected UX:
+- Option A (recommended): Separate RMS/PEAK per group (Input group independently, Output independently)
+- Option B: One global RMS/PEAK affects both in/out
+
+Pick ONE. Default to Option A unless code already assumes global.
+
+STOP AFTER DONE
+
+================================================================
+STEP 1 — SOURCE OF TRUTH FOR METER MODE
+================================================================
+
+TASK:
+Create a single source of truth for meter mode.
+
+Rules:
+- No duplicated state across UI components
+- UI reads state, does not own it (except for immediate interaction that writes back)
+
+Implementation options:
+A) Processor/engine-owned state:
+   - atomic enum MeterMode { RMS, Peak }
+   - per group: inputMode, outputMode
+B) APVTS-backed parameter:
+   - If you want automation/persistence (optional)
+
+For v1, prefer A) atomic enum(s) in processor/engine.
+
+STOP AFTER DONE
+
+================================================================
+STEP 2 — WIRE BUTTONS TO MODE
+================================================================
+
+TASK:
+Make RMS/PEAK buttons write to the source of truth.
+
+Scope:
+- HeaderBar / FooterBar / ControlRail if they host the buttons
+- MeterGroupComponent if it owns the toggle UI
+- MeterComponent if it needs mode for rendering text/values
+
+Rules:
+- No visual redesign
+- Use UiContext tokens for drawing
+- Ensure button state reflects mode (selected/unselected)
+
+STOP AFTER DONE
+
+================================================================
+STEP 3 — METER COMPUTATION USES MODE
+================================================================
+
+TASK:
+Ensure meter computation selects RMS vs Peak based on mode.
+
+Rules:
+- No allocations
+- Real-time safe
+- Keep existing smoothing/ballistics consistent
+
+Implementation requirements:
+- If Peak: compute peak per block with existing smoothing
+- If RMS: compute RMS per block with smoothing
+- Update meter value used by UI draw
+
+STOP AFTER DONE
+
+================================================================
+STEP 4 — VISUAL SYNC
+================================================================
+
+TASK:
+Ensure the visuals match mode selection.
+
+Examples:
+- Meter label changes (RMS/PEAK indicator)
+- Bar level corresponds to RMS vs Peak
+- Numerical readout (if any) matches mode
+
+If any other visualization references meter level (e.g., clipping indicator), define whether it follows:
+- Peak always (recommended for clip)
+- Or mode-dependent
+
+Document the rule in code comments.
+
+STOP AFTER DONE
+
+================================================================
+STEP 5 — VALIDATION
+================================================================
+
+Checklist:
+- Clicking RMS/PEAK updates state immediately
+- Both input and output behave as specified (Option A or B)
+- Visual state reflects correct mode after:
+  - resizing
+  - reopening editor
+  - changing sample rate/buffer
+- No regressions in existing analyzer visuals
+
+STOP AFTER DONE
+
+================================================================
+END OF RUNBOOK
+================================================================

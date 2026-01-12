@@ -32,6 +32,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     
     // Initialize header and rail with control binder
     header_.setControlBinder (controls_.getBinder());
+    header_.setManagers (&p.getPresetManager(), &p.getStateManager());
     rail_.setControlBinder (controls_.getBinder());
     rail_.setResetPeaksCallback ([this]
     {
@@ -394,7 +395,7 @@ void MainView::resized()
     static constexpr int headerH = 32;
     static constexpr int footerH = 22;
     static constexpr int railW = 220;   // Sidebar width
-    static constexpr int metersW = 60;  // Meter width
+    static constexpr int metersW = 120; // Meter width (Increased for Stereo + Values)
 
     // Debug: capture full bounds
     debugOuter = getLocalBounds();
@@ -449,6 +450,23 @@ void MainView::resized()
     debugAnalyzerTop = mainArea;
     debugLeft = mainArea; // Reusing debug rect
     analyzerView_.setBounds (mainArea);
+}
+
+void MainView::setTooltipManager (mdsp_ui::TooltipManager* manager)
+{
+    tooltipManager_ = manager;
+    
+    // Register tooltips for known components
+    if (tooltipManager_ != nullptr)
+    {
+        tooltipManager_->registerTooltip (&stereoScopeView_, {
+            "stereoscope",
+            "Stereo Scope",
+            "This view visualizes the stereo width and phase correlation of the signal. "
+            "Use the sliders below to adjust decay and hold time.",
+            []() { return ""; }
+        });
+    }
 }
 
 #if JUCE_DEBUG

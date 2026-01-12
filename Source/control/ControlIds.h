@@ -27,6 +27,7 @@ enum class ControlId
     AnalyzerPeakDecay,
     AnalyzerDisplayGain,
     AnalyzerTilt,
+    MasterBypass,
     // Add control IDs as needed
     Count
 };

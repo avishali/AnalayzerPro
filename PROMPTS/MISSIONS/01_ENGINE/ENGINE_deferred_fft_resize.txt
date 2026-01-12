@@ -1,0 +1,30 @@
+TASK: Make FFT size changes RT-safe (defer allocations off audio thread)
+
+Scope (ONLY):
+- Source/analyzer/AnalyzerEngine.h
+- Source/analyzer/AnalyzerEngine.cpp
+- The existing UI message-thread tick that already pulls snapshots (e.g. a timer callback) to apply pending resize
+
+Rules:
+- Do NOT allocate, resize, make_unique, or lock on the audio thread.
+- Do NOT modify JUCE sources.
+- Minimal diff; no refactors.
+
+Goal:
+- FFT size changes requested from the audio thread are applied on the message thread.
+- UI holds last valid frame until the new FFT is ready.
+
+Implementation (high-level):
+1) Add atomics in AnalyzerEngine:
+   - pendingFftSize_ (int)
+   - fftResizeRequested_ (bool)
+2) Implement request API:
+   - requestFftSize(int): stores pending size + sets requested flag (no allocations)
+3) Implement apply API:
+   - applyPendingFftSizeIfNeeded(): message-thread only; performs initializeFFT() and clears flag
+4) Ensure applyPendingFftSizeIfNeeded() is called from a message-thread timer (never from processBlock).
+5) Keep existing snapshot publish/read logic intact; do not introduce locks.
+
+Deliverable:
+- Build passes, no RT allocations, FFT size updates within next UI tick.
+

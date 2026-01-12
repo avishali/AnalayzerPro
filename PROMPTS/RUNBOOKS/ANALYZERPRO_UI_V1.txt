@@ -1,0 +1,138 @@
+MELECHDSP UI RUNBOOK — ANALYZERPRO_UI_V1
+Project: AnalyzerPro
+Scope: Stabilization + systemization (NO redesign)
+
+================================================================
+GLOBAL RULES
+================================================================
+
+You MUST obey 00_SYSTEM_RULES.txt.
+
+This runbook is UI-ONLY.
+DO NOT modify:
+- DSP
+- Analyzer engine
+- Snapshot logic
+- Parameter definitions
+- Threading / timers
+
+Minimal diffs only.
+Visual output must remain identical unless explicitly stated.
+
+Cursor must STOP after each step.
+
+================================================================
+OBJECTIVE
+================================================================
+
+Stabilize AnalyzerPro UI under the MelechDSP design system.
+
+End state:
+- All UI uses mdsp_ui::UiContext
+- Theme / Metrics / Typography are the only sources of design truth
+- AnalyzerPro becomes the reference UI for future plugins
+
+================================================================
+STEP 0 — SESSION SETUP
+================================================================
+
+Context:
+AnalyzerPro already has a working UI.
+We are systemizing, not redesigning.
+
+Instructions:
+- Do not invent new layouts
+- Do not polish visuals
+- Do not refactor beyond scope
+
+STOP AFTER DONE
+
+================================================================
+STEP 1 — DESIGN TOKEN ENFORCEMENT
+================================================================
+
+TASK:
+Remove all local design decisions from UI components.
+
+Scope (ONLY):
+- HeaderBar.*
+- FooterBar.*
+- ControlRail.*
+- MeterComponent.*
+- MeterGroupComponent.*
+
+Required actions:
+1. Each component must receive mdsp_ui::UiContext& via constructor.
+2. Store UiContext as a reference member (ui_).
+3. Replace:
+   - local mdsp_ui::Theme instances
+   - hardcoded colors
+   with:
+   ui_.theme()
+4. Replace:
+   - hardcoded spacing / sizes / radii
+   with:
+   ui_.metrics()
+5. Replace:
+   - hardcoded font sizes
+   with:
+   ui_.type()
+
+Rules:
+- No behavior change
+- No layout change
+- No visual change
+
+STOP AFTER DONE
+
+================================================================
+STEP 2 — LAYOUT AUTHORITY VALIDATION
+================================================================
+
+TASK:
+Ensure layout authority is correct and centralized.
+
+Rules:
+- PluginEditor owns window size + resize limits
+- MainView owns layout
+- Child components NEVER call setSize()
+
+Required actions:
+- Remove any setSize() calls outside PluginEditor
+- Verify all layout uses getLocalBounds()
+
+STOP AFTER DONE
+
+================================================================
+STEP 3 — UI CONTEXT CONSISTENCY
+================================================================
+
+TASK:
+Ensure a single UiContext instance is used everywhere.
+
+Rules:
+- Exactly one UiContext instance (owned by PluginEditor)
+- Passed by reference to MainView
+- Passed by reference to all child components
+- No copying Theme or Metrics
+
+STOP AFTER DONE
+
+================================================================
+STEP 4 — STABILITY CHECK
+================================================================
+
+TASK:
+Verify AnalyzerPro UI stability.
+
+Checklist:
+- Visual output unchanged
+- Resizing behaves correctly
+- No debug artifacts in Release
+- No new allocations in paint/resized
+
+STOP AFTER DONE
+
+================================================================
+END OF RUNBOOK
+================================================================

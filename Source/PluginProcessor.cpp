@@ -94,6 +94,13 @@ AnalayzerProAudioProcessor::AnalayzerProAudioProcessor()
         }
     });
 #endif
+
+    // Initialize State Managers
+    presetManager = std::make_unique<AnalyzerPro::state::PresetManager> (apvts);
+    stateManager  = std::make_unique<AnalyzerPro::state::StateManager> (apvts);
+    
+    // Cache Bypass
+    pBypass_ = apvts.getRawParameterValue ("Bypass");
 }
 
 AnalayzerProAudioProcessor::~AnalayzerProAudioProcessor()
@@ -281,21 +288,24 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
         const float blockMeanSq = sumSq / static_cast<float> (n);
         
-        // Peak: instantaneous attack, ~300ms exponential release.
-        const float peakReleaseCoeff = std::exp (-dtSec / 0.30f);
-        inputPeakEnv_[ch] = juce::jmax (blockPeak, inputPeakEnv_[ch] * peakReleaseCoeff);
+        // Always calculate both Peak and RMS so UI has data for both
+        // Peak Calc
+        {
+            const float peakReleaseCoeff = std::exp (-dtSec / 0.30f);
+            inputPeakEnv_[ch] = juce::jmax (blockPeak, inputPeakEnv_[ch] * peakReleaseCoeff);
+            const float peakDb = clampStoredDb (linToDb (inputPeakEnv_[ch]));
+            inputMeters_[ch].peakDb.store (peakDb, std::memory_order_relaxed);
+        }
         
-        // RMS: EMA of squared signal (~300ms attack, ~400ms release).
-        const float tau = (blockMeanSq > inputRmsSq_[ch]) ? 0.30f : 0.40f;
-        const float rmsCoeff = std::exp (-dtSec / tau);
-        inputRmsSq_[ch] = (rmsCoeff * inputRmsSq_[ch]) + ((1.0f - rmsCoeff) * blockMeanSq);
-
-        const float peakDb = clampStoredDb (linToDb (inputPeakEnv_[ch]));
-        float rmsDb = clampStoredDb (linToDb (std::sqrt (inputRmsSq_[ch])));
-        rmsDb = juce::jmin (rmsDb, peakDb); // RMS must never exceed peak visually.
-
-        inputMeters_[ch].peakDb.store (peakDb, std::memory_order_relaxed);
-        inputMeters_[ch].rmsDb.store (rmsDb, std::memory_order_relaxed);
+        // RMS Calc
+        {
+            const float tau = (blockMeanSq > inputRmsSq_[ch]) ? 0.30f : 0.40f;
+            const float rmsCoeff = std::exp (-dtSec / tau);
+            inputRmsSq_[ch] = (rmsCoeff * inputRmsSq_[ch]) + ((1.0f - rmsCoeff) * blockMeanSq);
+            float rmsDb = clampStoredDb (linToDb (std::sqrt (inputRmsSq_[ch])));
+            inputMeters_[ch].rmsDb.store (rmsDb, std::memory_order_relaxed);
+        }
+        
         if (clipped)
             inputMeters_[ch].clipLatched.store (true, std::memory_order_relaxed);
     }
@@ -369,6 +379,21 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
     }
     
+    if (pPeakHold_ != nullptr)
+    {
+        // Check if Peak Hold (Enable) changed - no cached var for boolean, just apply since it's cheap?
+        // Or cache it like lastHold_. Let's cache it. we need a new member lastPeakHoldEnabled_.
+        // Ah, I need to add that member first or just use a static local if I was lazy, but let's do it properly?
+        // Wait, I can't add member in .cpp without modifying .h.
+        // I will check status vs engine getter? Engine doesn't expose getter publicly easily?
+        // I'll just apply it every block? It's a bool setter.
+        // `setPeakHoldEnabled` does `if (!enabled) resetPeaks()`. So calling it repeatedly with true is cheap.
+        // Calling it repeatedly with false is also cheap (returns early).
+        // Safest is to just apply it.
+        const bool enabled = (pPeakHold_->load() > 0.5f);
+        analyzerEngine.setPeakHoldEnabled (enabled);
+    }
+    
     if (decayParam != nullptr)
     {
         const float decay = decayParam->load();
@@ -384,9 +409,17 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     }
     // IMPORTANT: AnalyzerEngine must be fed from the input signal (pre-mute, pre-gain, pre-output).
     // Feed analyzer (audio thread, real-time safe)
-    analyzerEngine.processBlock (buffer);
-
-    // Output meters: measure buffer post-processing (after gain / processing).
+        if (pBypass_ && *pBypass_ > 0.5f)
+        {
+             // Bypassed: Do not push audio to analyzer
+             // Visuals will stop updating
+        }
+        else
+        {
+             analyzerEngine.processBlock (buffer);
+        }
+        
+        // Software Metering (Post-Fader / Post-Processing)
     const int outChCount = juce::jlimit (0, 2, totalNumOutputChannels);
     for (int ch = 0; ch < 2; ++ch)
     {
@@ -412,20 +445,25 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
 
         const float blockMeanSq = sumSq / static_cast<float> (n);
+        
+        // Always calculate both Peak and RMS so UI has data for both (e.g. Peak Line + RMS Bar)
+        // Peak Calc
+        {
+            const float peakReleaseCoeff = std::exp (-dtSec / 0.30f);
+            outputPeakEnv_[ch] = juce::jmax (blockPeak, outputPeakEnv_[ch] * peakReleaseCoeff);
+            const float peakDb = clampStoredDb (linToDb (outputPeakEnv_[ch]));
+            outputMeters_[ch].peakDb.store (peakDb, std::memory_order_relaxed);
+        }
 
-        const float peakReleaseCoeff = std::exp (-dtSec / 0.30f);
-        outputPeakEnv_[ch] = juce::jmax (blockPeak, outputPeakEnv_[ch] * peakReleaseCoeff);
+        // RMS Calc
+        {
+            const float tau = (blockMeanSq > outputRmsSq_[ch]) ? 0.30f : 0.40f;
+            const float rmsCoeff = std::exp (-dtSec / tau);
+            outputRmsSq_[ch] = (rmsCoeff * outputRmsSq_[ch]) + ((1.0f - rmsCoeff) * blockMeanSq);
+            float rmsDb = clampStoredDb (linToDb (std::sqrt (outputRmsSq_[ch])));
+            outputMeters_[ch].rmsDb.store (rmsDb, std::memory_order_relaxed);
+        }
 
-        const float tau = (blockMeanSq > outputRmsSq_[ch]) ? 0.30f : 0.40f;
-        const float rmsCoeff = std::exp (-dtSec / tau);
-        outputRmsSq_[ch] = (rmsCoeff * outputRmsSq_[ch]) + ((1.0f - rmsCoeff) * blockMeanSq);
-
-        const float peakDb = clampStoredDb (linToDb (outputPeakEnv_[ch]));
-        float rmsDb = clampStoredDb (linToDb (std::sqrt (outputRmsSq_[ch])));
-        rmsDb = juce::jmin (rmsDb, peakDb);
-
-        outputMeters_[ch].peakDb.store (peakDb, std::memory_order_relaxed);
-        outputMeters_[ch].rmsDb.store (rmsDb, std::memory_order_relaxed);
         if (clipped)
             outputMeters_[ch].clipLatched.store (true, std::memory_order_relaxed);
     }
@@ -486,17 +524,48 @@ juce::AudioProcessorEditor* AnalayzerProAudioProcessor::createEditor()
 //==============================================================================
 void AnalayzerProAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    juce::ValueTree state ("PluginState");
-    parameters.getState (state);
-    juce::MemoryOutputStream mos (destData, true);
-    state.writeToStream (mos);
+    // Serialize APVTS including A/B state
+    auto state = apvts.copyState();
+    
+    // Inject A/B + Active Slot
+    if (stateManager)
+        stateManager->saveToState (state);
+        
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
 }
 
 void AnalayzerProAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    auto tree = juce::ValueTree::readFromData (data, static_cast<size_t> (sizeInBytes));
-    if (tree.isValid())
-        parameters.setState (tree);
+    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
+
+    if (xmlState.get() != nullptr)
+    {
+        if (xmlState->hasTagName (apvts.state.getType()))
+        {
+            auto state = juce::ValueTree::fromXml (*xmlState);
+            
+            // Restore A/B and apply active state
+            if (stateManager)
+                stateManager->restoreFromState (state);
+            else
+                apvts.replaceState (state);
+        }
+    }
+}
+
+//==============================================================================
+bool AnalayzerProAudioProcessor::getBypassState() const
+{
+    if (pBypass_)
+        return *pBypass_ > 0.5f;
+    return false;
+}
+
+void AnalayzerProAudioProcessor::setBypassState (bool bypassed)
+{
+    if (auto* param = apvts.getParameter ("Bypass"))
+        param->setValueNotifyingHost (bypassed ? 1.0f : 0.0f);
 }
 
 //==============================================================================
@@ -524,14 +593,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
         "FftSize", "FFT Size",
         juce::StringArray { "1024", "2048", "4096", "8192" },
-        1,  // Default: 2048 (index 1)
+        2,  // Default: 4096 (index 2)
         "FFT Size"));
     
     // Analyzer Averaging (choice: Off=0, 50ms=1, 100ms=2, 250ms=3, 500ms=4, 1s=5)
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
         "Averaging", "Averaging",
         juce::StringArray { "Off", "50 ms", "100 ms", "250 ms", "500 ms", "1 s" },
-        2,  // Default: 100ms (index 2)
+        3,  // Default: 250ms (index 3)
         "Averaging"));
     
     // Analyzer Peak Hold (bool, default true - peaks enabled by default)
@@ -550,14 +619,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "PeakDecay", "Peak Decay",
         juce::NormalisableRange<float> (0.0f, 60.0f, 0.1f),
-        1.0f,  // Default: 1.0 dB/sec
+        37.8f,  // Default: 37.8 dB/sec
         "Peak Decay (dB/s)"));
     
     // Analyzer Display Gain (-24..+24 dB, default 0.0 dB, step 0.5 dB)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "DisplayGain", "Display Gain",
-        juce::NormalisableRange<float> (-24.0f, 24.0f, 0.5f),
-        0.0f,  // Default: 0.0 dB
+        juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), // Changed step to 0.1 for precision
+        -2.5f,  // Default: -2.5 dB
         "Display Gain (dB)"));
     
     // Analyzer Tilt (choice: Flat=0, Pink=1, White=2)

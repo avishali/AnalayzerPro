@@ -1,66 +1,61 @@
-MASTER CURSOR RUNBOOK — PLUGIN UI TEMPLATE v1
-PROJECT: Any new MelechDSP plugin
+MELECHDSP UI RUNBOOK — PLUGIN_UI_TEMPLATE_V1
+Project: Any new MelechDSP plugin
+Scope: UI bootstrapping
 
 ================================================================
-GLOBAL RULES (MANDATORY)
+GLOBAL RULES
 ================================================================
 
-You MUST obey all rules defined in 00_SYSTEM_RULES.txt.
+Obey 00_SYSTEM_RULES.txt.
 
-This runbook is UI-ONLY.
-DO NOT touch:
-- DSP
-- Engine logic
-- Parameter definitions
-- Threading / timers
-- Performance-critical paths
-
-Minimal diffs.
-No cosmetic refactors unless instructed.
-STOP after each step.
+UI ONLY.
+No DSP or engine work.
 
 ================================================================
-STEP 0 — SESSION INITIALIZATION
+OBJECTIVE
+================================================================
+
+Create a new plugin UI that:
+- Matches AnalyzerPro structure
+- Uses mdsp_ui design system from day one
+- Avoids future refactors
+
+================================================================
+STEP 0 — SESSION SETUP
 ================================================================
 
 Context:
-This task initializes a new plugin UI using the MelechDSP UI Design System.
-Theme / Metrics / Typography are provided by mdsp_ui.
+AnalyzerPro is the reference UI.
 
-Instructions:
-- Treat AnalyzerPro as the reference implementation.
-- Copy structure, not visuals.
-- Do not invent new UI paradigms.
+Rules:
+- Copy structure, not visuals
+- Reuse patterns, not code blindly
 
 STOP AFTER DONE
 
 ================================================================
-STEP 1 — CREATE MAIN VIEW SCAFFOLD
+STEP 1 — CREATE MAINVIEW SCAFFOLD
 ================================================================
 
 TASK:
-Create a MainView layout scaffold consistent with AnalyzerPro.
+Create MainView as a pure layout container.
 
-Required structure:
-- MainView owns layout only
-- Child components own rendering and parameter logic
+Required:
+- MainView derives from juce::Component
+- No DSP logic inside MainView
+- No parameter ownership
 
-Expected regions:
-- HeaderBar (top)
-- FooterBar (bottom)
-- Optional Meter rails (left/right)
-- Center view (main visualization)
-- ControlRail (bottom center)
+Layout regions (as needed):
+- Header
+- Footer
+- Center view
+- Optional meter rails
+- Control rail
 
 Rules:
-- All layout metrics sourced from ui_.metrics()
-- No hardcoded spacing
-- No setSize() inside views
-
-Acceptance:
-- MainView compiles
-- Layout is resizable
-- No visual polish required yet
+- Layout uses ui_.metrics() only
+- No magic numbers
+- No setSize()
 
 STOP AFTER DONE
 
@@ -69,39 +64,26 @@ STEP 2 — UI CONTEXT INJECTION
 ================================================================
 
 TASK:
-Wire mdsp_ui::UiContext through the new plugin UI.
+Wire mdsp_ui::UiContext into the new UI.
 
-Required actions:
-1. PluginEditor owns mdsp_ui::UiContext.
-2. MainView receives UiContext by reference.
-3. All child UI components receive the same reference.
-
-Rules:
-- Single UiContext instance
-- No copying Theme or Metrics
-
-Acceptance:
-- UI compiles
-- Theme + Metrics accessible everywhere
+Required:
+- PluginEditor owns UiContext
+- MainView receives UiContext&
+- All UI components receive the same reference
 
 STOP AFTER DONE
 
 ================================================================
-STEP 3 — PLACEHOLDER VISUALS ONLY
+STEP 3 — PLACEHOLDER VISUALS
 ================================================================
 
 TASK:
-Use placeholders for visuals until DSP is ready.
+Implement placeholder visuals until DSP is ready.
 
 Rules:
-- Use Grid / Placeholder views
-- No heavy drawing logic
+- Use simple drawing
 - No optimization work
-
-Acceptance:
-- UI runs
-- Resizes correctly
-- No crashes
+- No design polish
 
 STOP AFTER DONE
 

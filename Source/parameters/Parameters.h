@@ -47,8 +47,8 @@ private:
     std::atomic<float> outputGain { 1.0f };
     std::atomic<int> focusedControlId { 1001 };
     // ADD — Source/parameters/Parameters.h (inside class Parameters, private section)
-    std::atomic<int> editorWidth  { 420 };
-    std::atomic<int> editorHeight { 520 };
+    std::atomic<int> editorWidth  { 0 };
+    std::atomic<int> editorHeight { 0 };
 
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Parameters)
