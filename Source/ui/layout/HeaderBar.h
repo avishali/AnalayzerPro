@@ -20,11 +20,11 @@ public:
 
     void setControlBinder (AnalyzerPro::ControlBinder& binder);
 
-    std::function<void (int)> onDbRangeChanged;
-    void setDbRangeSelectedId (int id);
-
     std::function<void (int)> onPeakRangeChanged;
     void setPeakRangeSelectedId (int id);
+    
+    std::function<void (int)> onModeChanged;
+    void setMode (int modeIndex); // 1=FFT, 2=Bands, 3=Log
 
     std::function<void()> onResetPeaks;
 
@@ -33,10 +33,15 @@ private:
     AnalyzerPro::ControlBinder* controlBinder = nullptr;
 
     juce::Label titleLabel;
-    juce::ComboBox modeCombo_;
+    
+    // Mode Toggles (replacing combo)
+    juce::TextButton fftButton_;
+    juce::TextButton bandButton_;
+    juce::TextButton logButton_;
+
     juce::ComboBox fftSizeCombo_;
     juce::ComboBox averagingCombo_;
-    juce::ComboBox dbRangeBox_;
+    // juce::ComboBox dbRangeBox_; // Removed
     juce::ComboBox peakRangeBox_;
     juce::TextButton resetPeaksButton_;
     juce::TextButton presetButton;

@@ -36,30 +36,9 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     {
         triggerResetPeaks();
     });
-    rail_.setDbRangeChangedCallback ([this] (int selectedId)
+    rail_.setResetPeaksCallback ([this]
     {
-        AnalyzerDisplayView::DbRange range = AnalyzerDisplayView::DbRange::Minus120;
-        switch (selectedId)
-        {
-            case 1: range = AnalyzerDisplayView::DbRange::Minus60; break;
-            case 2: range = AnalyzerDisplayView::DbRange::Minus90; break;
-            case 3: range = AnalyzerDisplayView::DbRange::Minus120; break;
-            default: range = AnalyzerDisplayView::DbRange::Minus120; break;
-        }
-        if (apvts_ != nullptr)
-        {
-            if (auto* param = apvts_->getParameter ("DbRange"))
-            {
-                const int idx = juce::jlimit (0, 2, selectedId - 1);
-                const float norm = static_cast<float> (idx) / 2.0f;
-                param->beginChangeGesture();
-                param->setValueNotifyingHost (norm);
-                param->endChangeGesture();
-            }
-        }
-
-        analyzerView_.setDbRange (range);
-        header_.setDbRangeSelectedId (selectedId);
+        triggerResetPeaks();
     });
 
     // Wire parameter changes to AnalyzerEngine and AnalyzerDisplayView
@@ -80,18 +59,15 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     // Set default mode to FFT (HeaderBar control will update via parameterChanged)
     analyzerView_.setMode (AnalyzerDisplayView::Mode::FFT);
 
-    header_.onDbRangeChanged = [this] (int id)
+    header_.onModeChanged = [this] (int id)
     {
-        using R = AnalyzerDisplayView::DbRange;
-        R r = R::Minus120;
-        if (id == 1) r = R::Minus60;
-        else if (id == 2) r = R::Minus90;
-        else if (id == 3) r = R::Minus120;
-
+        // 1=FFT, 2=BAND, 3=LOG
         if (apvts_ != nullptr)
         {
-            if (auto* param = apvts_->getParameter ("DbRange"))
+            if (auto* param = apvts_->getParameter ("Mode"))
             {
+                // Param is Choice 0,1,2
+                // UI sends 1,2,3
                 const int idx = juce::jlimit (0, 2, id - 1);
                 const float norm = static_cast<float> (idx) / 2.0f;
                 param->beginChangeGesture();
@@ -99,9 +75,6 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
                 param->endChangeGesture();
             }
         }
-
-        // Apply immediately for responsiveness (listener will also keep things in sync)
-        analyzerView_.setDbRange (r);
     };
 
     header_.onPeakRangeChanged = [this] (int id)
@@ -114,19 +87,39 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         analyzerView_.setPeakDbRange (r);
     };
 
+    analyzerView_.onDbRangeUserChanged = [this] (AnalyzerDisplayView::DbRange range)
+    {
+        if (apvts_ != nullptr)
+        {
+            if (auto* param = apvts_->getParameter ("DbRange"))
+            {
+                const int idx = static_cast<int> (range);
+                const float norm = static_cast<float> (idx) / 2.0f;
+                param->beginChangeGesture();
+                param->setValueNotifyingHost (norm);
+                param->endChangeGesture();
+            }
+        }
+    };
+
     header_.onResetPeaks = [this]
     {
         triggerResetPeaks();
     };
 
-    // Apply initial DbRange from APVTS (startup/session restore)
+    // Apply initial Mode from APVTS (startup/session restore)
     if (apvts_ != nullptr)
     {
-        if (auto* raw = apvts_->getRawParameterValue ("DbRange"))
+        if (auto* raw = apvts_->getRawParameterValue ("Mode"))
         {
             const int idx = juce::jlimit (0, 2, juce::roundToInt (raw->load()));
-            analyzerView_.setDbRangeFromChoiceIndex (idx);
-            header_.setDbRangeSelectedId (idx + 1);
+            header_.setMode (idx + 1);
+            
+            // Sync view immediately
+            AnalyzerDisplayView::Mode viewMode = AnalyzerDisplayView::Mode::FFT;
+            if (idx == 1) viewMode = AnalyzerDisplayView::Mode::BAND;
+            if (idx == 2) viewMode = AnalyzerDisplayView::Mode::LOG;
+            analyzerView_.setMode (viewMode);
         }
     }
 
@@ -199,6 +192,9 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
         // Update analyzer view
         analyzerView_.setMode (viewMode);
         
+        // Update header toggles
+        header_.setMode (index + 1);
+        
 #if JUCE_DEBUG
         // Assertion: Verify mode sync
         const AnalyzerDisplayView::Mode currentMode = analyzerView_.getMode();
@@ -246,7 +242,7 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     {
         const int idx = juce::jlimit (0, 2, juce::roundToInt (newValue));
         analyzerView_.setDbRangeFromChoiceIndex (idx);
-        header_.setDbRangeSelectedId (idx + 1);
+        // header_.setDbRangeSelectedId (idx + 1); // Removed
     }
     else if (parameterID == "DisplayGain")
     {
@@ -313,8 +309,9 @@ bool MainView::keyPressed (const juce::KeyPress& key, juce::Component* originati
 
         analyzerView_.setDbRange (next);
 
-        const int nextId = (next == R::Minus60) ? 1 : (next == R::Minus90) ? 2 : 3;
-        header_.setDbRangeSelectedId (nextId);
+        analyzerView_.setDbRange (next);
+
+        // Header update removed (control removed)
         return true;
     }
 
@@ -391,19 +388,18 @@ void MainView::paint (juce::Graphics& g)
 
 void MainView::resized()
 {
-    // Debug: capture full bounds
-    debugOuter = getLocalBounds();
-
     // Layout constants
     static constexpr int padding = 10;
     static constexpr int headerH = 32;
     static constexpr int footerH = 22;
-    static constexpr int metersW = 60;  // Fixed width for meters
+    static constexpr int railW = 220;   // Sidebar width
+    static constexpr int metersW = 60;  // Meter width
 
+    // Debug: capture full bounds
+    debugOuter = getLocalBounds();
     auto bounds = getLocalBounds().reduced (padding);
     debugContent = bounds;
 
-    // Slice order: footer, header, then split remaining into analyzer and controls
     // 1) Footer from bottom
     auto footerArea = bounds.removeFromBottom (footerH);
     debugFooter = footerArea;
@@ -414,38 +410,44 @@ void MainView::resized()
     debugHeader = headerArea;
     header_.setBounds (headerArea);
 
-    // 3) Calculate responsive controls height
-    int controlsH = juce::jlimit (110, 180, bounds.getHeight() / 4);
+    // 3) Sidebar (ControlRail) from Right
+    auto sidebarArea = bounds.removeFromRight (railW);
+    // Add some padding/gap between main content and sidebar
+    sidebarArea.removeFromLeft (ui_.metrics().sectionSpacing); 
+    debugRail = sidebarArea;
+    rail_.setBounds (sidebarArea);
 
-    // 4) Split remaining area into analyzer (top) and controls (bottom)
-    auto analyzerArea = bounds;
-    auto controlsArea = analyzerArea.removeFromBottom (controlsH);
-    debugRail = controlsArea;
-    rail_.setBounds (controlsArea);
-
-    // 5) Save analyzerArea dimensions before removing meter widths
-    const int analyzerY = analyzerArea.getY();
-    const int analyzerHeight = analyzerArea.getHeight();
-
-    // 6) Place meters aligned with analyzerArea (same height as analyzerView_)
-    auto inputMetersArea = analyzerArea.removeFromLeft (metersW);
-    inputMetersArea.setY (analyzerY);
-    inputMetersArea.setHeight (analyzerHeight);
+    // 4) Main Content Area (Input | Center | Output)
+    auto mainArea = bounds;
+    
+    // Input Meters (Left)
+    auto inputMetersArea = mainArea.removeFromLeft (metersW);
+    // Input meters height: match the full mainArea height (Analyzer + Phase)
     inputMeters_.setBounds (inputMetersArea);
 
-    auto outputMetersArea = analyzerArea.removeFromRight (metersW);
-    outputMetersArea.setY (analyzerY);
-    outputMetersArea.setHeight (analyzerHeight);
+    // Output Meters (Right of main area, but left of Sidebar)
+    auto outputMetersArea = mainArea.removeFromRight (metersW);
     outputMeters_.setBounds (outputMetersArea);
 
-    // 7) Place analyzer view in remaining center of analyzerArea
-    debugLeft = analyzerArea;
-    debugAnalyzerTop = analyzerArea;
-    analyzerView_.setBounds (analyzerArea);
+    // Center Column (Analyzer + Phase)
+    // Gap between meters and center
+    // mainArea.reduce (ui_.metrics().gapSmall, 0); // Optional gap
 
-    // Phase view hidden for now (or can be placed elsewhere if needed)
-    phaseView_.setBounds (juce::Rectangle<int>());
-    debugPhaseBottom = juce::Rectangle<int>();
+    // Split Center: Analyzer (Top 70%) / Phase (Bottom 30%)
+    // But Phase Scope is usually square-ish. Let's try flexible height.
+    const int phaseH = juce::jlimit (150, 300, mainArea.getHeight() / 3);
+    
+    auto phaseArea = mainArea.removeFromBottom (phaseH);
+    // Add gap between analyzer and phase
+    phaseArea.removeFromTop (ui_.metrics().gapSmall); 
+    
+    debugPhaseBottom = phaseArea;
+    phaseView_.setBounds (phaseArea);
+
+    // Remaining is Analyzer
+    debugAnalyzerTop = mainArea;
+    debugLeft = mainArea; // Reusing debug rect
+    analyzerView_.setBounds (mainArea);
 }
 
 #if JUCE_DEBUG
