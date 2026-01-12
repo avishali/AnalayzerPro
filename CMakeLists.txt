@@ -202,7 +202,9 @@ target_sources(${PLUGIN_NAME}
         Source/control/AnalyzerProParamIdMap.cpp
         Source/control/AnalyzerProControlContext.cpp
         Source/analyzer/AnalyzerEngine.cpp
+        Source/analyzer/StereoScopeAnalyzer.cpp
         Source/ui/analyzer/AnalyzerDisplayView.cpp
+        Source/ui/analyzer/StereoScopeView.cpp
         Source/ui/analyzer/rta1_import/RTADisplay.cpp
         Source/ui/layout/HeaderBar.cpp
         Source/ui/layout/ControlRail.cpp

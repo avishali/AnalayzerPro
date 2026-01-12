@@ -12,6 +12,8 @@
     Real-time FFT analyzer engine.
     Runs on audio thread, produces snapshots for UI consumption.
 */
+#include "StereoScopeAnalyzer.h"
+
 class AnalyzerEngine
 {
 public:
@@ -20,6 +22,9 @@ public:
     
     /** Prepare analyzer with sample rate and block size */
     void prepare (double sampleRate, int samplesPerBlock);
+
+    StereoScopeAnalyzer& getStereoScopeAnalyzer() noexcept { return stereoScopeAnalyzer; }
+    const StereoScopeAnalyzer& getStereoScopeAnalyzer() const noexcept { return stereoScopeAnalyzer; }
     
     /** Release resources */
     void reset();
@@ -117,6 +122,8 @@ private:
     PeakHoldMode peakHoldMode_ = PeakHoldMode::HoldThenDecay;
     float peakHoldTimeMs_ = 0.0f;
     std::vector<int> peakHoldFramesRemaining_;
+    
+    StereoScopeAnalyzer stereoScopeAnalyzer;
     
     void initializeFFT (int fftSize);
     void updateSmoothingCoeff (float averagingMs, double sampleRate);

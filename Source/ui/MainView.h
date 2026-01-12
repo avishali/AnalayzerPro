@@ -12,7 +12,7 @@
 #include "layout/ControlRail.h"
 #include "layout/FooterBar.h"
 #include "analyzer/AnalyzerDisplayView.h"
-#include "views/PhaseCorrelationView.h"
+#include "analyzer/StereoScopeView.h"
 #include "meters/MeterGroupComponent.h"
 #include <memory>
 #if JUCE_DEBUG
@@ -68,7 +68,7 @@ private:
     ControlRail rail_;
     FooterBar footer_;
     AnalyzerDisplayView analyzerView_;
-    PhaseCorrelationView phaseView_;
+    StereoScopeView stereoScopeView_;
     MeterGroupComponent outputMeters_;
     MeterGroupComponent inputMeters_;
 
