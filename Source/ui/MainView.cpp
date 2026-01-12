@@ -13,6 +13,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
       rail_ (ui_),
       footer_ (ui_),
       analyzerView_ (p),
+      stereoScopeView_ (ui, p.getAnalyzerEngine().getStereoScopeAnalyzer()),
       outputMeters_ (ui_, p, MeterGroupComponent::GroupType::Output),
       inputMeters_ (ui_, p, MeterGroupComponent::GroupType::Input)
 {
@@ -25,7 +26,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     addAndMakeVisible (rail_);
     addAndMakeVisible (footer_);
     addAndMakeVisible (analyzerView_);
-    addAndMakeVisible (phaseView_);
+    addAndMakeVisible (stereoScopeView_);
     addAndMakeVisible (outputMeters_);
     addAndMakeVisible (inputMeters_);
     
@@ -442,7 +443,7 @@ void MainView::resized()
     phaseArea.removeFromTop (ui_.metrics().gapSmall); 
     
     debugPhaseBottom = phaseArea;
-    phaseView_.setBounds (phaseArea);
+    stereoScopeView_.setBounds (phaseArea);
 
     // Remaining is Analyzer
     debugAnalyzerTop = mainArea;

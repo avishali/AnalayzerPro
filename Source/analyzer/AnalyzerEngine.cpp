@@ -141,6 +141,11 @@ void AnalyzerEngine::processBlock (const juce::AudioBuffer<float>& buffer)
             computeFFT();
         }
     }
+
+    // Push samples to Stereo Scope (Audio thread lock-free)
+    const float* left = buffer.getReadPointer (0);
+    const float* right = (numChannels > 1) ? buffer.getReadPointer (1) : left;
+    stereoScopeAnalyzer.pushSamples (left, right, numSamples);
 }
 
 void AnalyzerEngine::computeFFT()
