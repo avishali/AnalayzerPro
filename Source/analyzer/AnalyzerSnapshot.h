@@ -15,13 +15,31 @@ struct AnalyzerSnapshot
     static constexpr int kMaxFFTSize = 8192;
     static constexpr int kMaxFFTBins = 8192;  // Headroom for 8192 FFT (4097 bins) + future expansion
     
-    // FFT data (dB values)
-    // fftDb contains dB values already (converted in AnalyzerEngine::computeFFT).
-    // UI clamps/sanitizes only; no conversion needed.
+    // Multi-trace FFT data (dB values)
+    // Each trace has its own spectrum for independent rendering
+    std::array<float, kMaxFFTBins> fftDbL{};      // Left channel
+    std::array<float, kMaxFFTBins> fftDbR{};      // Right channel
+    std::array<float, kMaxFFTBins> fftDbMono{};   // Mono (L+R)/2
+    std::array<float, kMaxFFTBins> fftDbMid{};    // Mid (L+R)/2 (same as Mono, different label)
+    std::array<float, kMaxFFTBins> fftDbSide{};   // Side (L-R)/2
+    
+    // Peak hold versions for each trace
+    std::array<float, kMaxFFTBins> fftPeakDbL{};
+    std::array<float, kMaxFFTBins> fftPeakDbR{};
+    std::array<float, kMaxFFTBins> fftPeakDbMono{};
+    std::array<float, kMaxFFTBins> fftPeakDbMid{};
+    std::array<float, kMaxFFTBins> fftPeakDbSide{};
+    
+    // Power domain arrays for UI-side derivation of Mono/Mid/Side
+    // These are in linear power (NOT dB), enabling proper spectral math
+    std::array<float, kMaxFFTBins> powerL{};
+    std::array<float, kMaxFFTBins> powerR{};
+    
+    // Legacy single-spectrum arrays (kept for backward compatibility, will be populated with Mono)
     std::array<float, kMaxFFTBins> fftDb{};
     std::array<float, kMaxFFTBins> fftPeakDb{};
 
-    // FFT: authoritative bin count for fftDb/fftPeakDb.
+    // FFT: authoritative bin count for all spectra
     // Contract: fftBinCount == (fftSize / 2 + 1).
     int fftBinCount = 0;
 
@@ -38,6 +56,10 @@ struct AnalyzerSnapshot
     float displayTopDb = 0.0f;
     // Validity flag (set to true after first valid FFT)
     bool isValid = false;
+    
+    // Debug / Status
+    bool isHoldOn = false;
+    bool multiTraceEnabled = false;
 };
 
 //==============================================================================

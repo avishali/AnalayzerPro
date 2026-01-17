@@ -13,13 +13,13 @@ struct DeviceRoutingPreset
     juce::String outputMatch;
 
     double sampleRate = 48000.0;
-    int bufferSize = 256;
+    int bufferSize = 64;
 
     int inputChannels = 2;   // how many channels to enable starting from ch0
     int outputChannels = 4;
 };
 
-class DeviceRoutingHelper
+class DeviceRoutingHelper : public juce::ChangeListener
 {
 public:
     struct Result
@@ -38,13 +38,20 @@ public:
     // IMPORTANT: When using an Aggregate Device, CoreAudio/JUCE must open the SAME device for
     // input and output, otherwise input buffers can be zeroed.
     static Result applyMacSystemCapture(juce::AudioDeviceManager& dm,
-                                        juce::String aggregateMatch = "AnalyzerPro Aggregate",
+                                        juce::String aggregateMatch  = "BlackHole 2ch",
                                         double sampleRate = 48000.0,
-                                        int bufferSize = 256);
+                                        int bufferSize = 64);
 
     // Persistence helpers (optional)
     static void saveCurrentSetup(juce::AudioDeviceManager& dm, juce::PropertiesFile& props);
     static bool restoreSavedSetup(juce::AudioDeviceManager& dm, juce::PropertiesFile& props);
+
+    // Lifecycle
+    DeviceRoutingHelper(juce::AudioDeviceManager& dm, juce::ApplicationProperties& props);
+    ~DeviceRoutingHelper() override;
+
+    // Listener
+    void changeListenerCallback(juce::ChangeBroadcaster* source) override;
 
 private:
     static juce::String findDeviceNameBySubstring(juce::AudioIODeviceType& type,
@@ -53,5 +60,9 @@ private:
 
     static void logAvailableDevices(juce::AudioDeviceManager& dm);
     static void logSetup(const juce::AudioDeviceManager::AudioDeviceSetup& s);
+
+    juce::AudioDeviceManager& deviceManager;
+    juce::ApplicationProperties& appProps_;
+    const juce::String deviceStateKey_ = "audioDeviceState";
 };
 } // namespace analyzerpro

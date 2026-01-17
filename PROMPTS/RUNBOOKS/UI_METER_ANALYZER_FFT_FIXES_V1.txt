@@ -1,0 +1,176 @@
+MELECHDSP RUNBOOK — UI_METER_ANALYZER_FFT_FIXES_V1
+Project: AnalyzerPro
+Scope: UI + metering/analyzer logic (NO redesign)
+
+================================================================
+GLOBAL RULES
+================================================================
+
+Obey 00_SYSTEM_RULES.txt.
+
+Minimal diffs.
+No formatting-only edits.
+No allocations in audio thread.
+STOP after each step.
+
+================================================================
+OBJECTIVES
+================================================================
+
+1) Meters:
+   A) Link L/R Peak Reset when pressed (single press resets both channels).
+   B) Link RMS/PEAK mode between Input and Output meters (one shared mode).
+   C) Clip red dot becomes clickable reset:
+      - pressing any clip dot resets ALL clip dots.
+
+2) Loudness UI:
+   A) Write full words (Integrated / Short-term / Momentary), not I/S/M.
+   B) Loudness Peak meter should be “peak hold”:
+      - shows max value since last manual reset
+      - does NOT self-reset
+      - resets only when pressed.
+
+3) Analyzer:
+   A) PEAK view (yellow) looks quieter than RMS (blue) — fix scaling/normalization.
+   B) Analyzer Peak Hold must truly hold the loudest value until reset.
+      - remove/resolve duplicate “hold” parameters (only ONE source of truth).
+
+4) FFT:
+   Add Smoothing option with a few choices (e.g., Off / Light / Medium / Heavy).
+   Must be user-selectable and reflected in FFT plot.
+
+================================================================
+STEP 0 — LOCK DECISIONS (NO CODE)
+================================================================
+
+Meter mode linking:
+- Global shared meter mode affects both input and output groups.
+
+Clip reset behavior:
+- Any clip-dot press triggers global reset for ALL clip indicators.
+
+Loudness peak hold:
+- Maintain max dBTP (or peak metric currently used) since last reset.
+- Reset only on click.
+
+FFT smoothing:
+- Options: Off, Light, Medium, Heavy
+- Implement as exponential smoothing in magnitude domain (log-magnitude is acceptable if plot uses dB).
+- Smoothing state owned by analyzer/FFT view model, not UI.
+
+STOP AFTER DONE
+
+================================================================
+STEP 1 — METERS: MODE LINK + PEAK RESET LINK + CLIP RESET
+================================================================
+
+TASKS:
+1) Replace per-group meter mode state (if any) with ONE source of truth:
+   - MeterMode { RMS, Peak } stored in processor/engine (atomic or APVTS param).
+   - Input + Output read the same mode.
+
+2) Peak reset:
+   - When user presses peak reset for L or R, reset BOTH channels peaks.
+
+3) Clip dot reset:
+   - Clicking any clipping indicator resets ALL clip states (all channels, in+out).
+
+Rules:
+- No new UI widgets required; use existing buttons/dots.
+- UI must call into a single reset API.
+- Must not change meter ballistics except intended resets.
+
+STOP AFTER DONE
+
+================================================================
+STEP 2 — LOUDNESS: LABELS + PEAK HOLD
+================================================================
+
+TASKS:
+1) Loudness labels:
+   - Replace I/S/M labels with full words:
+     Integrated, Short-term, Momentary
+
+2) Loudness “Peak”:
+   - Implement peak hold:
+     - maintain max peak value since last reset
+     - never auto-resets
+     - clicking the peak value resets the hold
+
+Rules:
+- Numbers only (no bars).
+- No JuceHeader includes.
+- No allocations in audio thread.
+
+STOP AFTER DONE
+
+================================================================
+STEP 3 — ANALYZER: PEAK NORMALIZATION + TRUE PEAK HOLD
+================================================================
+
+TASKS:
+1) Peak view “quieter” issue:
+   - Identify RMS vs PEAK computation path for the plot.
+   - Ensure PEAK curve uses correct reference and does not get averaged/smoothed like RMS.
+   - Ensure dB mapping is consistent between RMS and PEAK curves.
+
+2) Peak Hold:
+   - Ensure only ONE parameter/state controls peak hold.
+   - In peak-hold mode, plot holds the maximum per-bin values until reset.
+   - If there are two parameters controlling hold, consolidate:
+     - keep one public control
+     - map the other to internal or remove if unused
+
+Rules:
+- No redesign; only fix correctness.
+- Preserve existing colors and UI.
+
+STOP AFTER DONE
+
+================================================================
+STEP 4 — FFT: SMOOTHING OPTIONS
+================================================================
+
+TASKS:
+1) Add a UI option:
+   - ComboBox: Smoothing: Off / Light / Medium / Heavy
+   - Place it where FFT options live (HeaderBar or ControlRail; prefer existing FFT settings area).
+
+2) Implement smoothing:
+   - Exponential smoothing:
+     smoothed = alpha * previous + (1 - alpha) * current
+   - Choose alphas per option:
+     Light: 0.6
+     Medium: 0.8
+     Heavy: 0.92
+   - Reset smoothing state on:
+     - FFT size change
+     - sample rate change
+     - mode change off FFT and back (optional)
+
+Rules:
+- No allocations in paint().
+- Smoothing state stored in FFT analyzer/view model, not UI component.
+
+STOP AFTER DONE
+
+================================================================
+STEP 5 — FINAL VALIDATION
+================================================================
+
+Checklist:
+- Meter mode toggle affects both in+out.
+- Peak reset resets L+R together.
+- Any clip dot press clears all clip dots.
+- Loudness labels are full words.
+- Loudness peak is max-hold until pressed reset.
+- Analyzer peak view amplitude matches expectation vs RMS.
+- Analyzer peak hold truly holds loudest values; only one control.
+- FFT smoothing option works and changes curve behavior.
+- Build passes.
+
+STOP AFTER DONE
+
+================================================================
+END
+================================================================

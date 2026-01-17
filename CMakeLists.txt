@@ -215,8 +215,10 @@ target_sources(${PLUGIN_NAME}
         Source/audio/DeviceRoutingHelper.h
         Source/ui/tooltips/TooltipManager.cpp
         Source/ui/tooltips/TooltipOverlayComponent.cpp
-        Source/state/PresetManager.cpp
-        Source/state/StateManager.cpp
+        Source/presets/PresetManager.cpp
+        Source/presets/ABStateManager.cpp
+        Source/dsp/loudness/LoudnessAnalyzer.cpp
+        Source/ui/loudness/LoudnessNumericPanel.cpp
         # ui_core OBJECT sources get added below via TARGET_OBJECTS
 )
 

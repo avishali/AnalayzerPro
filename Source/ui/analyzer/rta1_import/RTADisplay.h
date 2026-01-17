@@ -76,6 +76,30 @@ public:
     /** Set tilt mode (UI-only, affects display rendering, not DSP) */
     void setTiltMode (TiltMode mode);
     
+    /** Set L/R power spectrum data for multi-trace rendering */
+    void setLRPowerData (const float* powerL, const float* powerR, int binCount);
+
+    /** Trace configuration for multi-trace rendering */
+    struct TraceConfig
+    {
+        bool showLR = true;
+        bool showMono = false;
+        bool showL = false;
+        bool showR = false;
+        bool showMid = false;
+        bool showSide = false;
+        bool showRMS = true;  // Blue RMS trace
+        
+        // 0=None, 1=A-Weighting, 2=BS.468-4
+        int weightingMode = 0;
+    };
+    
+    /** Set trace configuration (which traces to render) */
+    void setTraceConfig (const TraceConfig& config);
+
+    /** Set hold status (UI-only, affects debug overlay) */
+    void setHoldStatus (bool isHoldOn);
+    
     /** Check structural generation and clear cache if changed (call before pulling data) */
     void checkStructuralGeneration (uint32_t currentGen);
 
@@ -125,6 +149,16 @@ private:
         std::vector<float> fftDb;
         std::vector<float> fftPeakDb;  // empty => no peaks
         
+        // Multi-trace: L/R power data (converted to dB on store)
+        std::vector<float> lDbL;
+        std::vector<float> lDbR;
+        int lrBinCount = 0;
+        
+        // Derived traces (computed from L/R in setLRPowerData, NOT in paint)
+        std::vector<float> monoDb;
+        std::vector<float> midDb;
+        std::vector<float> sideDb;
+        
         // Meta (optional)
         double sampleRate = 48000.0;
         int fftSize = 2048;
@@ -132,6 +166,16 @@ private:
         // Status
         DataStatus status = DataStatus::Ok;
         juce::String noDataReason;
+        bool isHoldOn = false;
+
+        // Unified source of truth for rendering limit
+        float getEffectiveMaxHz() const
+        {
+            const float nyquist = static_cast<float> (sampleRate * 0.5);
+            // If sampleRate is 0 or invalid, callback to maxHz (likely 20k)
+            if (nyquist <= 1.0f) return maxHz;
+            return std::min (maxHz, nyquist);
+        }
     };
     
     // B2: Geometry cache derived only from state + component bounds, never mutated in paint
@@ -214,11 +258,14 @@ private:
     // Tilt mode for frequency compensation (UI-only, affects rendering, not DSP)
     TiltMode tiltMode = TiltMode::Flat;
     
+    // Trace configuration (which traces to render)
+    TraceConfig traceConfig_;
+    
     // Structural generation tracking (to detect structural changes)
     uint32_t lastStructuralGen = 0;
 
     // Data status
-    DataStatus dataStatus = DataStatus::Ok;
+
     juce::String noDataReason;
 
     // Debug info (DEBUG only)
@@ -241,6 +288,36 @@ private:
     // Fonts and colors (cached)
     juce::Font labelFont { juce::FontOptions().withHeight (12.0f) };
     juce::Font smallFont { juce::FontOptions().withHeight (10.0f) };
+
+    // Step 3: Strict cache invalidation key
+    struct RenderConfigKey
+    {
+        int fftSize = 0;
+        double sampleRate = 0.0;
+        float minHz = 0.0f;
+        float maxHz = 0.0f;
+        float plotWidth = 0.0f;
+        bool isLog = true; // FFT mode is always log x-axis here
+
+        bool operator!= (const RenderConfigKey& other) const
+        {
+            return fftSize != other.fftSize ||
+                   std::abs (sampleRate - other.sampleRate) > 1e-5 ||
+                   std::abs (minHz - other.minHz) > 1e-5f ||
+                   std::abs (maxHz - other.maxHz) > 1e-5f ||
+                   std::abs (plotWidth - other.plotWidth) > 0.5f ||
+                   isLog != other.isLog;
+        }
+    };
+
+    RenderConfigKey lastRenderKey_;
+
+    // Step 4 & 5: Per-pixel aggregation buffers
+    // These replace the ad-hoc SeriesRenderer decimation for RMS correctness
+    std::vector<float> pixelRms_;    // Accumulator for Power (Mean) -> then dB
+    std::vector<float> pixelPeak_;   // Accumulator for Peak dB (Max)
+    std::vector<int> pixelCounts_;   // Count of bins per pixel (for Mean)
+    std::vector<float> pixelFreqs_;  // Cache x -> freq mapping (optional, but good for drawing)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RTADisplay)
 };

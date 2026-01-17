@@ -20,12 +20,23 @@ public:
                     juce::String labelText);
 
     void setLabelText (juce::String labelText);
+    void setBypassed (bool bypassed);
+    
+    // Direct drive (for M/S processing in parent)
+    void setLevels (float peakDb, float rmsDb, bool clipped);
 
     void setDisplayMode (DisplayMode mode);
     DisplayMode getDisplayMode() const noexcept { return displayMode_; }
 
     // Pull latest values from atomics (safe on message thread).
     void updateFromAtomics();
+    
+    // Explicitly reset the visual peak hold (linked reset support)
+    void resetPeakHold();
+
+    // Callbacks for linked behavior
+    std::function<void()> onClipReset;
+    std::function<void()> onPeakReset;
 
     void mouseDown (const juce::MouseEvent&) override;
     void paint (juce::Graphics&) override;
@@ -48,6 +59,7 @@ private:
     float cachedPeakDb_ = -120.0f;
     float cachedRmsDb_  = -120.0f;
     bool  cachedClip_   = false;
+    bool  isBypassed_   = false;
 
     float cachedPeakNorm_ = 0.0f;
     float cachedRmsNorm_  = 0.0f;

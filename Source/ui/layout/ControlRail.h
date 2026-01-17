@@ -22,7 +22,11 @@ public:
 
     void setControlBinder (AnalyzerPro::ControlBinder& binder);
     void setResetPeaksCallback (std::function<void()> cb);
-    // DbRange removed
+    
+    // Scope Callbacks
+    std::function<void(int)> onScopeModeChanged;  // 1=Peak, 2=RMS
+    std::function<void(int)> onScopeShapeChanged; // 1=Lissajous, 2=Scatter
+
     void paint (juce::Graphics& g) override;
     void resized() override;
 
@@ -32,32 +36,64 @@ private:
     void triggerResetPeaks();
     std::function<void()> onResetPeaks_;
 
-    // DbRange callback removed
-    
     mdsp_ui::UiContext& ui_;
 
-    // Underlying controls (must be declared before primitives that reference them)
-    // juce::ComboBox dbRangeCombo; // Removed
-    juce::ToggleButton peakHoldButton;
+    // Underlying controls
     juce::ToggleButton holdButton;
     juce::Slider peakDecaySlider;
-    juce::Slider displayGainSlider;
     juce::ComboBox tiltCombo;
     juce::TextButton resetPeaksButton { "Reset" };
     
-    // Section headers (using primitives)
+    // Scope Controls
+    juce::ComboBox scopeModeCombo;
+    juce::ComboBox scopeShapeCombo;
+    juce::ComboBox scopeInputCombo; // New
+    
+    // Meter Controls
+    juce::ComboBox meterInputCombo; // New
+    
+    // Section headers
     mdsp_ui::SectionHeader navigateHeader;
     mdsp_ui::SectionHeader analyzerHeader;
     mdsp_ui::SectionHeader displayHeader;
     mdsp_ui::SectionHeader metersHeader;
     
-    // Control rows (using primitives - reference controls above)
-    // mdsp_ui::ChoiceRow dbRangeRow; // Removed
-    mdsp_ui::ToggleRow peakHoldRow;
+    // Control rows
     mdsp_ui::ToggleRow holdRow;
     mdsp_ui::SliderRow peakDecayRow;
-    mdsp_ui::SliderRow displayGainRow;
     mdsp_ui::ChoiceRow tiltRow;
+    
+    mdsp_ui::ChoiceRow scopeModeRow;
+    mdsp_ui::ChoiceRow scopeShapeRow;
+    mdsp_ui::ChoiceRow scopeInputRow; // New
+    mdsp_ui::ChoiceRow meterInputRow; // New
+    
+    // Trace Toggles
+    juce::ToggleButton showLrButton;
+    juce::ToggleButton showMonoButton;
+    juce::ToggleButton showLButton;
+    juce::ToggleButton showRButton;
+    juce::ToggleButton showMidButton;
+    juce::ToggleButton showSideButton;
+    juce::ToggleButton showRmsButton;
+    
+    mdsp_ui::ToggleRow showLrRow;
+    mdsp_ui::ToggleRow showMonoRow;
+    mdsp_ui::ToggleRow showLRow;
+    mdsp_ui::ToggleRow showRRow;
+    mdsp_ui::ToggleRow showMidRow;
+    mdsp_ui::ToggleRow showSideRow;
+    mdsp_ui::ToggleRow showRmsRow;
+    
+    // Smoothing
+    
+    // Smoothing
+    juce::ComboBox smoothingCombo;
+    mdsp_ui::ChoiceRow smoothingRow;
+
+    // Weighting
+    juce::ComboBox weightingCombo;
+    mdsp_ui::ChoiceRow weightingRow;
     
     // Navigate section (placeholder)
     juce::Label placeholderLabel1;

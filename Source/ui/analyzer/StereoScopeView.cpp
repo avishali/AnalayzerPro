@@ -59,11 +59,46 @@ void StereoScopeView::renderScopeToImage()
     const float cy = h * 0.5f;
     const float radius = juce::jmin (cx, cy) * scale_;
     
-    // Draw points
-    // We can draw a path or individual points?
-    // Vectorscope usually draws a connected line (lissajous).
-    // Or cloud of points. Let's try connected line for "trace".
-    
+    // RMS Smoothing Logic
+    // If RMS Mode, we smooth the input L/R signals before mapping
+    if (scopeMode_ == ScopeMode::RMS)
+    {
+         if (lSmoothed_.size() != lBuffer_.size()) { lSmoothed_.resize(lBuffer_.size(), 0.0f); std::fill(lSmoothed_.begin(), lSmoothed_.end(), 0.0f); }
+         if (rSmoothed_.size() != rBuffer_.size()) { rSmoothed_.resize(rBuffer_.size(), 0.0f); std::fill(rSmoothed_.begin(), rSmoothed_.end(), 0.0f); }
+         
+         // Simple temporal smoothing? No, that's frame-to-frame.
+         // "RMS Scope" usually means slow ballistics.
+         // But here we are plotting a snapshot buffer of N samples.
+         // If we smooth *within* the buffer, we lose high frequency detail (Lissajous becomes rounder).
+         // If we smooth *frame-to-frame*, the whole blob lags. 
+         // Let's assume user wants "slower, less jittery" blob.
+         // Simple approach: Moving Average on the input buffer?
+         // Or just apply simple Low Pass on the coordinates?
+         // Let's apply simple 2-point moving average to reduce jitter for now, or just trust raw samples if "RMS" just means "Display as Cloud".
+         // Actually, most "RMS" scopes just integrate over small window.
+         // Let's stick to raw samples for now but draw them as cloud (scatter) if Shape is PAZ.
+         // Wait, ScopeMode and Shape are orthogonal.
+         // If Mode=RMS, maybe we should square/sqrt? No, scope is phase correlation.
+         // Let's interpret "RMS Mode" as "Slower Decay / Integration".
+         // But decay is global.
+         // Let's implement ScopeMode::RMS as "Highlight High Energy" or simple LPF.
+         // Use a simple LPF on the buffer in place for display?
+         
+         // Implementation: Simple LPF
+         float lState = 0.0f;
+         float rState = 0.0f;
+         const float coeff = 0.15f; 
+         
+         const size_t count = lBuffer_.size();
+         for(size_t i=0; i<count; ++i)
+         {
+             lState += coeff * (lBuffer_[i] - lState);
+             rState += coeff * (rBuffer_[i] - rState);
+             lSmoothed_[i] = lState;
+             rSmoothed_[i] = rState;
+         }
+    }
+
     g.setColour (theme.seriesPeak.withAlpha (0.9f)); // High contrast trace
     
     juce::Path p;
@@ -71,50 +106,69 @@ void StereoScopeView::renderScopeToImage()
     
     // Processing loop
     const size_t count = lBuffer_.size();
+    
+    // Optimization: scatter plot can just set pixels or draw small rects
+    // Graphics::drawPoint doesn't exist? fillRect(x,y,1,1)
+    
     for (size_t i = 0; i < count; ++i)
     {
-        float l = lBuffer_[i];
-        float r = rBuffer_[i];
+        float l = (scopeMode_ == ScopeMode::RMS) ? lSmoothed_[i] : lBuffer_[i];
+        float r = (scopeMode_ == ScopeMode::RMS) ? rSmoothed_[i] : rBuffer_[i];
         
-        // Mid/Side Calculate
-        // M = (L+R)/sqrt(2) usually, but simple L+R scales faster.
-        // We want normalized [-1, 1] input to map to radius.
-        // Input audio is usually [-1, 1].
-        // Side = L - R (Range -2 to 2)
-        // Mid  = L + R (Range -2 to 2)
-        // Adjust scale accordingly.
-        
-        float side = (l - r) * 0.5f; // [-1, 1]
-        float mid  = (l + r) * 0.5f; // [-1, 1]
-        
-        // Map to screen
-        // X = cx + side * radius
-        // Y = cy - mid * radius  (Inverted Y)
-        
-        float sx = cx + side * radius * 2.5f; // Explicit scale boost for visibility
-        float sy = cy - mid * radius * 2.5f;
-        
-        if (first)
+        // Coordinate Calculation based on Channel Mode
+        float sx = 0.0f;
+        float sy = 0.0f;
+
+        if (channelMode_ == ChannelMode::MidSide)
         {
-            p.startNewSubPath (sx, sy);
-            first = false;
+            // Classic Vectorscope (Mid/Side)
+            // Side = L - R (X axis)
+            // Mid  = L + R (Y axis)
+            float side = (l - r) * 0.5f; 
+            float mid  = (l + r) * 0.5f; 
+            
+            sx = cx + side * radius * 2.5f; 
+            sy = cy - mid * radius * 2.5f;
         }
         else
         {
-            p.lineTo (sx, sy);
+            // Stereo Scope (X-Y Plot)
+            // X = L
+            // Y = R
+            // This plots Left on X axis, Right on Y axis.
+            // Range [-1, 1] mapped to radius.
+            
+            sx = cx + l * radius; 
+            sy = cy - r * radius;
+        }
+        
+        if (scopeShape_ == ScopeShape::Lissajous)
+        {
+            if (first)
+            {
+                p.startNewSubPath (sx, sy);
+                first = false;
+            }
+            else
+            {
+                p.lineTo (sx, sy);
+            }
+        }
+        else // Scatter
+        {
+             g.fillRect (sx - 1.0f, sy - 1.0f, 2.0f, 2.0f);
         }
     }
     
-    // Using a path stroke might be heavy for 512 points?
-    // 512 points is fine.
-    g.strokePath (p, juce::PathStrokeType (1.2f));
+    if (scopeShape_ == ScopeShape::Lissajous)
+    {
+        g.strokePath (p, juce::PathStrokeType (1.2f));
+    }
 }
 
 void StereoScopeView::paint (juce::Graphics& g)
 {
     const auto& theme = ui_.theme();
-    const auto& metrics = ui_.metrics();
-    
     // Background
     g.fillAll (theme.panel);
     
@@ -142,9 +196,18 @@ void StereoScopeView::paint (juce::Graphics& g)
     g.setColour (theme.textMuted);
     g.setFont (ui_.type().labelSmallFont());
     
-    // Use float rectangle for drawText
-    g.drawText ("M", juce::Rectangle<float> (cx + 2, 2, 20, 12), juce::Justification::topLeft, false);
-    g.drawText ("S", juce::Rectangle<float> (area.getRight() - 20, cy - 12, 15, 12), juce::Justification::centredRight, false);
+    // Draw Labels based on Mode
+    if (channelMode_ == ChannelMode::MidSide)
+    {
+        g.drawText ("M", juce::Rectangle<float> (cx + 2, 2, 20, 12), juce::Justification::topLeft, false);
+        g.drawText ("S", juce::Rectangle<float> (area.getRight() - 20, cy - 12, 15, 12), juce::Justification::centredRight, false);
+    }
+    else
+    {
+        // Stereo Mode Labels: Y-axis is R, X-axis is L
+        g.drawText ("R", juce::Rectangle<float> (cx + 2, 2, 20, 12), juce::Justification::topLeft, false);
+        g.drawText ("L", juce::Rectangle<float> (area.getRight() - 20, cy - 12, 15, 12), juce::Justification::centredRight, false);
+    }
     
     // Draw Accumulation Buffer
     if (!accumImage_.isNull())

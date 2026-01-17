@@ -22,12 +22,25 @@ enum class ControlId
     AnalyzerMode,        // FFT / BANDS / LOG
     AnalyzerFftSize,
     AnalyzerAveraging,
-    AnalyzerPeakHold,   // Enable/disable peak hold
-    AnalyzerHold,
+    AnalyzerHoldPeaks,   // Consolidated Hold
     AnalyzerPeakDecay,
-    AnalyzerDisplayGain,
     AnalyzerTilt,
     MasterBypass,
+    TraceShowLR,
+    TraceShowMono,
+    TraceShowL,
+    TraceShowR,
+    TraceShowMid,
+    TraceShowSide,
+    TraceShowRMS,
+    AnalyzerWeighting,
+    
+    // Scope
+    ScopeChannelMode, // 0=Stereo, 1=MidSide
+    
+    // Meters
+    MeterChannelMode, // 0=Stereo, 1=MidSide
+    
     // Add control IDs as needed
     Count
 };

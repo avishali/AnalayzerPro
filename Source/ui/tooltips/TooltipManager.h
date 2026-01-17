@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <map>
+#include <mdsp_ui/UiContext.h>
 #include "TooltipData.h"
 #include "TooltipOverlayComponent.h"
 

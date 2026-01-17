@@ -6,8 +6,9 @@
 #include "analyzer/AnalyzerEngine.h"
 #include "hardware/HardwareMeterMapper.h"
 #include "hardware/SoftwareMeterSink.h"
-#include "state/PresetManager.h"
-#include "state/StateManager.h"
+#include "presets/PresetManager.h"
+#include "presets/ABStateManager.h"
+#include "dsp/loudness/LoudnessAnalyzer.h"
 #include <limits>
 
 
@@ -91,11 +92,8 @@ public:
     int getMeterInputChannelCount() const noexcept;
     int getMeterOutputChannelCount() const noexcept;
 
-    void setInputMeterMode (MeterMode mode) noexcept { inputMeterMode_.store (static_cast<int> (mode), std::memory_order_relaxed); }
-    MeterMode getInputMeterMode() const noexcept { return static_cast<MeterMode> (inputMeterMode_.load (std::memory_order_relaxed)); }
-
-    void setOutputMeterMode (MeterMode mode) noexcept { outputMeterMode_.store (static_cast<int> (mode), std::memory_order_relaxed); }
-    MeterMode getOutputMeterMode() const noexcept { return static_cast<MeterMode> (outputMeterMode_.load (std::memory_order_relaxed)); }
+    void setMeterMode (MeterMode mode) noexcept { meterMode_.store (static_cast<int> (mode), std::memory_order_relaxed); }
+    MeterMode getMeterMode() const noexcept { return static_cast<MeterMode> (meterMode_.load (std::memory_order_relaxed)); }
 
     // Reset clears clip latch only (does not affect analyzer state/history).
     void resetMeterClipLatches() noexcept;
@@ -106,8 +104,10 @@ public:
     int getEditorHeight() const noexcept { return parameters.getEditorHeight(); }
     
     //==============================================================================
-    AnalyzerPro::state::PresetManager& getPresetManager() { return *presetManager; }
-    AnalyzerPro::state::StateManager& getStateManager() { return *stateManager; }
+    AnalyzerPro::presets::PresetManager& getPresetManager() { return *presetManager; }
+    AnalyzerPro::presets::ABStateManager& getABStateManager() { return *abStateManager; }
+
+    AnalyzerPro::dsp::LoudnessAnalyzer& getLoudnessAnalyzer() { return loudnessAnalyzer; }
     
     //==============================================================================
     // Bypass Helpers
@@ -123,27 +123,21 @@ private:
     int   lastAveragingIndex_ = -1;
     bool  lastHold_ = false;
     float lastPeakDecayDbPerSec_ = std::numeric_limits<float>::quiet_NaN();
-    // Cached raw APVTS parameter pointers (avoid map lookups in processBlock)
-    std::atomic<float>* pFftSize_   = nullptr;
-    std::atomic<float>* pAveraging_ = nullptr;
-    std::atomic<float>* pPeakHold_ = nullptr;
-    std::atomic<float>* pHold_      = nullptr;
-    std::atomic<float>* pPeakDecay_ = nullptr;
-    std::atomic<float>* pDbRange_   = nullptr;
-    std::atomic<float>* pBypass_    = nullptr;
         
     // APVTS for analyzer controls
     juce::AudioProcessorValueTreeState apvts;
     
     // State Managers
-    std::unique_ptr<AnalyzerPro::state::PresetManager> presetManager;
-    std::unique_ptr<AnalyzerPro::state::StateManager> stateManager;
+    std::unique_ptr<AnalyzerPro::presets::PresetManager> presetManager;
+    std::unique_ptr<AnalyzerPro::presets::ABStateManager> abStateManager;
+
+
+    AnalyzerPro::dsp::LoudnessAnalyzer loudnessAnalyzer; // Integrated Loudness Analyzer
 
     MeterState inputMeters_[2];
     MeterState outputMeters_[2];
     
-    std::atomic<int> inputMeterMode_ { 0 }; // 0=RMS
-    std::atomic<int> outputMeterMode_ { 0 }; // 0=RMS
+    std::atomic<int> meterMode_ { 0 }; // 0=RMS, 1=Peak (Shared)
 
     float inputPeakEnv_[2] { 0.0f, 0.0f };
     float outputPeakEnv_[2]{ 0.0f, 0.0f };
@@ -154,8 +148,37 @@ private:
     HardwareMeterMapper hardwareMeterMapper_ { HardwareMeterMapper::Config { 16, false } };
     SoftwareMeterSink softwareMeterSink_;
     
+    // Scratch buffer for analysis (avoids modifying output buffer for visualization)
+    juce::AudioBuffer<float> analysisBuffer;
+    juce::AudioBuffer<float> outputAnalysisBuffer; // Added for V2 Output Metering
+    
+    // Cached parameter pointers
+    std::atomic<float>* pFftSize_ = nullptr;
+    std::atomic<float>* pAveraging_ = nullptr;
+    std::atomic<float>* pHoldPeaks_ = nullptr;
+    std::atomic<float>* pPeakDecay_ = nullptr;
+    std::atomic<float>* pBypass_ = nullptr;
+    
+    // Trace Config Parameters
+    std::atomic<float>* pTraceShowLR_ = nullptr;
+    std::atomic<float>* pTraceShowMono_ = nullptr;
+    std::atomic<float>* pTraceShowL_ = nullptr;
+    std::atomic<float>* pTraceShowR_ = nullptr;
+    std::atomic<float>* pTraceShowMid_ = nullptr;
+    std::atomic<float>* pTraceShowSide_ = nullptr;
+    std::atomic<float>* pTraceShowRMS_ = nullptr;
+    
     // Parameter creation helper
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    
+    // Migration helper
+    // Migration helper
+    static void migrateLegacyParameters (juce::ValueTree& state);
+
+#if JucePlugin_Build_Standalone
+    struct StandalonePersistence;
+    std::unique_ptr<StandalonePersistence> standalonePersistence;
+#endif
 
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AnalayzerProAudioProcessor)

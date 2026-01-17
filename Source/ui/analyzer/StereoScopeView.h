@@ -39,5 +39,23 @@ private:
     float decayFactor_ = 0.85f;
     float scale_ = 0.8f; // Visual scaling
     
+public:
+    enum class ScopeMode { Peak, RMS };
+    enum class ScopeShape { Lissajous, Scatter };
+    enum class ChannelMode { Stereo, MidSide }; // 0=Stereo, 1=MidSide
+
+    void setScopeMode (ScopeMode mode) { scopeMode_ = mode; }
+    void setScopeShape (ScopeShape shape) { scopeShape_ = shape; }
+    void setChannelMode (ChannelMode mode) { channelMode_ = mode; }
+
+private:
+    ScopeMode scopeMode_ = ScopeMode::Peak;
+    ScopeShape scopeShape_ = ScopeShape::Scatter;
+    ChannelMode channelMode_ = ChannelMode::MidSide; // Default to M/S (Classic Vector)
+    
+    // Smoothing state for RMS mode
+    std::vector<float> lSmoothed_;
+    std::vector<float> rSmoothed_;
+    
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StereoScopeView)
 };
