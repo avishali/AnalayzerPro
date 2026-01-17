@@ -323,73 +323,15 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (int ch = numAnalChannels; ch < analysisBuffer.getNumChannels(); ++ch)
         analysisBuffer.clear (ch, 0, n);
 
-    // Apply Mode derived from Trace Config
-    // Logic: If M or S is ON (and LR is OFF), use M/S. If Mono is ON (and LR is OFF), use Mono. Else L-R.
-    int modeIdx = 0; // Default L-R
-    
-    const bool showLR   = (pTraceShowLR_   && pTraceShowLR_->load() > 0.5f);
-    const bool showMono = (pTraceShowMono_ && pTraceShowMono_->load() > 0.5f);
-    const bool showMid  = (pTraceShowMid_  && pTraceShowMid_->load() > 0.5f);
-    const bool showSide = (pTraceShowSide_ && pTraceShowSide_->load() > 0.5f);
-    
-    if ((showMid || showSide) && !showLR)
-    {
-        modeIdx = 2; // M/S
-    }
-    else if (showMono && !showLR)
-    {
-        modeIdx = 1; // Mono
-    }
-    else
-    {
-        modeIdx = 0; // L-R
-    }
-    
-    // Mode mappings: 0=L-R, 1=Mono, 2=M/S
-    if (modeIdx == 1 && numAnalChannels >= 2) // Mono
-    {
-        // Mono sum: L = R = 0.5 * (L + R)
-        analysisBuffer.addFrom (0, 0, analysisBuffer, 1, 0, n);
-        analysisBuffer.applyGain (0, 0, n, 0.5f);
-        analysisBuffer.copyFrom (1, 0, analysisBuffer, 0, 0, n);
-    }
-    else if (modeIdx == 2 && numAnalChannels >= 2) // M/S
-    {
-        // Mid = 0.5 * (L + R)
-        // Side = 0.5 * (L - R)
-        // L -> Mid, R -> Side
-        
-        // We can do this in-place or with temp.
-        // Temp buffers for M and S
-        const float* l = analysisBuffer.getReadPointer (0);
-        const float* r = analysisBuffer.getReadPointer (1);
-        float* mid = analysisBuffer.getWritePointer (0);
-        float* side = analysisBuffer.getWritePointer (1);
-        
-        for (int i = 0; i < n; ++i)
-        {
-            const float L = l[i];
-            const float R = r[i];
-            
-            // Be careful about aliasing if writing back to same buffer
-            // Since we read s[i] before writing d[i], and i is strictly increasing,
-            // and L/R are separate pointers (channels),
-            // wait, getReadPointer and getWritePointer return the SAME memory if it's the same channel.
-            // So 'mid' points to 'l'.
-            
-            const float m = 0.5f * (L + R);
-            const float s = 0.5f * (L - R);
-            
-            mid[i] = m;
-            side[i] = s;
-        }
-    }
+    // DECOUPLED: Analysis buffer always carries Stereo L/R.
+    // Downstream consumers (Scope, Meters) can decide how to view it.
+    // RTADisplay derives its own Mid/Side/Mono traces from this L/R data.
+    juce::ignoreUnused (pTraceShowLR_, pTraceShowMono_, pTraceShowMid_, pTraceShowSide_, pTraceShowRMS_);
 
-    // Input meters: measure ANALYSIS buffer (post-transform)
-    // Note: Previously this measured 'buffer' (pre-gain). Now we measure transformed analysis buffer.
-    // The requirement is "Analyzer and Meters must reflect the selected mode".
+    // Input meters: measure RAW buffer (pre-mode-transform, pre-gain)
+    // Decoupled from analyzer mode. UI decides display mode via meterChannelMode param.
     
-    const int inChCount = juce::jlimit (0, 2, analysisBuffer.getNumChannels());
+    const int inChCount = juce::jlimit (0, 2, buffer.getNumChannels());
     for (int ch = 0; ch < 2; ++ch)
         {
         if (ch >= inChCount)
@@ -399,7 +341,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             continue;
         }
 
-        const float* x = analysisBuffer.getReadPointer (ch);
+        const float* x = buffer.getReadPointer (ch); // RAW buffer, not analysisBuffer
         float blockPeak = 0.0f;
         float sumSq = 0.0f;
         bool clipped = false;
@@ -536,45 +478,10 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         
 
     // --- Output Metering Path ---
-    // 1. Copy Output (post-gain) to scratch
-    // 2. Apply Mode (same as Input)
-    // 3. Feed Output Meters
+    // Decoupled from analyzer mode. Meters read RAW output buffer (post-gain).
+    // UI decides display mode via meterChannelMode param.
 
-    if (outputAnalysisBuffer.getNumSamples() < n)
-        outputAnalysisBuffer.setSize (2, n, true, false, true);
-    
-    // Copy output (buffer) to scratch
-    for (int ch = 0; ch < numAnalChannels; ++ch)
-        outputAnalysisBuffer.copyFrom (ch, 0, buffer, ch, 0, n);
-    for (int ch = numAnalChannels; ch < outputAnalysisBuffer.getNumChannels(); ++ch)
-        outputAnalysisBuffer.clear (ch, 0, n);
-
-    // Apply Mode (Reuse modeIdx from Input Analysis)
-    if (modeIdx == 1 && numAnalChannels >= 2) // Mono
-    {
-        outputAnalysisBuffer.addFrom (0, 0, outputAnalysisBuffer, 1, 0, n);
-        outputAnalysisBuffer.applyGain (0, 0, n, 0.5f);
-        outputAnalysisBuffer.copyFrom (1, 0, outputAnalysisBuffer, 0, 0, n);
-    }
-    else if (modeIdx == 2 && numAnalChannels >= 2) // M/S
-    {
-        const float* l = outputAnalysisBuffer.getReadPointer (0);
-        const float* r = outputAnalysisBuffer.getReadPointer (1);
-        float* mid = outputAnalysisBuffer.getWritePointer (0);
-        float* side = outputAnalysisBuffer.getWritePointer (1);
-        
-        for (int i = 0; i < n; ++i)
-        {
-            const float L = l[i];
-            const float R = r[i];
-            const float m = 0.5f * (L + R);
-            const float s = 0.5f * (L - R);
-            mid[i] = m;
-            side[i] = s;
-        }
-    }
-
-    // 4. Feed Output Meters
+    // 4. Feed Output Meters from RAW buffer (post-gain)
     const int outChCount = juce::jlimit (0, 2, totalNumOutputChannels);
     for (int ch = 0; ch < 2; ++ch)
     {
@@ -585,7 +492,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             continue;
         }
 
-        const float* y = outputAnalysisBuffer.getReadPointer (ch); // Read from transformed Output Buffer
+        const float* y = buffer.getReadPointer (ch); // RAW buffer post-gain
         float blockPeak = 0.0f;
         float sumSq = 0.0f;
         bool clipped = false;
@@ -894,6 +801,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
         "meterChannelMode", "Meter Input",
         juce::StringArray { "Stereo", "Mid-Side" }, // 0=Stereo, 1=M/S
         0)); // Default Stereo
+
+    // Meter Peak Hold
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        "meterPeakHold", "Meter Peak Hold",
+        false,  // Default: OFF
+        "Meter Peak Hold"));
+
+    // Scope Peak Hold
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        "scopePeakHold", "Scope Peak Hold",
+        false,  // Default: OFF
+        "Scope Peak Hold"));
 
     
     return { params.begin(), params.end() };

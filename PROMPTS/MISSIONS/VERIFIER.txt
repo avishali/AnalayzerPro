@@ -1,53 +1,51 @@
-VERIFIER PROMPT
+PROMPTS/RUNBOOKS/SIDE_TRACE_SMOOTHING_AND_SMOOTHING_SWITCH_FIX_V1_VERIFIER.txt
 
-You are verifying RMS_BALLISTICS_TUNING_V1
+Mission ID: SIDE_TRACE_SMOOTHING_AND_SMOOTHING_SWITCH_FIX_V1
 
-TEST MATRIX:
+Verifier Goal
+Confirm SIDE is smoothed when smoothing is enabled, and smoothing option switching is artifact-free.
 
-Test 1 — Transient Separation
-	•	Play drum loop
-	•	Observe:
-	•	Peak jumps immediately
-	•	RMS rises slowly and smoothly
-PASS if RMS never spikes to Peak height
+Code Verification
+	1.	SIDE smoothing wired
 
-Test 2 — Hold Isolation
-	•	Enable Peak Hold
-	•	RMS must continue moving
-PASS if RMS ignores Hold entirely
+	•	Find the smoothing application point.
+	•	Confirm SIDE passes through it when smoothing != Off.
+PASS if: SIDE uses smoothed buffer when smoothing enabled; raw buffer when Off.
 
-Test 3 — Silence Falloff
-	•	Stop audio
-	•	RMS should decay slowly, not snap down
-PASS if decay takes >200ms visually
+	2.	Smoothing change resets state
 
-Test 4 — Mode Stability
-	•	Switch FFT sizes (1024 → 8192)
-	•	RMS feel must remain consistent
-PASS if no timing change is perceived
+	•	Confirm there is explicit handling when smoothing param changes:
+	•	reset smoothing processor state OR generation mechanism
+	•	invalidate caches for smoothed traces
+PASS if: change handling exists and affects SIDE at minimum.
 
-Test 5 — Multi-Trace Consistency
-	•	Enable L, R, Mid, Side
-	•	All RMS traces must share same smoothing behavior
-PASS if no trace feels “faster” or “twitchy”
+	3.	Render guards
 
-⸻
+	•	Confirm renderer checks buffer sizes (numBins) and avoids drawing mismatched buffers.
+PASS if: no “use stale vector size” risk remains.
 
-FAILURE CONDITIONS
-	•	RMS visually tracks Peak
-	•	RMS freezes during Hold
-	•	RMS flickers between frames
-	•	CPU usage increases noticeably
-	•	Any trace disappears or flattens
+Runtime Verification
 
-⸻
+Test A — Side-only smoothing
+	•	Enable Side trace only.
+	•	Cycle smoothing options rapidly while audio plays.
+Expected:
+	•	SIDE remains visible, no partial curves, no vertical drop artifacts.
 
-SUCCESS CRITERIA
+Test B — Multi-trace smoothing switching
+	•	Enable several traces including Side.
+	•	Change smoothing options.
+Expected:
+	•	No trace corruption; all traces update coherently.
 
-RMS should feel:
-	•	Calm
-	•	Heavy
-	•	Trustworthy
-	•	“Mastering-grade”
+Test C — FFT size + smoothing
+	•	With smoothing enabled, change FFT size 2048/4096/8192.
+Expected:
+	•	Side remains correct; no artifacts.
 
-If it feels like a VU meter layered onto a spectrum — mission is successful.
+Report
+Write VERIFIER_RESULT.md with PASS/FAIL for:
+	•	Side smoothing applied
+	•	Smoothing switch stability
+	•	FFT size interaction
+If FAIL: specify exact missing reset/guard and the minimal fix.

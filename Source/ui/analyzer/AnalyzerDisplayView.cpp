@@ -100,6 +100,31 @@ void AnalyzerDisplayView::setPeakDbRange (DbRange r)
     repaint();
 }
 
+void AnalyzerDisplayView::resetSessionMarker()
+{
+    sessionMarkerValid_ = false;
+    sessionMarkerDb_ = -1000.0f;
+    sessionMarkerBin_ = -1;
+    // Force immediate update to display
+    rtaDisplay.setSessionMarker (false, -1, -1000.0f);
+}
+
+void AnalyzerDisplayView::resetViewPeaks()
+{
+    // Clear UI-side latch buffer
+    std::fill (uiHeldPeak_.begin(), uiHeldPeak_.end(), -120.0f);
+    
+    // Clear session marker
+    resetSessionMarker();
+    
+    // Trigger flash for visual feedback
+    triggerPeakFlash();
+    
+    // Force remap/repaint
+    peakScaleDirty_ = true;
+    repaint();
+}
+
 void AnalyzerDisplayView::triggerPeakFlash()
 {
     peakFlashActive_ = true;
@@ -595,6 +620,7 @@ void AnalyzerDisplayView::timerCallback()
     // Read Weighting (Choice 0=None, 1=A, 2=BS.468-4)
     auto* pWeight = apvts.getRawParameterValue("analyzerWeighting");
     traceConfig.weightingMode = (pWeight != nullptr) ? (int)pWeight->load() : 0;
+    currentWeightingMode_ = traceConfig.weightingMode; // Store for updateFromSnapshot
     
     // Read Smoothing (Fractional Octave)
     auto* pSmoothing = apvts.getRawParameterValue("Averaging");
@@ -608,6 +634,11 @@ void AnalyzerDisplayView::timerCallback()
         {
             lastSmoothingIdx_ = index;
             smoothingOctaves_ = kSmoothingOctaves[index];
+            
+            // Reset ballistics state to prevent glitches during smoothing transitions
+            powerLState_.clear();
+            powerRState_.clear();
+            rmsState_.clear();
         }
     }
     
@@ -781,7 +812,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     
     // Update Hold Status
     isHoldOn_ = snapshot.isHoldOn;
-    rtaDisplay.setHoldStatus (isHoldOn_);
+    // rtaDisplay.setHoldStatus (isHoldOn_);
     
     // Route data STRICTLY by mode (FFT data only sent in FFT mode)
     // -------------------------------------------------------------------------
@@ -870,25 +901,183 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
          }
     }
     
-    // Sanitize and stats
-    float minVal = std::numeric_limits<float>::max();
+    // -------------------------------------------------------------------------
+    // 1b. WEIGHTING + SMOOTHING + BALLISTICS PIPELINE
+    // -------------------------------------------------------------------------
+    
+    // A. Rebuild weighting table if needed
+    const int weightingMode = currentWeightingMode_; // Use member variable
+    const int currentFftSize = snapshot.fftSize;
+    const double currentSampleRate = snapshot.sampleRate;
+    
+    rebuildWeightingTable (weightingMode, currentSampleRate, currentFftSize);
+    
+    // B. Apply Weighting (Pre-process Raw)
+    // Applies to RMS and Peak buffers BEFORE smoothing or ballistics
+    if (!cachedWeightingTable_.empty())
+    {
+        // Apply to RMS (fftDb_)
+        if (fftDb_.size() == cachedWeightingTable_.size())
+        {
+            for (size_t i = 0; i < fftDb_.size(); ++i)
+                fftDb_[i] += cachedWeightingTable_[i]; // Add dB offsets
+        }
+        
+        // Apply to Peak (fftPeakDb_)
+        if (fftPeakDb_.size() == cachedWeightingTable_.size())
+        {
+            for (size_t i = 0; i < fftPeakDb_.size(); ++i)
+                fftPeakDb_[i] += cachedWeightingTable_[i];
+        }
+        
+        // Apply to Held Peak (uiHeldPeak_) - correction: Hold should represent held *weighted* values.
+        // Since input peak is now weighted, hold logic naturally holds weighted values.
+        // But if we toggle weighting ON while holding, the held values are "raw". 
+        // We accept that limitation for V1 (hold is reset on param change usually not forced though).
+        // Actually, let's not valid-hold-shift. Valid expectation: "Hold" freezes what was on screen.
+        // If we change weighting, the "Frozen" line should probably stay as is?
+        // Or should it re-conform? 
+        // For now, only new data is weighted. Held data is static.
+        
+        // Apply to Multi-Trace Buffers (snapshot L/R are raw)
+        // We must apply weighting to scratch buffers during their processing below.
+    }
+
+
+
+    // Sanitize after weighting
+    for (auto& v : fftDb_) v = sanitizeDb(v);
+    for (auto& v : fftPeakDb_) v = sanitizeDb(v);
+    
+    // -------------------------------------------------------------------------
+    // Session Marker Logic (Calculate on Peak Data)
+    // -------------------------------------------------------------------------
+    // const bool holdOn = snapshot.isHoldOn; // Already defined above
+    
+    // Detect new session (off -> on)
+    if (holdOn && !lastHoldState_)
+    {
+        sessionMarkerValid_ = false;
+        sessionMarkerDb_ = -1000.0f;
+    }
+    // Detect clear (on -> off)
+    else if (!holdOn && lastHoldState_)
+    {
+        sessionMarkerValid_ = false; 
+    }
+    
+    // Reset if meta changed
+    if (snapshot.fftSize != lastFftSize_ || 
+        std::abs(snapshot.sampleRate - lastMetaSampleRate_) > 1.0)
+    {
+        sessionMarkerValid_ = false;
+        sessionMarkerDb_ = -1000.0f;
+    }
+    
+    lastHoldState_ = holdOn;
+    
+    // Scan for new max if Hold is active
+    if (holdOn && usePeaks && !fftPeakDb_.empty())
+    {
+        float currentMax = -1000.0f;
+        int maxBin = -1;
+        
+        for (size_t i = 0; i < fftPeakDb_.size(); ++i)
+        {
+            if (fftPeakDb_[i] > currentMax)
+            {
+                currentMax = fftPeakDb_[i];
+                maxBin = (int)i;
+            }
+        }
+        
+        // Update session max if we found a higher peak
+        // Use epsilon to avoid noise updates
+        if (currentMax > (sessionMarkerDb_ + 0.1f))
+        {
+            sessionMarkerDb_ = currentMax;
+            sessionMarkerBin_ = maxBin;
+            sessionMarkerValid_ = true;
+        }
+    }
+    
+    // C. Min/Max Stats (Post-Weighting)
+    float minVal = std::numeric_limits<float>::max(); // Re-declare with type
     float maxVal = std::numeric_limits<float>::lowest();
     
     for (size_t i = 0; i < validBinsSize; ++i)
     {
-        fftDb_[i] = sanitizeDb (fftDb_[i]);
-        minVal = juce::jmin (minVal, fftDb_[i]);
-        maxVal = juce::jmax (maxVal, fftDb_[i]);
-        
-        // Ensure state follows reset if needed (e.g. if we want instant reset on size change)
-        // But we handle resize inside applyBallistics.
+        // Check bounds again just in case
+        if (i < fftDb_.size())
+        {
+             minVal = juce::jmin (minVal, fftDb_[i]);
+             maxVal = juce::jmax (maxVal, fftDb_[i]);
+        }
     }
     
-    // Apply RMS Ballistics (Time Smoothing) - Pro-Q style
-    // This allows the RMS trace to respond musically (Fast Att / Slow Rel)
-    // while the Peak trace remains instantaneous.
+    // D. RMS Ballistics (Time Smoothing)
+    // Applied to the now-weighted fftDb_
     applyBallistics (fftDb_.data(), rmsState_, validBinsSize);
     
+    // Multi-Trace Processing (moved here to share weighting table)
+    if (snapshot.multiTraceEnabled)
+    {
+        // Resize scratch buffers
+        const size_t validBinsSz = static_cast<size_t> (validBins);
+        if (scratchPowerL_.size() != validBinsSz) scratchPowerL_.resize (validBinsSz);
+        if (scratchPowerR_.size() != validBinsSz) scratchPowerR_.resize (validBinsSz);
+        
+        // Copy Raw first
+        if (snapshot.powerL.size() >= validBinsSz)
+            std::copy (snapshot.powerL.begin(), snapshot.powerL.begin() + validBins, scratchPowerL_.begin());
+        if (snapshot.powerR.size() >= validBinsSz)
+            std::copy (snapshot.powerR.begin(), snapshot.powerR.begin() + validBins, scratchPowerR_.begin());
+            
+        // Apply Weighting to L/R
+        if (!cachedWeightingTable_.empty() && cachedWeightingTable_.size() == validBinsSz)
+        {
+             for (size_t i = 0; i < validBinsSz; ++i)
+             {
+                 scratchPowerL_[i] += cachedWeightingTable_[i];
+                 scratchPowerR_[i] += cachedWeightingTable_[i];
+             }
+        }
+        
+        // Apply Smoothing
+        smoother_.setConfig (smoothingOctaves_, snapshot.fftSize);
+        // smooth in place? No, smoother expects input/output.
+        // We need another scratch or double buffer logic if we want to smooth the weighted data.
+        // Smoother takes const float* input, float* output.
+        // We can use the same buffer if it supports it? 
+        // My SmoothingProcessor implementation likely does NOT support in-place if it uses prefix sums.
+        // Let's check `SmoothingProcessor::process` signature.
+        
+        // To be safe, let's use a temp buffer or just implement in-place if careful.
+        // Actually, smoother likely computes bounds based on index.
+        // Let's create `scratchSmoothL_` if needed. Use `powerLState_` as temp? No, that's ballistics state.
+        
+        // Actually, the previous code was:
+        // smoother_.process (snapshot.powerL.data(), scratchPowerL_.data(), validBins);
+        
+        // Use a persistent scratch buffer for the "smoothed" result
+        static std::vector<float> tempL, tempR; // Avoid static in method.
+        // Let's use `logDb_` or similar as temp? No.
+        
+        // Let's just allocate strictly scoped vectors for now to ensure correctness
+        std::vector<float> smoothedL (validBinsSz), smoothedR (validBinsSz);
+        
+        smoother_.process (scratchPowerL_.data(), smoothedL.data(), validBins);
+        smoother_.process (scratchPowerR_.data(), smoothedR.data(), validBins);
+        
+        // Copy back to scratch for ballistics
+        scratchPowerL_ = smoothedL;
+        scratchPowerR_ = smoothedR;
+        
+        // Tuned RMS Ballistics
+        applyBallistics (scratchPowerL_.data(), powerLState_, validBinsSz);
+        applyBallistics (scratchPowerR_.data(), powerRState_, validBinsSz);
+    }
+
     lastMinDb_ = minVal;
     lastMaxDb_ = maxVal;
     lastPeakDb_ = maxVal;
@@ -929,29 +1118,16 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             }
 
             // Feed RTADisplay with FFT data (ONLY in FFT mode)
+            // Send data to Display (including session marker)
             rtaDisplay.setFFTData (fftDb_, usePeaks ? &fftPeakDbDisplay_ : nullptr);
+            rtaDisplay.setSessionMarker (sessionMarkerValid_, sessionMarkerBin_, sessionMarkerDb_);
             
             // Multi-trace: Feed L/R power data if available
+            // Logic moved to Step 1b to unify weighting application
+            // Only set data here
             if (snapshot.multiTraceEnabled)
             {
-                // Apply smoothing (if octaves > 0)
-                smoother_.setConfig (smoothingOctaves_, snapshot.fftSize);
-                
-                // Resize scratch buffers if needed
-                const size_t validBinsSz = static_cast<size_t> (validBins);
-                if (scratchPowerL_.size() != validBinsSz) scratchPowerL_.resize (validBinsSz);
-                if (scratchPowerR_.size() != validBinsSz) scratchPowerR_.resize (validBinsSz);
-                
-                // Smooth L and R
-                // Note: RTADisplay derives Mono/Mid/Side from these, so they will inherit the smoothing.
-                smoother_.process (snapshot.powerL.data(), scratchPowerL_.data(), validBins);
-                smoother_.process (snapshot.powerR.data(), scratchPowerR_.data(), validBins);
-                
-                // Tuned RMS Ballistics for Multi-Trace (Pro-Q feel)
-                applyBallistics (scratchPowerL_.data(), powerLState_, validBins);
-                applyBallistics (scratchPowerR_.data(), powerRState_, validBins);
-                
-                rtaDisplay.setLRPowerData (scratchPowerL_.data(), scratchPowerR_.data(), validBins);
+                 rtaDisplay.setLRPowerData (scratchPowerL_.data(), scratchPowerR_.data(), validBins);
             }
             
             // Force repaint after data update
@@ -1243,4 +1419,133 @@ void AnalyzerDisplayView::SmoothingProcessor::process (const float* inputPower, 
             outputPower[i] = inputPower[i];
         }
     }
+}
+
+void AnalyzerDisplayView::rebuildWeightingTable (int mode, double sampleRate, int fftSize)
+{
+    // Lazy check
+    if (mode == lastWeightingMode_ && 
+        std::abs(sampleRate - lastWeightingSampleRate_) < 0.1 && 
+        fftSize == lastWeightingFftSize_)
+    {
+        return;
+    }
+
+    lastWeightingMode_ = mode;
+    lastWeightingSampleRate_ = sampleRate;
+    lastWeightingFftSize_ = fftSize;
+    
+    // Resize table
+    // Table matches fftSize / 2 (or bin count)
+    // Actually fftSize includes mirrors? No, bins is fftSize/2.
+    // Wait, validBins derived from fftSize usually ~fftSize/2.
+    // Let's use a safe upper bound or resize to fftSize/2 + 1
+    const size_t numBins = static_cast<size_t> (fftSize / 2) + 1;
+    if (cachedWeightingTable_.size() != numBins)
+        cachedWeightingTable_.resize (numBins);
+        
+    if (mode == 0) // None
+    {
+        cachedWeightingTable_.clear(); // Empty means no weighting
+        return;
+    }
+    
+    const float binWidthHz = static_cast<float> (sampleRate) / static_cast<float> (fftSize);
+    
+    for (size_t i = 0; i < numBins; ++i)
+    {
+        float freq = static_cast<float>(i) * binWidthHz;
+        
+        // Avoid DC numerical issues (though definitions usually handle f=0)
+        if (freq < 1.0f) freq = 1.0f; 
+        
+        float db = 0.0f;
+        
+        if (mode == 1) // A-Weighting
+        {
+            db = getAWeightingDb (freq);
+        }
+        else if (mode == 2) // BS.468-4
+        {
+            db = getBS468WeightingDb (freq);
+        }
+        
+        cachedWeightingTable_[i] = db;
+    }
+}
+
+float AnalyzerDisplayView::getAWeightingDb (float freqHz)
+{
+    // IEC 61672-1:2002 standard A-weighting
+    // Ra(f) = (12194^2 * f^4) / ( (f^2 + 20.6^2) * sqrt((f^2 + 107.7^2)*(f^2 + 737.9^2)) * (f^2 + 12194^2) )
+    // A(f) = 20*log10(Ra(f)) + 2.0 (approx to normalize 1kHz = 0dB)
+    
+    const float f2 = freqHz * freqHz;
+    const float f4 = f2 * f2;
+    
+    const float c1 = 12194.0f * 12194.0f;
+    const float c2 = 20.6f * 20.6f;
+    const float c3 = 107.7f * 107.7f;
+    const float c4 = 737.9f * 737.9f;
+    const float c5 = 12194.0f * 12194.0f;
+    
+    const float num = c1 * f4;
+    const float den = (f2 + c2) * std::sqrt((f2 + c3) * (f2 + c4)) * (f2 + c5);
+    
+    if (den == 0.0f) return -120.0f;
+    
+    float gain = num / den;
+    return 20.0f * std::log10(gain) + 2.0f; 
+}
+
+float AnalyzerDisplayView::getBS468WeightingDb (float freqHz)
+{
+    // ITU-R 468-4 Weighting (Approximation)
+    // Uses the formula from standard docs, freq in kHz
+    
+    const float f_kHz = freqHz / 1000.0f;
+    const float f = f_kHz; 
+    
+    // Formula from ITU-R 468-4: 
+    // H(s) pole-zero formulation
+    // Coefficients
+    const double a1 = 1.0458849;
+    const double b2 = 1.6620626;
+    const double c2 = 0.3181829;
+    const double b3 = 0.5057538;
+    const double c3 = 0.1691696;
+    const double gainScale = 1.24633263;
+    
+    const double f2 = static_cast<double>(f * f);
+    
+    // Denominator parts squared magnitudes
+    const double den1 = f2 + a1*a1;
+    const double term2_real = c2 - f2;
+    const double term2_imag = b2 * f;
+    const double den2 = term2_real*term2_real + term2_imag*term2_imag;
+    
+    const double term3_real = c3 - f2;
+    const double term3_imag = b3 * f;
+    const double den3 = term3_real*term3_real + term3_imag*term3_imag;
+    
+    const double den = den1 * den2 * den3;
+    
+    if (den == 0.0) return -120.0f;
+    
+    // Numerator
+    const double num = gainScale * f; // magnitude of j*f is f
+    const double magSq = (num * num) / den;
+    
+    // Convert to dB
+    // 10 * log10(magSq)
+    // The gainScale is designed such that at 1kHz (f=1), gain is 0dB (unity).
+    
+    float db = static_cast<float>(10.0 * std::log10(magSq));
+    
+    // Offset correction if needed (usually BS.468 has 0dB gain at 1kHz defined by this formula)
+    // But typical measurements add extra gain offset of +12.2dB relative to A-weighting noise floor?
+    // No, weighting curve itself is relative gain vs frequency.
+    // We stick to the standard formula which gives 0dB at 1kHz.
+    
+    return db;
 }

@@ -61,6 +61,12 @@ public:
     DbRange getDbRange() const noexcept { return dbRange_; }
     void setDbRangeFromChoiceIndex (int idx);
 
+    // Session Marker
+    void resetSessionMarker();
+    void resetViewPeaks();
+
+    // Helper to convert internal Mode enum to RTADisplay view mode (0=FFT, 1=Log, 2=Bands)
+
     void setPeakDbRange (DbRange r);
     DbRange getPeakDbRange() const noexcept { return peakDbRange_; }
     void triggerPeakFlash();
@@ -144,6 +150,17 @@ private:
     int lastBins_ = 0;
     int lastFftSize_ = 0;
     
+    // Weighting support
+    std::vector<float> cachedWeightingTable_;
+    int lastWeightingMode_ = -1; // 0=None, 1=A, 2=BS.468
+    int currentWeightingMode_ = 0; // Tracks parameter state
+    int lastWeightingFftSize_ = 0; // Check for rebuild
+    double lastWeightingSampleRate_ = 0.0; 
+    
+    void rebuildWeightingTable (int mode, double sampleRate, int fftSize);
+    static float getAWeightingDb (float freqHz);
+    static float getBS468WeightingDb (float freqHz);
+    
     // RMS Ballistics Tuning
     static constexpr float kRmsAttackMs = 60.0f;
     static constexpr float kRmsReleaseMs = 300.0f;
@@ -151,6 +168,12 @@ private:
     // Helper to apply time-domain ballistics to a buffer
     void applyBallistics (float* data, std::vector<float>& state, size_t numBins);
     
+    // Peak Hold Session Marker
+    bool sessionMarkerValid_ = false;
+    int sessionMarkerBin_ = -1;
+    float sessionMarkerDb_ = -1000.0f; // -inf sentinel
+    bool lastHoldState_ = false;
+
     bool binMismatch_ = false;
     bool isShutdown = false;
     

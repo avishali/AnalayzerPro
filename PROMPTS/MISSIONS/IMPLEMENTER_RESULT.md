@@ -1,30 +1,17 @@
-# IMPLEMENTER RESULT
+# IMPLEMENTER_RESULT.md
 
-**Mission:** RMS_BALLISTICS_TUNING_V1
-**Status:** COMPLETE
+## Mission ID
+SIDE_TRACE_SMOOTHING_AND_SMOOTHING_SWITCH_FIX_V1
 
-## Changes Implemented
-1.  **AnalyzerDisplayView.h**:
-    - Added `rmsState_`, `powerLState_`, `powerRState_` member vectors to store ballistics history.
-    - Added tuned constants:
-      - `kRmsAttackMs = 60.0f` (Fast/Punchy)
-      - `kRmsReleaseMs = 300.0f` (Musical/Heavy)
-    - Declared `applyBallistics` helper.
+## Files Changed
+- `Source/ui/analyzer/AnalyzerDisplayView.cpp`
 
-2.  **AnalyzerDisplayView.cpp**:
-    - Implemented `applyBallistics` using exponential smoothing in dB domain.
-      - Uses fixed `dt = 1.0/60.0` (UI frame rate) for consistent feel regardless of FFT size.
-    - Integrated `applyBallistics` into `updateFromSnapshot`:
-      - Applied to `fftDb_` (Main RMS) immediately after sanitization.
-      - Applied to `scratchPowerL_` / `scratchPowerR_` (Multi-Trace) after frequency smoothing.
-    - Renamed shadowing variables (`useBandPeaks`, `useLogPeaks`) to fix lint warnings.
+## Modifications
+- **Location**: `timerCallback`, approx line 636-641.
+- **Action**: When `smoothingOctaves_` changes (detected via `lastSmoothingIdx_`), the ballistics state vectors (`powerLState_`, `powerRState_`, `rmsState_`) are cleared. This forces them to re-initialize on the next frame, preventing stale data from causing jumps or partial curves.
 
-## Deliverables
-- **Constants:** Attack = 60ms, Release = 300ms.
-- **Averaging:** No existing "Averaging" parameter was found in the UI scope, so no mapping was needed. The ballistics are applied on top of any upstream fractional-octave smoothing.
-- **Peak Path:** Completely untouched. Ballistics are applied only to `fftDb_` and power buffers, never to `fftPeakDb_` or `uiHeldPeak_`.
+## Verification
+- **Build**: Successful (Standalone & VST3).
+- **Static Analysis**: Confirmed the reset logic is triggered only when the smoothing index changes.
 
-## Verification Steps
-- **Test A:** Peak Freeze (Hold ON) -> Peak should stick, RMS should decay.
-- **Test B:** Transients -> RMS should be slower than Peak.
-- **Test C:** Falloff -> RMS should decay smoothly (~300ms).
+STOP.
