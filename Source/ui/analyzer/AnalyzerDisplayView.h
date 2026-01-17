@@ -5,7 +5,6 @@
 #include <mdsp_ui/Theme.h>
 #include <mdsp_ui/ThemeVariant.h>
 #include <vector>
-#include <algorithm>
 #include "rta1_import/RTADisplay.h"
 #include "../../analyzer/AnalyzerSnapshot.h"
 #include "../../PluginProcessor.h"
@@ -49,6 +48,7 @@ public:
     ~AnalyzerDisplayView() override;
 
     void paint (juce::Graphics& g) override;
+    void paintOverChildren (juce::Graphics& g) override;
     void resized() override;
     
     void mouseDown (const juce::MouseEvent& event) override;
@@ -120,21 +120,37 @@ private:
     bool peakFlashActive_ = false;
     double peakFlashUntilMs_ = 0.0;
     // uint32_t lastSequence_ = 0;  // Unused
+    // uint32_t lastSequence_ = 0;  // Unused
     AnalyzerSnapshot snapshot_;
     AnalyzerSnapshot lastValidSnapshot_;  // Hold last valid frame for grace period
     bool hasLastValid_ = false;
+    bool isHoldOn_ = false;
     std::vector<float> fftDb_;
     std::vector<float> fftPeakDb_;
     std::vector<float> bandsDb_;
     std::vector<float> bandsPeakDb_;
     std::vector<float> logDb_;
     std::vector<float> logPeakDb_;
+    std::vector<float> uiHeldPeak_; // UI-side safety latch for true freeze
+    std::vector<float> rmsState_;    // Ballistics state for Main RMS
+    std::vector<float> powerLState_; // Ballistics state for Left Trace
+    std::vector<float> powerRState_; // Ballistics state for Right Trace
+    
+    bool uiHoldActive_ = false;     // Track hold state transitions
     std::vector<float> bandCentersHz_;  // Cached 1/3-octave band centers
     float lastPeakDb_ = -1000.0f;
     float lastMinDb_ = 0.0f;
     float lastMaxDb_ = 0.0f;
     int lastBins_ = 0;
     int lastFftSize_ = 0;
+    
+    // RMS Ballistics Tuning
+    static constexpr float kRmsAttackMs = 60.0f;
+    static constexpr float kRmsReleaseMs = 300.0f;
+    
+    // Helper to apply time-domain ballistics to a buffer
+    void applyBallistics (float* data, std::vector<float>& state, size_t numBins);
+    
     bool binMismatch_ = false;
     bool isShutdown = false;
     
@@ -160,6 +176,25 @@ private:
 #if defined(PLUGIN_DEV_MODE) && PLUGIN_DEV_MODE
     juce::String devModeDebugLine_;  // Temporary: UI=mode / RTADisplay=mode / bins / min/max dB
 #endif
+
+    // Helper for fractional octave smoothing
+    struct SmoothingProcessor
+    {
+        void setConfig (float octaves, int fftSize);
+        void process (const float* inputPower, float* outputPower, int numBins);
+        
+        float smoothingOctaves_ = 0.0f;
+        int currentFFTSize_ = 0;
+        
+        std::vector<int> smoothLowBounds;
+        std::vector<int> smoothHighBounds;
+        std::vector<float> prefixSumMag;
+    };
+    SmoothingProcessor smoother_;
+    std::vector<float> scratchPowerL_;
+    std::vector<float> scratchPowerR_;
+    float smoothingOctaves_ = 1.0f / 6.0f; // Default 1/6 Oct
+    int lastSmoothingIdx_ = -1; // Cache for param change detection
     
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     struct ModeDebugOverlay final : public juce::Component
@@ -181,6 +216,8 @@ private:
     };
     ModeDebugOverlay modeOverlay_;
 #endif
+    
+
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AnalyzerDisplayView)
 };

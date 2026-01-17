@@ -1,10 +1,151 @@
-No code changes occur here.
+PROMPTS/RUNBOOKS/RMS_BALLISTICS_TUNING_V1.txt
 
----
+⸻
 
-### Phase 1 — Implementation (IMPLEMENTER)
+MISSION ID: RMS_BALLISTICS_TUNING_V1
+SYSTEM: AnalyzerPro
+SCOPE: UI + Analyzer Engine (No Audio Thread Allocations)
+RISK LEVEL: MEDIUM
+PRIORITY: FEEL / PROFESSIONAL METER RESPONSE
 
-- Reads CURRENT_MISSION.txt
-- Executes only IMPLEMENTER instructions
-- Modifies code strictly within scope
-- Writes:
+⸻
+
+OBJECTIVE
+
+Tune RMS analyzer and meters to behave like professional reference tools (FabFilter Pro-Q, iZotope Insight, PAZ):
+	•	RMS must feel weighty, stable, musical
+	•	Peak remains fast and transient-accurate
+	•	RMS should never “chase” peak
+	•	Ballistics must apply consistently to:
+	•	FFT RMS trace
+	•	Input meters
+	•	Output meters
+	•	Loudness momentary/short-term display (if shared path)
+
+⸻
+
+DEFINITION OF DONE
+	•	RMS attack/release is perceptually slower than Peak
+	•	RMS trace feels “anchored” during dense mixes
+	•	Fast transients move Peak immediately but only gently influence RMS
+	•	Switching FFT size or smoothing does NOT change RMS feel
+	•	Hold ON does NOT affect RMS behavior
+	•	No allocations on audio thread
+	•	No regressions in Peak Hold, Smoothing, or Multi-Trace modes
+
+⸻
+
+FILES YOU MAY TOUCH
+	•	Source/analyzer/AnalyzerEngine.cpp
+	•	Source/analyzer/AnalyzerEngine.h
+	•	Source/ui/analyzer/AnalyzerDisplayView.cpp
+	•	Source/ui/analyzer/AnalyzerDisplayView.h
+
+⸻
+
+FILES YOU MUST NOT TOUCH
+	•	PluginProcessor.cpp
+	•	APVTS parameter layout
+	•	FFT allocation / buffer creation logic
+	•	Snapshot struct layout
+
+⸻
+
+ARCHITECTURE CONSTRAINTS
+	•	RMS smoothing must happen:
+	•	Either in AnalyzerEngine (preferred for correctness)
+	•	Or UI-side if already mirrored for multi-trace
+	•	No malloc/new/std::vector resize in audio thread
+	•	Use only preallocated buffers
+	•	Must operate per-bin, not global average
+
+⸻
+
+TARGET BALLISTICS MODEL
+
+Reference Behavior:
+
+Peak:
+	•	Attack: Instant (1 frame)
+	•	Release: Controlled by PeakDecay param
+
+RMS:
+	•	Attack: Slow rise (30–80ms equivalent)
+	•	Release: Slower fall (150–400ms equivalent)
+	•	Must be logarithmic / exponential, not linear
+
+⸻
+
+RECOMMENDED MODEL
+
+Per-bin exponential smoothing:
+
+For each bin:
+RMS_out = max(
+incoming,
+prev * releaseCoeff + incoming * (1 - releaseCoeff)
+)
+
+Where:
+	•	If incoming > prev → use attackCoeff
+	•	Else → use releaseCoeff
+
+⸻
+
+PARAMETER MAPPING
+
+Hardcode first pass (no UI yet):
+
+Attack Time Targets:
+	•	Fast: 30 ms
+	•	Default: 60 ms
+	•	Slow: 90 ms
+
+Release Time Targets:
+	•	Fast: 150 ms
+	•	Default: 250 ms
+	•	Slow: 400 ms
+
+Convert to coefficient:
+coeff = exp(-1 / (timeSeconds * frameRate))
+
+FrameRate = UI update rate OR FFT hop rate (choose consistently)
+
+⸻
+
+IMPLEMENTER PROMPT
+
+You are implementing RMS_BALLISTICS_TUNING_V1
+
+GOALS:
+	•	RMS trace must feel slower, heavier, and musical
+	•	Peak remains unchanged
+	•	Multi-trace RMS (L/R/M/S/Mono) must all use same ballistics
+	•	No smoothing bypass for RMS
+	•	Hold logic must NOT interfere with RMS
+
+TASKS:
+	1.	Locate RMS path
+	•	Identify where FFT RMS values are generated or post-processed
+	•	Confirm whether smoothing is currently shared with Peak
+	2.	Add RMS Ballistics State
+	•	Add per-trace, per-bin persistent buffers:
+rmsBallisticBuffer[trace][bin]
+	•	Initialize once on FFT resize
+	3.	Implement Dual-Time-Constant Smoothing
+	•	Use exponential attack/release model
+	•	Attack when rising
+	•	Release when falling
+	4.	Integrate Before Rendering
+	•	Apply AFTER fractional-octave smoothing
+	•	Apply BEFORE dB mapping to screen coordinates
+	5.	Enforce Isolation
+	•	Ensure Peak Hold never modifies RMS buffers
+	•	Ensure RMS never borrows Peak values
+	6.	Performance Check
+	•	No heap allocations
+	•	No vector resizing
+	•	O(N bins * traces) only
+	7.	Add Debug Toggle
+	•	DBG RMS attack/release coefficients on startup
+	•	DBG when FFT size changes and buffers resize
