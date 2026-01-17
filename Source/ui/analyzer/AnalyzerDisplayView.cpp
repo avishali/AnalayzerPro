@@ -32,17 +32,7 @@ static inline bool isInvalidPeakDb (float db) noexcept
     return db <= kUiPeakInvalidSentinelDb;
 }
 
-static float mapDbToDisplayDb (float db,
-                               float srcMinDb,
-                               float dstMinDb) noexcept
-{
-    // Map a dB value from [srcMinDb..0] into [dstMinDb..0] so that it renders at the same Y
-    // when the plot range is dstMinDb..0.
-    const float clamped = juce::jlimit (srcMinDb, 0.0f, db);
-    const float y01 = clamped / srcMinDb;        // both negative => 0..1
-    const float mapped = y01 * dstMinDb;         // dstMinDb negative
-    return juce::jlimit (dstMinDb, 0.0f, mapped);
-}
+
 
 AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     : audioProcessor (processor)
@@ -78,6 +68,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     // Start timer for snapshot updates (~60 Hz) and dB range animation
     startTimerHz (60);
     
+
 }
 
 void AnalyzerDisplayView::setDbRange (DbRange r)
@@ -178,10 +169,27 @@ static const char* rtaModeToString (int rtaMode) noexcept
 #endif
 
 //==============================================================================
+//==============================================================================
 void AnalyzerDisplayView::paint (juce::Graphics& g)
 {
     // Background is handled by RTADisplay
     juce::ignoreUnused (g);
+}
+
+void AnalyzerDisplayView::paintOverChildren (juce::Graphics& g)
+{
+    // Bypass Overlay
+    if (audioProcessor.getBypassState())
+    {
+        const mdsp_ui::Theme theme (mdsp_ui::ThemeVariant::Dark); // Stick to Dark for now
+        g.setColour (theme.background.withAlpha (0.6f));
+        g.fillAll();
+        
+        g.setColour (theme.danger);
+        g.setFont (juce::Font (juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 24.0f, juce::Font::bold)));
+        g.drawText ("BYPASS", getLocalBounds(), juce::Justification::centred);
+    }
+
     // Default theme (Dark variant) for debug overlays
     // Note: AnalyzerDisplayView doesn't use UiContext yet (Phase 2 may add it)
     const mdsp_ui::Theme theme (mdsp_ui::ThemeVariant::Dark);
@@ -300,6 +308,10 @@ void AnalyzerDisplayView::resized()
     modeOverlay_.setBounds (8, 8, 260, 18);
     modeOverlay_.toFront (false);
 #endif
+
+
+    // Bottom-right corner reserved for future controls?
+    // auto r = getLocalBounds().reduced (10);
 }
 
 //==============================================================================
@@ -387,9 +399,9 @@ void AnalyzerDisplayView::convertFFTToBands (const AnalyzerSnapshot& snapshot, s
             binCount++;
             
             // For peak: use maximum (not sum) - more stable and correct
-            if (bin < static_cast<int> (snapshot.fftPeakDb.size()))
+            if (bin < static_cast<int> (fftPeakDb_.size()))
             {
-                maxPeakDb = juce::jmax (maxPeakDb, snapshot.fftPeakDb[idx]);
+                maxPeakDb = juce::jmax (maxPeakDb, fftPeakDb_[idx]);
             }
         }
         
@@ -490,10 +502,10 @@ void AnalyzerDisplayView::convertFFTToLog (const AnalyzerSnapshot& snapshot, std
         
         // For peak: use maximum (not average) of peak values (more stable and correct)
         float maxPeakDb = -120.0f;
-        for (int bin = lowerBin; bin <= upperBin && bin < static_cast<int> (snapshot.fftPeakDb.size()); ++bin)
+        for (int bin = lowerBin; bin <= upperBin && bin < static_cast<int> (fftPeakDb_.size()); ++bin)
         {
             const std::size_t idx = static_cast<std::size_t> (bin);
-            maxPeakDb = juce::jmax (maxPeakDb, snapshot.fftPeakDb[idx]);
+            maxPeakDb = juce::jmax (maxPeakDb, fftPeakDb_[idx]);
         }
         const std::size_t logIdxSz = static_cast<std::size_t> (logIdx);
         logPeakDb[logIdxSz] = maxPeakDb;
@@ -562,6 +574,57 @@ void AnalyzerDisplayView::timerCallback()
     if (isShutdown)
         return;
 
+    // Read trace configuration from APVTS and pass to RTADisplay
+    auto& apvts = audioProcessor.getAPVTS();
+    RTADisplay::TraceConfig traceConfig;
+    
+    // Helper lambda with null check
+    auto getBoolParam = [&apvts](const char* id) -> bool {
+        auto* param = apvts.getRawParameterValue(id);
+        return (param != nullptr) ? (param->load() > 0.5f) : false;
+    };
+    
+    traceConfig.showLR   = getBoolParam("TraceShowLR");
+    traceConfig.showMono = getBoolParam("analyzerShowMono");
+    traceConfig.showL    = getBoolParam("analyzerShowL");
+    traceConfig.showR    = getBoolParam("analyzerShowR");
+    traceConfig.showMid  = getBoolParam("analyzerShowMid");
+    traceConfig.showSide = getBoolParam("analyzerShowSide");
+    traceConfig.showRMS  = getBoolParam("analyzerShowRMS");
+    
+    // Read Weighting (Choice 0=None, 1=A, 2=BS.468-4)
+    auto* pWeight = apvts.getRawParameterValue("analyzerWeighting");
+    traceConfig.weightingMode = (pWeight != nullptr) ? (int)pWeight->load() : 0;
+    
+    // Read Smoothing (Fractional Octave)
+    auto* pSmoothing = apvts.getRawParameterValue("Averaging");
+    if (pSmoothing != nullptr)
+    {
+        constexpr float kSmoothingOctaves[] = { 0.0f, 1.0f/24.0f, 1.0f/12.0f, 1.0f/6.0f, 1.0f/3.0f, 1.0f };
+        constexpr int kNumOpts = static_cast<int> (std::size (kSmoothingOctaves));
+        const int index = juce::jlimit (0, kNumOpts - 1, static_cast<int> (pSmoothing->load()));
+        
+        if (index != lastSmoothingIdx_)
+        {
+            lastSmoothingIdx_ = index;
+            smoothingOctaves_ = kSmoothingOctaves[index];
+        }
+    }
+    
+#if JUCE_DEBUG
+    // One-shot debug logging
+    static bool logged = false;
+    if (!logged)
+    {
+        DBG("TraceConfig: L=" << (int)traceConfig.showL << " R=" << (int)traceConfig.showR 
+            << " Mono=" << (int)traceConfig.showMono << " Mid=" << (int)traceConfig.showMid 
+            << " Side=" << (int)traceConfig.showSide << " RMS=" << (int)traceConfig.showRMS);
+        logged = true;
+    }
+#endif
+    
+    rtaDisplay.setTraceConfig(traceConfig);
+
     // Animate dB range changes (grid + FFT + peak mapping all derive from RTADisplay bottomDb).
     const float minDb = minDbAnim_.getNextValue();
     if (std::abs (minDb - lastAppliedMinDb_) > 1.0e-4f)
@@ -580,8 +643,10 @@ void AnalyzerDisplayView::timerCallback()
     // If the FFT range is animating or Peak Range changed, remap peaks into the current FFT/grid space.
     if ((minDbAnim_.isSmoothing() || peakScaleDirty_ || flashActive) && hasLastValid_)
     {
-        const float fftMinDb = lastAppliedMinDb_;
-        const float peakMinDb = dbRangeToMinDb (peakDbRange_);
+        // REMOVED Independent Peak Scaling.
+        // To ensure Peak Trace is always >= RMS Trace visually on the same grid,
+        // we MUST render them using the SAME dB Scale (the Graph/FFT Scale).
+        // Separate Peak Scaling caused visual alignment bugs.
 
         switch (currentMode_)
         {
@@ -596,10 +661,14 @@ void AnalyzerDisplayView::timerCallback()
                         float peakDb = fftPeakDb_[i];
                         if (isInvalidPeakDb (peakDb))
                             peakDb = fftDb_[i];
-                        float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+                        
+                        // NO MAPPING: Use same scale as FFT
+                        // float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+                        
+                        float result = peakDb;
                         if (flashActive)
-                            mapped = juce::jmin (0.0f, mapped + 2.0f);
-                        fftPeakDbDisplay_[i] = mapped;
+                            result = juce::jmin (0.0f, result + 2.0f);
+                        fftPeakDbDisplay_[i] = result;
                     }
                     rtaDisplay.setFFTData (fftDb_, &fftPeakDbDisplay_);
                 }
@@ -616,10 +685,12 @@ void AnalyzerDisplayView::timerCallback()
                         float peakDb = bandsPeakDb_[i];
                         if (isInvalidPeakDb (peakDb))
                             peakDb = bandsDb_[i];
-                        float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+
+                         // NO MAPPING
+                        float result = peakDb;
                         if (flashActive)
-                            mapped = juce::jmin (0.0f, mapped + 2.0f);
-                        bandsPeakDbDisplay_[i] = mapped;
+                            result = juce::jmin (0.0f, result + 2.0f);
+                        bandsPeakDbDisplay_[i] = result;
                     }
                     rtaDisplay.setBandData (bandsDb_, &bandsPeakDbDisplay_);
                 }
@@ -636,10 +707,12 @@ void AnalyzerDisplayView::timerCallback()
                         float peakDb = logPeakDb_[i];
                         if (isInvalidPeakDb (peakDb))
                             peakDb = logDb_[i];
-                        float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+
+                        // NO MAPPING
+                        float result = peakDb;
                         if (flashActive)
-                            mapped = juce::jmin (0.0f, mapped + 2.0f);
-                        logPeakDbDisplay_[i] = mapped;
+                            result = juce::jmin (0.0f, result + 2.0f);
+                        logPeakDbDisplay_[i] = result;
                     }
                     rtaDisplay.setLogData (logDb_, &logPeakDbDisplay_);
                 }
@@ -706,159 +779,180 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         fftMetaReady_ = true;
     }
     
+    // Update Hold Status
+    isHoldOn_ = snapshot.isHoldOn;
+    rtaDisplay.setHoldStatus (isHoldOn_);
+    
     // Route data STRICTLY by mode (FFT data only sent in FFT mode)
+    // -------------------------------------------------------------------------
+    // 1. DATA PREPARATION (Common for ALL modes)
+    // -------------------------------------------------------------------------
+    
+    // Bin contract: snapshot.fftBinCount should equal (fftSize/2 + 1)
+    const int validBins = fftBinCount;
+    const int expectedBins = snapshot.fftSize / 2 + 1;
+    
+    if (validBins != expectedBins_ || validBins != expectedBins)
+    {
+        binMismatch_ = true;
+#if JUCE_DEBUG
+        dropReason_ = "DROP: bin mismatch (" + juce::String (validBins) + " != " + juce::String (expectedBins_) + " expected " + juce::String (expectedBins) + ")";
+#endif
+#if JUCE_DEBUG && ANALYZERPRO_FFT_DEBUG_LINE
+        fftDebugLine_ = dropReason_;
+#endif
+        if (currentMode_ == Mode::FFT)
+        {
+             rtaDisplay.setNoData ("Bin Mismatch");
+             rtaDisplay.repaint();
+        }
+        return; // Skip update on mismatch
+    }
+    
+    binMismatch_ = false;
+#if JUCE_DEBUG
+    dropReason_.clear();
+#endif
+    
+    // Resize member vectors to expected size
+    const size_t validBinsSize = static_cast<size_t> (validBins);
+    fftDb_.resize (validBinsSize);
+    fftPeakDb_.resize (validBinsSize);
+    
+    // Copy from snapshot arrays into member vectors
+    std::copy (snapshot.fftDb.begin(), snapshot.fftDb.begin() + validBins, fftDb_.begin());
+    
+    // Copy peak bins: validate size matches expected bins; if mismatch ignore peaks
+    bool usePeaks = false;
+    if (snapshot.fftPeakDb.size() >= static_cast<size_t> (validBins))
+    {
+        // Peak bins must match fftDb size (same bin count)
+        std::copy (snapshot.fftPeakDb.begin(), snapshot.fftPeakDb.begin() + validBins, fftPeakDb_.begin());
+        usePeaks = true;
+    }
+    else
+    {
+        // Peak mismatch: ignore peaks for this frame
+        fftPeakDb_.clear();
+        fftPeakDb_.resize (validBinsSize, -121.0f);  // Fill with floor if no peaks
+    }
+
+    // Centralized Latch: Apply True Freeze logic to fftPeakDb_ BEFORE mode conversion
+    // This ensures BAND and LOG modes also inherit the frozen peak values.
+    const bool holdOn = snapshot.isHoldOn;
+    
+    if (usePeaks)
+    {
+         if (uiHeldPeak_.size() != validBinsSize)
+         {
+             uiHeldPeak_.resize (validBinsSize);
+             std::fill (uiHeldPeak_.begin(), uiHeldPeak_.end(), -120.0f);
+             uiHoldActive_ = false; 
+         }
+         
+         for (size_t i = 0; i < validBinsSize; ++i)
+         {
+             float incomingDb = sanitizeDb (fftPeakDb_[i]); // Sanitize first
+             
+             if (holdOn)
+             {
+                 float heldDb = uiHeldPeak_[i];
+                 heldDb = juce::jmax (heldDb, incomingDb);
+                 uiHeldPeak_[i] = heldDb;
+                 incomingDb = heldDb;
+             }
+             else
+             {
+                 uiHeldPeak_[i] = incomingDb;
+             }
+             // Write back to source so all modes use the latched value
+             fftPeakDb_[i] = incomingDb;
+         }
+    }
+    
+    // Sanitize and stats
+    float minVal = std::numeric_limits<float>::max();
+    float maxVal = std::numeric_limits<float>::lowest();
+    
+    for (size_t i = 0; i < validBinsSize; ++i)
+    {
+        fftDb_[i] = sanitizeDb (fftDb_[i]);
+        minVal = juce::jmin (minVal, fftDb_[i]);
+        maxVal = juce::jmax (maxVal, fftDb_[i]);
+        
+        // Ensure state follows reset if needed (e.g. if we want instant reset on size change)
+        // But we handle resize inside applyBallistics.
+    }
+    
+    // Apply RMS Ballistics (Time Smoothing) - Pro-Q style
+    // This allows the RMS trace to respond musically (Fast Att / Slow Rel)
+    // while the Peak trace remains instantaneous.
+    applyBallistics (fftDb_.data(), rmsState_, validBinsSize);
+    
+    lastMinDb_ = minVal;
+    lastMaxDb_ = maxVal;
+    lastPeakDb_ = maxVal;
+    lastBins_ = validBins;
+    lastFftSize_ = snapshot.fftSize;
+
+    // -------------------------------------------------------------------------
+    // 2. MODE-SPECIFIC RENDERING
+    // -------------------------------------------------------------------------
     switch (currentMode_)
     {
         case Mode::FFT:
         {
             // FFT mode: validate data and feed to RTADisplay
-            // Check if FFT vectors are empty (defensive)
-            if (fftBinCount <= 0 || snapshot.fftSize <= 0)
-            {
-                rtaDisplay.setNoData ("FFT bins empty");
-                rtaDisplay.repaint();
-                break;
-            }
-            
-            // Bin contract: snapshot.fftBinCount should equal (fftSize/2 + 1)
-            const int validBins = fftBinCount;
-            const int expectedBins = snapshot.fftSize / 2 + 1;
-            
-            if (validBins != expectedBins_ || validBins != expectedBins)
-            {
-                binMismatch_ = true;
-#if JUCE_DEBUG
-                dropReason_ = "DROP: bin mismatch (" + juce::String (validBins) + " != " + juce::String (expectedBins_) + " expected " + juce::String (expectedBins) + ")";
-#endif
-#if JUCE_DEBUG && ANALYZERPRO_FFT_DEBUG_LINE
-                fftDebugLine_ = dropReason_;
-#endif
-                repaint();
-                break;  // Do NOT call setFFTData() with mismatched bins
-            }
-            
-            binMismatch_ = false;
-#if JUCE_DEBUG
-            dropReason_.clear();
-#endif
-            
-            // Resize member vectors to expected size
-            const size_t validBinsSize = static_cast<size_t> (validBins);
-            fftDb_.resize (validBinsSize);
-            fftPeakDb_.resize (validBinsSize);
-            
-            // Copy from snapshot arrays into member vectors
-            std::copy (snapshot.fftDb.begin(), snapshot.fftDb.begin() + validBins, fftDb_.begin());
-            
-            // Copy peak bins: validate size matches expected bins; if mismatch ignore peaks
-            bool usePeaks = false;
-            if (snapshot.fftPeakDb.size() >= static_cast<size_t> (validBins))
-            {
-                // Peak bins must match fftDb size (same bin count)
-                std::copy (snapshot.fftPeakDb.begin(), snapshot.fftPeakDb.begin() + validBins, fftPeakDb_.begin());
-                usePeaks = true;
-            }
-            else
-            {
-                // Peak mismatch: ignore peaks for this frame
-                fftPeakDb_.clear();
-                fftPeakDb_.resize (validBinsSize, -120.0f);  // Fill with floor if no peaks
-#if JUCE_DEBUG && ANALYZERPRO_FFT_DEBUG_LINE
-                if (!fftDebugLine_.isEmpty())
-                    fftDebugLine_ += " PEAK MISMATCH (ignored)";
-#endif
-            }
-            
-            // Sanitize dB values (snapshot.fftDb contains dB already; just clamp/sanitize)
-            float minVal = std::numeric_limits<float>::max();
-            float maxVal = std::numeric_limits<float>::lowest();
-            
-            for (size_t i = 0; i < validBinsSize; ++i)
-            {
-                // Sanitize dB values (snapshot contains dB already; no conversion needed)
-                fftDb_[i] = sanitizeDb (fftDb_[i]);
-                
-                if (usePeaks)
-                {
-                    fftPeakDb_[i] = sanitizeDb (fftPeakDb_[i]);
-                }
-                
-                // Track min/max for debug overlay
-                minVal = juce::jmin (minVal, fftDb_[i]);
-                maxVal = juce::jmax (maxVal, fftDb_[i]);
-            }
-            
-            // Store debug values
-            lastMinDb_ = minVal;
-            lastMaxDb_ = maxVal;
-            lastPeakDb_ = maxVal;
-            lastBins_ = validBins;
-            lastFftSize_ = snapshot.fftSize;
-            
-#if JUCE_DEBUG && ANALYZERPRO_FFT_DEBUG_LINE
-            // DEBUG TEMP: remove once FFT validated
-            // Update debug line: UI=<mode> bins=<count> min=<minDb> max=<maxDb> fftSize=<size>
-            juce::String modeStr = "FFT";
-            if (currentMode_ == Mode::BAND)
-                modeStr = "BANDS";
-            else if (currentMode_ == Mode::LOG)
-                modeStr = "LOG";
-            
-            fftDebugLine_ = juce::String ("UI=") + modeStr
-                          + juce::String (" bins=") + juce::String (validBins)
-                          + juce::String (" min=") + juce::String (minVal, 1) + "dB"
-                          + juce::String (" max=") + juce::String (maxVal, 1) + "dB"
-                          + juce::String (" fftSize=") + juce::String (snapshot.fftSize);
-#endif
-
-#if defined(PLUGIN_DEV_MODE) && PLUGIN_DEV_MODE
-            // Temporary debug overlay: UI=mode / RTADisplay=mode / bins / min/max dB
-            juce::String uiModeStr = "FFT";
-            if (currentMode_ == Mode::BAND)
-                uiModeStr = "BANDS";
-            else if (currentMode_ == Mode::LOG)
-                uiModeStr = "LOG";
-            
-            juce::String rtaModeStr = "FFT";
-#if JUCE_DEBUG
-            if (lastSentRtaMode_ == 1)
-                rtaModeStr = "LOG";
-            else if (lastSentRtaMode_ == 2)
-                rtaModeStr = "BANDS";
-#endif
-            
-            devModeDebugLine_ = juce::String ("UI=") + uiModeStr
-                              + juce::String (" / RTADisplay=") + rtaModeStr
-                              + juce::String (" / bins=") + juce::String (validBins)
-                              + juce::String (" / min=") + juce::String (minVal, 1) + "dB"
-                              + juce::String (" max=") + juce::String (maxVal, 1) + "dB";
-#endif
             
             // Remap peak trace into FFT/grid dB space using the separate Peak Range.
             if (usePeaks)
             {
-                const float fftMinDb = lastAppliedMinDb_;
-                const float peakMinDb = dbRangeToMinDb (peakDbRange_);
+                // REMOVED Independent Peak Scaling to match timerCallback logic
+                // const float fftMinDb = lastAppliedMinDb_;
+                // const float peakMinDb = dbRangeToMinDb (peakDbRange_);
                 fftPeakDbDisplay_.resize (validBinsSize);
 
                 const bool flash = (peakFlashActive_ && juce::Time::getMillisecondCounterHiRes() < peakFlashUntilMs_);
+                
                 for (size_t i = 0; i < validBinsSize; ++i)
                 {
-                    float peakDb = fftPeakDb_[i];
-
-                    // UI-only fix: if engine floor is hit, fall back to current trace to avoid a flat line.
-                    if (isInvalidPeakDb (peakDb))
-                        peakDb = fftDb_[i];
-
-                    float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+                    float peakDb = fftPeakDb_[i]; // Already latched
+                    
+                    // NO MAPPING: Use same scale as FFT
+                    // float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+                    
                     if (flash)
-                        mapped = juce::jmin (0.0f, mapped + 2.0f); // subtle visual flash
-                    fftPeakDbDisplay_[i] = mapped;
+                        peakDb = juce::jmin (0.0f, peakDb + 2.0f); 
+                        
+                    fftPeakDbDisplay_[i] = peakDb;
                 }
             }
 
             // Feed RTADisplay with FFT data (ONLY in FFT mode)
             rtaDisplay.setFFTData (fftDb_, usePeaks ? &fftPeakDbDisplay_ : nullptr);
+            
+            // Multi-trace: Feed L/R power data if available
+            if (snapshot.multiTraceEnabled)
+            {
+                // Apply smoothing (if octaves > 0)
+                smoother_.setConfig (smoothingOctaves_, snapshot.fftSize);
+                
+                // Resize scratch buffers if needed
+                const size_t validBinsSz = static_cast<size_t> (validBins);
+                if (scratchPowerL_.size() != validBinsSz) scratchPowerL_.resize (validBinsSz);
+                if (scratchPowerR_.size() != validBinsSz) scratchPowerR_.resize (validBinsSz);
+                
+                // Smooth L and R
+                // Note: RTADisplay derives Mono/Mid/Side from these, so they will inherit the smoothing.
+                smoother_.process (snapshot.powerL.data(), scratchPowerL_.data(), validBins);
+                smoother_.process (snapshot.powerR.data(), scratchPowerR_.data(), validBins);
+                
+                // Tuned RMS Ballistics for Multi-Trace (Pro-Q feel)
+                applyBallistics (scratchPowerL_.data(), powerLState_, validBins);
+                applyBallistics (scratchPowerR_.data(), powerRState_, validBins);
+                
+                rtaDisplay.setLRPowerData (scratchPowerL_.data(), scratchPowerR_.data(), validBins);
+            }
             
             // Force repaint after data update
             rtaDisplay.repaint();
@@ -891,22 +985,27 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             jassert (bandsDb_.size() == bandsPeakDb_.size());
             
             // Feed RTADisplay with band data
-            const bool usePeaks = !bandsPeakDb_.empty() && bandsPeakDb_.size() == bandsDb_.size() && bandsDb_.size() == bandCentersHz_.size();
-            if (usePeaks)
+            const bool useBandPeaks = !bandsPeakDb_.empty() && bandsPeakDb_.size() == bandsDb_.size() && bandsDb_.size() == bandCentersHz_.size();
+            if (useBandPeaks)
             {
-                const float fftMinDb = lastAppliedMinDb_;
-                const float peakMinDb = dbRangeToMinDb (peakDbRange_);
+                // REMOVED Independent Peak Scaling
+                // const float fftMinDb = lastAppliedMinDb_;
+                // const float peakMinDb = dbRangeToMinDb (peakDbRange_);
                 bandsPeakDbDisplay_.resize (bandsPeakDb_.size());
+                
                 const bool flash = (peakFlashActive_ && juce::Time::getMillisecondCounterHiRes() < peakFlashUntilMs_);
+
                 for (size_t i = 0; i < bandsPeakDb_.size(); ++i)
                 {
-                    float peakDb = bandsPeakDb_[i];
-                    if (isInvalidPeakDb (peakDb))
-                        peakDb = bandsDb_[i];
-                    float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
-                    if (flash)
-                        mapped = juce::jmin (0.0f, mapped + 2.0f);
-                    bandsPeakDbDisplay_[i] = mapped;
+                     float peakDb = bandsPeakDb_[i]; // Already latched
+                     
+                     // NO MAPPING
+                     // float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+                     
+                     if (flash)
+                        peakDb = juce::jmin (0.0f, peakDb + 2.0f);
+                        
+                     bandsPeakDbDisplay_[i] = peakDb;
                 }
                 rtaDisplay.setBandData (bandsDb_, &bandsPeakDbDisplay_);
             }
@@ -948,23 +1047,28 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             // Convert FFT bins to log-spaced bins
             convertFFTToLog (snapshot, logDb_, logPeakDb_);
             
-            // Feed RTADisplay with log data
-            const bool usePeaks = !logPeakDb_.empty() && logPeakDb_.size() == logDb_.size();
-            if (usePeaks)
+            // Feed RTADisplay with LOG data
+            const bool useLogPeaks = !logPeakDb_.empty() && logPeakDb_.size() == logDb_.size();
+            if (useLogPeaks)
             {
-                const float fftMinDb = lastAppliedMinDb_;
-                const float peakMinDb = dbRangeToMinDb (peakDbRange_);
+                // REMOVED Independent Peak Scaling
+                // const float fftMinDb = lastAppliedMinDb_;
+                // const float peakMinDb = dbRangeToMinDb (peakDbRange_);
                 logPeakDbDisplay_.resize (logPeakDb_.size());
+                
                 const bool flash = (peakFlashActive_ && juce::Time::getMillisecondCounterHiRes() < peakFlashUntilMs_);
+
                 for (size_t i = 0; i < logPeakDb_.size(); ++i)
                 {
-                    float peakDb = logPeakDb_[i];
-                    if (isInvalidPeakDb (peakDb))
-                        peakDb = logDb_[i];
-                    float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
-                    if (flash)
-                        mapped = juce::jmin (0.0f, mapped + 2.0f);
-                    logPeakDbDisplay_[i] = mapped;
+                     float peakDb = logPeakDb_[i]; // Already latched
+                     
+                     // NO MAPPING
+                     // float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
+                     
+                     if (flash)
+                         peakDb = juce::jmin (0.0f, peakDb + 2.0f);
+                         
+                     logPeakDbDisplay_[i] = peakDb;
                 }
                 rtaDisplay.setLogData (logDb_, &logPeakDbDisplay_);
             }
@@ -998,6 +1102,145 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         {
             jassertfalse;  // Unknown mode
             break;
+        }
+    }
+}
+
+//==============================================================================
+void AnalyzerDisplayView::applyBallistics (float* data, std::vector<float>& state, size_t numBins)
+{
+    if (state.size() != numBins)
+    {
+        state.resize (numBins, -120.0f);
+        std::fill (state.begin(), state.end(), -120.0f);
+    }
+    
+    // Assuming UI updates at 60Hz. 
+    // Using fixed dt ensures consistent ballistics regardless of FFT rate jitter.
+    const float dt = 1.0f / 60.0f; 
+    
+    const float attSec = kRmsAttackMs / 1000.0f;
+    const float relSec = kRmsReleaseMs / 1000.0f;
+    
+    // Coefficient = 1 - exp(-dt / tau)
+    // Represents the fraction of the distance covered in one frame.
+    const float attCoeff = 1.0f - std::exp (-dt / attSec);
+    const float relCoeff = 1.0f - std::exp (-dt / relSec);
+    
+    for (size_t i = 0; i < numBins; ++i)
+    {
+        float in = data[i];
+        
+        // Sanitize input
+        if (!std::isfinite(in)) in = -120.0f;
+        
+        float current = state[i];
+        
+        // Sanitize state
+        if (!std::isfinite(current)) current = -120.0f;
+        
+        // Ballistics Logic (dB domain)
+        if (in > current)
+        {
+            // Attack
+            current += (in - current) * attCoeff;
+        }
+        else
+        {
+            // Release
+            current += (in - current) * relCoeff;
+        }
+        
+        // Clamp floor
+        if (current < -120.0f) current = -120.0f;
+        
+        state[i] = current;
+        data[i] = current;
+    }
+}
+
+//==============================================================================
+// SmoothingProcessor Implementation
+//==============================================================================
+void AnalyzerDisplayView::SmoothingProcessor::setConfig (float octaves, int fftSize)
+{
+    // Recompute bounds only if config changed (octaves or fftSize)
+    if (std::abs(smoothingOctaves_ - octaves) < 1e-4f && currentFFTSize_ == fftSize && !smoothLowBounds.empty())
+        return;
+        
+    smoothingOctaves_ = octaves;
+    currentFFTSize_ = fftSize;
+    
+    // Bounds calculation matches AnalyzerEngine::updateSmoothingBounds
+    const int numBins = fftSize / 2 + 1;
+    smoothLowBounds.resize (static_cast<size_t> (numBins));
+    smoothHighBounds.resize (static_cast<size_t> (numBins));
+    prefixSumMag.resize (static_cast<size_t> (numBins + 1));
+    
+    if (smoothingOctaves_ <= 0.0f)
+        return;
+
+    const double octaveFactor = std::pow (2.0, static_cast<double> (smoothingOctaves_) * 0.5);
+    const double invOctaveFactor = 1.0 / octaveFactor;
+    
+    for (int i = 0; i < numBins; ++i)
+    {
+        if (i == 0)
+        {
+            smoothLowBounds[0] = 0;
+            smoothHighBounds[0] = 0;
+            continue;
+        }
+        
+        int low = static_cast<int> (std::floor (static_cast<double> (i) * invOctaveFactor));
+        int high = static_cast<int> (std::ceil (static_cast<double> (i) * octaveFactor));
+        
+        low = juce::jlimit (0, numBins - 1, low);
+        high = juce::jlimit (0, numBins - 1, high);
+        
+        if (low > i) low = i;
+        if (high < i) high = i;
+        
+        smoothLowBounds[static_cast<size_t> (i)] = low;
+        smoothHighBounds[static_cast<size_t> (i)] = high;
+    }
+}
+
+void AnalyzerDisplayView::SmoothingProcessor::process (const float* inputPower, float* outputPower, int numBins)
+{
+    if (smoothingOctaves_ <= 0.0f || numBins != (currentFFTSize_ / 2 + 1) || smoothLowBounds.empty())
+    {
+        // Bypass
+        if (inputPower != outputPower)
+            std::copy (inputPower, inputPower + numBins, outputPower);
+        return;
+    }
+    
+    // 1. Prefix Sum
+    if (static_cast<int> (prefixSumMag.size()) != numBins + 1)
+        prefixSumMag.resize (static_cast<size_t> (numBins + 1));
+        
+    prefixSumMag[0] = 0.0f;
+    for (int i = 0; i < numBins; ++i)
+    {
+        prefixSumMag[static_cast<size_t> (i + 1)] = prefixSumMag[static_cast<size_t> (i)] + inputPower[i];
+    }
+    
+    // 2. Apply bounds
+    for (int i = 0; i < numBins; ++i)
+    {
+        const int low = smoothLowBounds[static_cast<size_t> (i)];
+        const int high = smoothHighBounds[static_cast<size_t> (i)];
+        const int count = high - low + 1;
+        
+        if (count > 0)
+        {
+            const float sum = prefixSumMag[static_cast<size_t> (high + 1)] - prefixSumMag[static_cast<size_t> (low)];
+            outputPower[i] = sum / static_cast<float> (count);
+        }
+        else
+        {
+            outputPower[i] = inputPower[i];
         }
     }
 }

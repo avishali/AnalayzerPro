@@ -1,0 +1,53 @@
+VERIFIER PROMPT
+
+You are verifying RMS_BALLISTICS_TUNING_V1
+
+TEST MATRIX:
+
+Test 1 — Transient Separation
+	•	Play drum loop
+	•	Observe:
+	•	Peak jumps immediately
+	•	RMS rises slowly and smoothly
+PASS if RMS never spikes to Peak height
+
+Test 2 — Hold Isolation
+	•	Enable Peak Hold
+	•	RMS must continue moving
+PASS if RMS ignores Hold entirely
+
+Test 3 — Silence Falloff
+	•	Stop audio
+	•	RMS should decay slowly, not snap down
+PASS if decay takes >200ms visually
+
+Test 4 — Mode Stability
+	•	Switch FFT sizes (1024 → 8192)
+	•	RMS feel must remain consistent
+PASS if no timing change is perceived
+
+Test 5 — Multi-Trace Consistency
+	•	Enable L, R, Mid, Side
+	•	All RMS traces must share same smoothing behavior
+PASS if no trace feels “faster” or “twitchy”
+
+⸻
+
+FAILURE CONDITIONS
+	•	RMS visually tracks Peak
+	•	RMS freezes during Hold
+	•	RMS flickers between frames
+	•	CPU usage increases noticeably
+	•	Any trace disappears or flattens
+
+⸻
+
+SUCCESS CRITERIA
+
+RMS should feel:
+	•	Calm
+	•	Heavy
+	•	Trustworthy
+	•	“Mastering-grade”
+
+If it feels like a VU meter layered onto a spectrum — mission is successful.

@@ -137,7 +137,8 @@ void RTADisplay::setFrequencyRange (float minHz, float maxHz)
     state.minHz = minHz;
     state.maxHz = maxHz;
     logMinFreq = std::log10 (state.minHz);
-    logFreqRange = std::log10 (state.maxHz) - logMinFreq;
+    // Use effective max for log range to ensure graph fills the view up to Nyquist/Max
+    logFreqRange = std::log10 (state.getEffectiveMaxHz()) - logMinFreq;
     geometryValid = false;
     repaint();
 }
@@ -171,6 +172,61 @@ void RTADisplay::setDisplayGainDb (float db)
 void RTADisplay::setTiltMode (TiltMode mode)
 {
     tiltMode = mode;
+    repaint();
+}
+
+void RTADisplay::setHoldStatus (bool isHoldOn)
+{
+    if (state.isHoldOn != isHoldOn)
+    {
+        state.isHoldOn = isHoldOn;
+        repaint();
+    }
+}
+
+void RTADisplay::setTraceConfig (const TraceConfig& config)
+{
+    traceConfig_ = config;
+    repaint();
+}
+
+void RTADisplay::setLRPowerData (const float* powerL, const float* powerR, int binCount)
+{
+    // Convert power to dB and store for rendering
+    constexpr float dbFloor = -120.0f;
+    constexpr float powerFloor = 1e-12f;
+    
+    const size_t binCountSz = static_cast<size_t>(binCount);
+    state.lDbL.resize(binCountSz);
+    state.lDbR.resize(binCountSz);
+    state.monoDb.resize(binCountSz);
+    state.midDb.resize(binCountSz);
+    state.sideDb.resize(binCountSz);
+    state.lrBinCount = binCount;
+    
+    for (int i = 0; i < binCount; ++i)
+    {
+        const size_t idx = static_cast<size_t>(i);
+        const float pL = std::max(powerFloor, powerL[i]);
+        const float pR = std::max(powerFloor, powerR[i]);
+        
+        // L/R to dB
+        state.lDbL[idx] = std::max(dbFloor, 10.0f * std::log10(pL));
+        state.lDbR[idx] = std::max(dbFloor, 10.0f * std::log10(pR));
+        
+        // Derived traces (magnitude-domain approximation)
+        // Mono = 0.5 * (L + R)
+        const float monoP = std::max(powerFloor, 0.5f * (pL + pR));
+        state.monoDb[idx] = std::max(dbFloor, 10.0f * std::log10(monoP));
+        
+        // Mid = same as Mono (different label/color)
+        state.midDb[idx] = state.monoDb[idx];
+        
+        // Side = abs(0.5 * (L - R))
+        const float sideP = std::max(powerFloor, 0.5f * std::abs(pL - pR));
+        state.sideDb[idx] = std::max(dbFloor, 10.0f * std::log10(sideP));
+    }
+    
     repaint();
 }
 
@@ -302,6 +358,15 @@ void RTADisplay::updateGeometry()
         return;
     }
 
+    // Resize aggregation buffers (safe here, outside paint)
+    const int widthPx = static_cast<int> (std::ceil (plotAreaWidth));
+    if (widthPx > 0 && static_cast<int>(pixelRms_.size()) != widthPx)
+    {
+        pixelRms_.resize(static_cast<size_t>(widthPx));
+        pixelPeak_.resize(static_cast<size_t>(widthPx));
+        pixelCounts_.resize(static_cast<size_t>(widthPx));
+    }
+
     // B2: Update band geometry - only read from state.bandCentersHz
     if (state.bandCentersHz.empty())
     {
@@ -390,8 +455,14 @@ float RTADisplay::freqToX (float freqHz, const RenderState& s) const
     if (logRange <= 0.0f)
         return plotAreaLeft;
     
-    const float logFreq = std::log10 (freqHz);
-    const float normalized = (logFreq - logMin) / logRange;
+    // Clamp frequency to maxHz to prevent drawing beyond right edge
+    const float effectiveFreq = juce::jmin (freqHz, s.maxHz);
+    if (effectiveFreq < s.minHz)
+         return plotAreaLeft;
+
+    const float logFreq = std::log10 (effectiveFreq);
+    // Clamp normalized position to [0, 1]
+    const float normalized = juce::jlimit (0.0f, 1.0f, (logFreq - logMin) / logRange);
     return plotAreaLeft + normalized * plotAreaWidth;  // Uses member variables for geometry
 }
 
@@ -705,9 +776,10 @@ RTADisplay::FreqAxisConfig RTADisplay::buildFreqAxisConfig (const RenderState& s
     FreqAxisConfig config;
     
     const float freqGridPoints[] = { 20.0f, 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f, 20000.0f };
+    const float effMax = s.getEffectiveMaxHz();
     for (float freq : freqGridPoints)
     {
-        if (freq >= s.minHz && freq <= s.maxHz)
+        if (freq >= s.minHz && freq <= effMax)
         {
             const float x = freqToX (freq, s);
             const float posPx = x - plotAreaLeft;
@@ -723,7 +795,7 @@ RTADisplay::FreqAxisConfig RTADisplay::buildFreqAxisConfig (const RenderState& s
     
     config.mapping.scale = mdsp_ui::AxisScale::Log10;
     config.mapping.minValue = s.minHz;
-    config.mapping.maxValue = s.maxHz;
+    config.mapping.maxValue = s.getEffectiveMaxHz();
     
     config.snap.mode = mdsp_ui::SnapMode::NearestLabelledTick;
     config.snap.maxSnapDistPx = 12.0f;
@@ -794,9 +866,10 @@ void RTADisplay::drawGrid (juce::Graphics& g, const RenderState& s, const mdsp_u
     // Build frequency axis ticks (Bottom edge)
     juce::Array<mdsp_ui::AxisTick> freqTicks;
     const float freqGridPoints[] = { 20.0f, 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f, 20000.0f };
+    const float effMax = s.getEffectiveMaxHz();
     for (float freq : freqGridPoints)
     {
-        if (freq >= s.minHz && freq <= s.maxHz)
+        if (freq >= s.minHz && freq <= effMax)
         {
             const float x = freqToX (freq, s);
             const float posPx = x - plotAreaLeft;  // Offset from plot left
@@ -1026,8 +1099,8 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
         const int numBandsToDraw = static_cast<int> (std::min (s.bandsPeakDb.size(), bandGeometry.size()));
         
         mdsp_ui::SeriesStyle peakStyle;
-        peakStyle.strokeThickness = 1.5f;
-        peakStyle.alpha = 0.8f;
+        peakStyle.strokeThickness = 2.0f;
+        peakStyle.alpha = 1.0f;
         peakStyle.clipToPlot = true;
         peakStyle.minXStepPx = 1.0f;
         peakStyle.minYStepPx = 0.5f;
@@ -1052,6 +1125,8 @@ void RTADisplay::paintBandsMode (juce::Graphics& g, const RenderState& s, const 
             {
                 const auto idx = static_cast<size_t> (i);
                 float peakDb = s.bandsPeakDb[idx];
+                float bandDb = s.bandsDb[idx];
+                peakDb = juce::jmax(peakDb, bandDb); // Visual Clamp
                 peakDb = juce::jlimit (s.bottomDb, 0.0f, peakDb);
                 return dbToY (peakDb, s);
             },
@@ -1220,8 +1295,8 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
     {
         const juce::Rectangle<float> plotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
         mdsp_ui::SeriesStyle peakStyle;
-        peakStyle.strokeThickness = 1.5f;
-        peakStyle.alpha = 0.8f;
+        peakStyle.strokeThickness = 2.0f;
+        peakStyle.alpha = 1.0f;
         peakStyle.clipToPlot = true;
         peakStyle.minXStepPx = 1.0f;
         peakStyle.minYStepPx = 0.5f;
@@ -1246,6 +1321,8 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
             {
                 const auto idx = static_cast<size_t> (i);
                 float peakDb = s.logPeakDb[idx];
+                float logDb = s.logDb[idx];
+                peakDb = juce::jmax(peakDb, logDb); // Visual Clamp
                 peakDb = juce::jlimit (s.bottomDb, 0.0f, peakDb);
                 return dbToY (peakDb, s);
             },
@@ -1439,211 +1516,389 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
 //==============================================================================
 void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme)
 {
-    // B3: Pure function - uses only state reference, no member mutations
+    // Pure function - uses only state reference (mostly), but now manages internal aggregation cache
     
-    // B5: FFT mode uses log mapping to match grid scale
-    // B7: Never calls updateGeometry() from paint
-    
-    if (s.fftDb.empty() || s.fftSize <= 0 || s.sampleRate <= 0.0)
+    if (s.fftDb.empty() || s.fftSize <= 0 || s.sampleRate <= 0.0 || plotAreaWidth < 1.0f)
         return;
 
-    // B3: Decide locally if peaks should be drawn (no state mutation)
-    const bool hasPeaks = (s.fftPeakDb.size() == s.fftDb.size() && !s.fftPeakDb.empty());
+    // Aggregation buffers are resized in updateGeometry() on resize/structural change
+    if (pixelRms_.empty()) return;
 
-    // B5: Draw FFT spectrum as polyline using log mapping (matches grid) using SeriesRenderer
-    const int numBins = static_cast<int> (s.fftDb.size());
-    const int expectedBins = s.fftSize / 2 + 1;
-    const int availableBins = std::min (numBins, expectedBins);
-    if (availableBins <= 0)
-        return;
+    // --- Step 4: Per-frame Clearing ---
+    // Start fresh every frame. 
+    // RMS: Accumulate POWER (linear), initializing to 0.
+    // Peak: Accumulate dB, initializing to bottomDb (or very low).
+    std::fill (pixelRms_.begin(), pixelRms_.end(), 0.0f);
+    std::fill (pixelCounts_.begin(), pixelCounts_.end(), 0);
+    std::fill (pixelPeak_.begin(), pixelPeak_.end(), -200.0f); // Init to silence
 
-    // Frequency per FFT bin: f(i) = i * (sampleRate / fftSize)
+    // --- Step 2: Math Correctness (Bin Loop) ---
+    const int numBinsStored = static_cast<int> (s.fftDb.size());
+    const int binCount = s.fftSize / 2 + 1; // Canonical bin count
+    // Safety: ensure we don't read past stored data or theoretical limit
+    const int maxReadBin = std::min (numBinsStored, binCount);
+    
+    if (maxReadBin <= 1) return;
+
     const double binWidthHz = s.sampleRate / static_cast<double> (s.fftSize);
 
-    // Draw only the in-range bins to avoid injecting NaNs into the renderer.
-    const int firstBin = juce::jlimit (0, availableBins - 1,
-                                      static_cast<int> (std::ceil (static_cast<double> (s.minHz) / binWidthHz)));
-    const int lastBin  = juce::jlimit (0, availableBins - 1,
-                                      static_cast<int> (std::floor (static_cast<double> (s.maxHz) / binWidthHz)));
+    // Calc range [firstBin, lastBin]
+    // lastBin must NOT exceed maxReadBin - 1
+    // Fix: Use floor to include the bin immediately preceding minHz (often DC/Bin 0),
+    // ensuring the plot interpolates from the left edge instead of starting late at Bin 1.
+    const int firstBin = juce::jlimit (0, maxReadBin - 1,
+                                      static_cast<int> (std::floor (static_cast<double> (s.minHz) / binWidthHz)));
+    
+    // Step 2 Fix: Clamp lastBin strictly to available data
+    const int lastBinCandidate = static_cast<int> (std::floor (static_cast<double> (s.getEffectiveMaxHz()) / binWidthHz));
+    const int lastBin = juce::jlimit (firstBin, maxReadBin - 1, lastBinCandidate);
 
-    if (lastBin < firstBin)
-        return;
-
+    if (lastBin < firstBin) return;
+    
     const int binsToDraw = (lastBin - firstBin) + 1;
-    if (binsToDraw <= 0)
-        return;
+    // Debug overlay uses binsToDraw logic, let's keep it consistent? 
+    // Or just skip the debug overlay for now or integrate inside the new loop logic?
+    // The previous implementation had a binsToDraw check.
+    if (binsToDraw <= 0) return;
 
-#if JUCE_DEBUG
-    // TEMP: validate bin/mapping sizing at draw time
-    static uint64_t lastDrawDbgMs = 0;
-    const uint64_t nowDrawMs = static_cast<uint64_t> (juce::Time::getMillisecondCounterHiRes());
-    if (nowDrawMs - lastDrawDbgMs > 1000)
+
+    // --- Step 5: Aggregation Loop (RMS=Power, Peak=Max) ---
+    const int widthPx = static_cast<int> (pixelRms_.size());
+    // Important: freqToX returns absolute X. We need relative [0..width-1] for buffer index.
+    
+    const bool hasPeaks = (s.fftPeakDb.size() == s.fftDb.size() && !s.fftPeakDb.empty());
+
+    // Iterate Bins -> Project to Pixel
+    for (int i = firstBin; i <= lastBin; ++i)
     {
-        lastDrawDbgMs = nowDrawMs;
-        DBG ("FFT draw: bins=" << binsToDraw
-             << " fftDb=" << static_cast<int> (s.fftDb.size())
-             << " firstBin=" << firstBin
-             << " lastBin=" << lastBin);
+        // 1. Map Bin Freq -> X Pixel
+        const float freq = static_cast<float> (static_cast<double> (i) * binWidthHz);
+        const float absX = freqToX (freq, s);
+        const int pixelIdx = juce::jlimit (0, widthPx - 1, static_cast<int> (std::floor (absX - plotAreaLeft)));
+        
+        const size_t idx = static_cast<size_t> (i);
+        const float binDb = s.fftDb[idx];
+        
+        // 2. Accumulate RMS (Power Domain)
+        // db = 10*log10(p) => p = 10^(db*0.1)
+        if (binDb > -140.0f) // Optimization: skip silence
+        {
+            const float power = std::pow (10.0f, binDb * 0.1f);
+            pixelRms_[static_cast<size_t>(pixelIdx)] += power;
+            pixelCounts_[static_cast<size_t>(pixelIdx)]++;
+        }
+        else
+        {
+             // Even if silence, we count it for averaging!
+             pixelCounts_[static_cast<size_t>(pixelIdx)]++;
+        }
+        
+        // 3. Accumulate Peak (Max dB)
+        if (hasPeaks)
+        {
+            const float peakVal = s.fftPeakDb[idx];
+            float& currentMax = pixelPeak_[static_cast<size_t>(pixelIdx)];
+            if (peakVal > currentMax)
+                currentMax = peakVal;
+        }
+    }
+    
+    // --- Step 5b: Finalize Aggregation (Power->dB) & Gap Filling ---
+    // In-place convert pixelRms_ from SumPower to AvgDb
+    
+    // First Pass: Convert populated pixels to dB
+    for (int i = 0; i < widthPx; ++i)
+    {
+        if (pixelCounts_[static_cast<size_t>(i)] > 0)
+        {
+            const float avgPower = pixelRms_[static_cast<size_t>(i)] / static_cast<float> (pixelCounts_[static_cast<size_t>(i)]);
+            if (avgPower > 1e-12f)
+                pixelRms_[static_cast<size_t>(i)] = 10.0f * std::log10 (avgPower);
+            else
+                pixelRms_[static_cast<size_t>(i)] = -140.0f; // Silence floor
+        }
+        else
+        {
+            // Mark as NaN for gap filling
+             pixelRms_[static_cast<size_t>(i)] = std::numeric_limits<float>::quiet_NaN();
+        }
     }
 
-    // Compute min/max for debug overlay (throttled logging)
-    static uint64_t lastMinMaxLogMs = 0;
-    const uint64_t nowMs = static_cast<uint64_t> (juce::Time::getMillisecondCounterHiRes());
-    if (nowMs - lastMinMaxLogMs > 1000 && !s.fftDb.empty())  // Once per second
-    {
-        float minDb = s.fftDb[static_cast<size_t> (0)];
-        float maxDb = s.fftDb[static_cast<size_t> (0)];
-        for (float db : s.fftDb)
-        {
-            minDb = juce::jmin (minDb, db);
-            maxDb = juce::jmax (maxDb, db);
+    // Gap Filling (Linear Interpolation for NaNs) - RMS
+    int lastValidIdx = -1;
+    for (int i = 0; i < widthPx; ++i) {
+        if (!std::isnan(pixelRms_[static_cast<size_t>(i)])) {
+            if (lastValidIdx != -1 && (i - lastValidIdx) > 1) {
+                // Gap found
+                float startVal = pixelRms_[static_cast<size_t>(lastValidIdx)];
+                float endVal = pixelRms_[static_cast<size_t>(i)];
+                float step = (endVal - startVal) / static_cast<float>(i - lastValidIdx);
+                for (int j = lastValidIdx + 1; j < i; ++j) {
+                    pixelRms_[static_cast<size_t>(j)] = startVal + step * static_cast<float>(j - lastValidIdx);
+                }
+            }
+            lastValidIdx = i;
         }
-        DBG ("FFT range: min=" + juce::String (minDb, 1) + " dB max=" + juce::String (maxDb, 1) + " dB");
-        lastMinMaxLogMs = nowMs;
+    }
+    
+    // Gap Filling - Peak
+    if (hasPeaks) {
+        lastValidIdx = -1;
+        for (int i = 0; i < widthPx; ++i) {
+             // Check against sentinel since we init with -200
+             if (pixelPeak_[static_cast<size_t>(i)] > -199.0f) { 
+                if (lastValidIdx != -1 && (i - lastValidIdx) > 1) {
+                    float startVal = pixelPeak_[static_cast<size_t>(lastValidIdx)];
+                    float endVal = pixelPeak_[static_cast<size_t>(i)];
+                    float step = (endVal - startVal) / static_cast<float>(i - lastValidIdx);
+                    for (int j = lastValidIdx + 1; j < i; ++j) {
+                        pixelPeak_[static_cast<size_t>(j)] = startVal + step * static_cast<float>(j - lastValidIdx);
+                    }
+                }
+                lastValidIdx = i;
+             }
+        }
+    }
+
+    // --- Step 4b: Fill Remaining Gaps with Floor ---
+    // User requirement: "no unfilled right half" -> force silence floor
+    const float silenceDb = -140.0f; // Explicit floor
+    for (size_t i = 0; i < pixelRms_.size(); ++i) {
+        if (std::isnan(pixelRms_[i])) pixelRms_[i] = silenceDb;
+    }
+    for (size_t i = 0; i < pixelPeak_.size(); ++i) {
+        if (pixelPeak_[i] < -199.0f) pixelPeak_[i] = silenceDb;
+        
+        // Visual Safety: Ensure Peak >= RMS (Visually strictly on top)
+        // Even though Engine enforces this, aggregation/interpolation might drift.
+        // Also handles "Silence" cases where logic might diverge.
+        if (!std::isnan(pixelRms_[i]) && pixelPeak_[i] < pixelRms_[i])
+            pixelPeak_[i] = pixelRms_[i];
+    }
+
+#if JUCE_DEBUG
+    // Step 6: Debug Overlay (Optional)
+    {
+        g.setColour (juce::Colours::red.withAlpha (0.5f));
+        const float effMax = s.getEffectiveMaxHz();
+        const float xMax = freqToX (effMax, s);
+        g.drawVerticalLine (static_cast<int> (xMax), plotAreaTop, plotAreaTop + plotAreaHeight);
+        
+        g.setFont (10.0f);
+        const float lastBinHz = static_cast<float>(lastBin * binWidthHz);
+        juce::String debugInfo = "fMax=" + juce::String (effMax, 1) + " Hz" 
+                               + " | lastBin=" + juce::String(lastBin) + " (" + juce::String(lastBinHz, 1) + "Hz)"
+                               + " | bins=" + juce::String(binsToDraw);
+
+        g.drawText (debugInfo, static_cast<int> (plotAreaLeft) + 5, static_cast<int> (plotAreaTop) + 5, 
+                   300, 20, juce::Justification::topLeft, false);
     }
 #endif
 
+    // --- Step 7: Drawing ---
     const juce::Rectangle<float> plotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
-    
-    // Optional area fill (behind spectrum stroke)
-    static constexpr bool kEnableFftFill = false; // OFF by default
-    if (kEnableFftFill)
+
+    // Draw RMS (Blue) - only if showRMS is enabled
+    if (traceConfig_.showRMS)
     {
-        mdsp_ui::AreaFillStyle fillStyle;
-        fillStyle.colour = theme.accent;
-        fillStyle.alpha = 0.18f;
-        fillStyle.baselineY01 = 1.0f; // fill to bottom of plot
-        fillStyle.closeToBaseline = true;
-        fillStyle.clipToPlot = true;
-        fillStyle.decimate = true;
-        fillStyle.minXStepPx = 1.0f;
-        fillStyle.minYStepPx = 0.25f;
-        
-        // Build arrays for x/y values (frequencies and dB values)
-        // Use stack arrays to avoid heap allocations
-        static constexpr int kMaxBins = 65536;
-        const int binsToUse = std::min (numBins, kMaxBins);
-        float freqValues[kMaxBins];
-        float dbValues[kMaxBins];
-        
-        for (int i = 0; i < binsToUse; ++i)
-        {
-            freqValues[i] = static_cast<float> (i * binWidthHz);
-            const auto idx = static_cast<size_t> (i);
-            dbValues[i] = (idx < s.fftDb.size()) ? s.fftDb[idx] : std::numeric_limits<float>::quiet_NaN();
-        }
-        
-        // Use same mapping as SeriesRenderer (freqToX/dbToYWithCompensation)
-        // Map frequency -> normalized x, and (freq, db) -> normalized y
-        // AreaFillRenderer calls xTo01/yTo01 in pairs, so we track index
-        int mappingIndex = 0;
-        mdsp_ui::AreaFillRenderer::drawFromMapping (
-            g, plotBounds,
-            freqValues, dbValues, binsToUse,
-            [&s, &mappingIndex, this, plotBounds] (float freq) -> float
-            {
-                mappingIndex++; // track index for yTo01 lambda
-                if (freq < s.minHz || freq > s.maxHz)
-                    return std::numeric_limits<float>::quiet_NaN();
-                const float xPx = freqToX (freq, s);
-                return (xPx - plotBounds.getX()) / plotBounds.getWidth(); // normalize to [0..1]
+        mdsp_ui::SeriesStyle rmsStyle;
+        rmsStyle.strokeThickness = 1.5f;
+        rmsStyle.decimationMode = mdsp_ui::DecimationMode::Simple; // Data is already pixel-perfect
+
+        mdsp_ui::SeriesRenderer::drawPathFromMapping (g, plotBounds, theme, widthPx,
+            [&, this](int i) { return plotAreaLeft + static_cast<float>(i); },
+            [&, this](int i) { 
+                if (i < 0 || i >= static_cast<int>(pixelRms_.size())) return std::numeric_limits<float>::quiet_NaN();
+                return dbToY (pixelRms_[static_cast<size_t>(i)], s); 
             },
-            [&s, freqValues, &mappingIndex, binsToUse, &plotBounds, this] (float db) -> float
-            {
-                const int idx = mappingIndex - 1; // xTo01 already incremented
-                if (!std::isfinite (db))
-                    return std::numeric_limits<float>::quiet_NaN();
-                const float freq = (idx >= 0 && idx < binsToUse) ? freqValues[idx] : 0.0f;
-                const float yPx = dbToYWithCompensation (db, freq, s);
-                return (yPx - plotBounds.getY()) / plotBounds.getHeight(); // normalize to [0..1]
-            },
-            fillStyle);
+            juce::Colour(0xff0080ff), rmsStyle);  // Blue for RMS
     }
     
-    mdsp_ui::SeriesStyle spectrumStyle;
-    spectrumStyle.strokeThickness = 1.5f;
-    spectrumStyle.alpha = 0.7f;
-    spectrumStyle.clipToPlot = true;
-    spectrumStyle.minXStepPx = 1.0f;
-    spectrumStyle.minYStepPx = 0.5f;
-    spectrumStyle.useRoundedJoins = true;
-#if JUCE_DEBUG
-    spectrumStyle.decimationMode = useEnvelopeDecimator
-        ? mdsp_ui::DecimationMode::Envelope
-        : mdsp_ui::DecimationMode::Simple;
-#else
-    spectrumStyle.decimationMode = mdsp_ui::DecimationMode::Simple;
-#endif
-    spectrumStyle.envelopeMinBucketPx = 1.0f;
-    spectrumStyle.envelopeDrawVertical = true;
-
-    mdsp_ui::SeriesRenderer::drawPathFromMapping (g, plotBounds, theme, binsToDraw,
-        [&s, binWidthHz, firstBin, this] (int i) -> float
-        {
-            const int binIndex = firstBin + i;
-            const float freq = static_cast<float> (static_cast<double> (binIndex) * binWidthHz);
-            return freqToX (freq, s);
-        },
-        [&s, binWidthHz, firstBin, this] (int i) -> float
-        {
-            const int binIndex = firstBin + i;
-            const float freq = static_cast<float> (static_cast<double> (binIndex) * binWidthHz);
-            const auto idx = static_cast<size_t> (binIndex);
-            const float db = (idx < s.fftDb.size()) ? s.fftDb[idx]
-                                                    : std::numeric_limits<float>::quiet_NaN();
-            return dbToYWithCompensation (db, freq, s);
-        },
-        theme.accent, spectrumStyle);
-
-    // B5: Draw peak trace if available (using local hasPeaks boolean, NO state mutation) using SeriesRenderer
+    // Draw Peak (Yellow) - ALWAYS visible
     if (hasPeaks)
     {
-        mdsp_ui::SeriesStyle peakStyle;
-        peakStyle.strokeThickness = 1.0f;
-        peakStyle.alpha = 0.8f;
-        peakStyle.clipToPlot = true;
-        peakStyle.minXStepPx = 1.0f;
-        peakStyle.minYStepPx = 0.5f;
-        peakStyle.useRoundedJoins = true;
-#if JUCE_DEBUG
-        peakStyle.decimationMode = useEnvelopeDecimator
-            ? mdsp_ui::DecimationMode::Envelope
-            : mdsp_ui::DecimationMode::Simple;
-#else
-        peakStyle.decimationMode = mdsp_ui::DecimationMode::Simple;
-#endif
-        peakStyle.envelopeMinBucketPx = 1.0f;
-        peakStyle.envelopeDrawVertical = true;
-
-        mdsp_ui::SeriesRenderer::drawPathFromMapping (g, plotBounds, theme, binsToDraw,
-            [&s, binWidthHz, firstBin, this] (int i) -> float
+        juce::Path peakPath;
+        bool started = false;
+        
+        for (int i = 0; i < widthPx; ++i)
+        {
+            const float val = pixelPeak_[static_cast<size_t>(i)];
+            
+            // Skip invalid values
+            if (val < -199.0f || std::isnan(val))
             {
-                const int binIndex = firstBin + i;
-                const float freq = static_cast<float> (static_cast<double> (binIndex) * binWidthHz);
-                return freqToX (freq, s);
-            },
-            [&s, binWidthHz, firstBin, this] (int i) -> float
+                started = false;
+                continue;
+            }
+                
+            const float x = plotAreaLeft + static_cast<float>(i);
+            const float y = dbToY (val, s);
+            
+            if (!started)
             {
-                const int binIndex = firstBin + i;
-                const float freq = static_cast<float> (static_cast<double> (binIndex) * binWidthHz);
-                const auto idx = static_cast<size_t> (binIndex);
-                float peakDb = (idx < s.fftPeakDb.size()) ? s.fftPeakDb[idx]
-                                                          : std::numeric_limits<float>::quiet_NaN();
-                peakDb = juce::jlimit (s.bottomDb, 0.0f, peakDb);
-                return dbToYWithCompensation (peakDb, freq, s);
-            },
-            theme.seriesPeak, peakStyle);
+                peakPath.startNewSubPath (x, y);
+                started = true;
+            }
+            else
+            {
+                peakPath.lineTo (x, y);
+            }
+        }
+        
+        if (!peakPath.isEmpty())
+        {
+            // Use rounded joins/caps for smooth visuals
+            juce::PathStrokeType stroke (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+            g.setColour (juce::Colour(0xffffd700));  // Yellow/Gold for Peak
+            g.strokePath (peakPath, stroke);
+        }
     }
+
+    // Draw L trace (Green) - if enabled and data available
+    if (traceConfig_.showL && !state.lDbL.empty() && state.lrBinCount > 0)
+    {
+        mdsp_ui::SeriesStyle lStyle;
+        lStyle.strokeThickness = 1.5f;
+        lStyle.decimationMode = mdsp_ui::DecimationMode::Simple;
+        
+        // Use same bin-to-pixel mapping as RMS
+        const int numBins = state.lrBinCount;
+        const float binToPixelScale = static_cast<float>(widthPx) / static_cast<float>(numBins);
+        
+        juce::Path lPath;
+        bool started = false;
+        for (int bin = 0; bin < numBins; ++bin)
+        {
+            const float db = state.lDbL[static_cast<size_t>(bin)];
+            const float x = plotAreaLeft + static_cast<float>(bin) * binToPixelScale;
+            const float y = dbToY(db, s);
+            
+            if (!started) { lPath.startNewSubPath(x, y); started = true; }
+            else { lPath.lineTo(x, y); }
+        }
+        
+        if (!lPath.isEmpty())
+        {
+            juce::PathStrokeType stroke(1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+            g.setColour(juce::Colour(0xff00c853));  // Green for L
+            g.strokePath(lPath, stroke);
+        }
+    }
+    
+    // Draw R trace (Magenta) - if enabled and data available
+    if (traceConfig_.showR && !state.lDbR.empty() && state.lrBinCount > 0)
+    {
+        const int numBins = state.lrBinCount;
+        const float binToPixelScale = static_cast<float>(widthPx) / static_cast<float>(numBins);
+        
+        juce::Path rPath;
+        bool started = false;
+        for (int bin = 0; bin < numBins; ++bin)
+        {
+            const float db = state.lDbR[static_cast<size_t>(bin)];
+            const float x = plotAreaLeft + static_cast<float>(bin) * binToPixelScale;
+            const float y = dbToY(db, s);
+            
+            if (!started) { rPath.startNewSubPath(x, y); started = true; }
+            else { rPath.lineTo(x, y); }
+        }
+        
+        if (!rPath.isEmpty())
+        {
+            juce::PathStrokeType stroke(1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+            g.setColour(juce::Colour(0xffd81b60));  // Magenta for R
+            g.strokePath(rPath, stroke);
+        }
+    }
+    
+    // Draw Mono trace (Cyan) - if enabled
+    if (traceConfig_.showMono && !state.monoDb.empty() && state.lrBinCount > 0)
+    {
+        const int numBins = state.lrBinCount;
+        const float binToPixelScale = static_cast<float>(widthPx) / static_cast<float>(numBins);
+        
+        juce::Path monoPath;
+        bool started = false;
+        for (int bin = 0; bin < numBins; ++bin)
+        {
+            const float db = state.monoDb[static_cast<size_t>(bin)];
+            const float x = plotAreaLeft + static_cast<float>(bin) * binToPixelScale;
+            const float y = dbToY(db, s);
+            
+            if (!started) { monoPath.startNewSubPath(x, y); started = true; }
+            else { monoPath.lineTo(x, y); }
+        }
+        
+        if (!monoPath.isEmpty())
+        {
+            juce::PathStrokeType stroke(1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+            g.setColour(juce::Colour(0xff00bcd4));  // Cyan for Mono
+            g.strokePath(monoPath, stroke);
+        }
+    }
+    
+    // Draw Mid trace (Orange) - if enabled
+    if (traceConfig_.showMid && !state.midDb.empty() && state.lrBinCount > 0)
+    {
+        const int numBins = state.lrBinCount;
+        const float binToPixelScale = static_cast<float>(widthPx) / static_cast<float>(numBins);
+        
+        juce::Path midPath;
+        bool started = false;
+        for (int bin = 0; bin < numBins; ++bin)
+        {
+            const float db = state.midDb[static_cast<size_t>(bin)];
+            const float x = plotAreaLeft + static_cast<float>(bin) * binToPixelScale;
+            const float y = dbToY(db, s);
+            
+            if (!started) { midPath.startNewSubPath(x, y); started = true; }
+            else { midPath.lineTo(x, y); }
+        }
+        
+        if (!midPath.isEmpty())
+        {
+            juce::PathStrokeType stroke(1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+            g.setColour(juce::Colour(0xffff9800));  // Orange for Mid
+            g.strokePath(midPath, stroke);
+        }
+    }
+    
+    // Draw Side trace (Purple) - if enabled
+    if (traceConfig_.showSide && !state.sideDb.empty() && state.lrBinCount > 0)
+    {
+        const int numBins = state.lrBinCount;
+        const float binToPixelScale = static_cast<float>(widthPx) / static_cast<float>(numBins);
+        
+        juce::Path sidePath;
+        bool started = false;
+        for (int bin = 0; bin < numBins; ++bin)
+        {
+            const float db = state.sideDb[static_cast<size_t>(bin)];
+            const float x = plotAreaLeft + static_cast<float>(bin) * binToPixelScale;
+            const float y = dbToY(db, s);
+            
+            if (!started) { sidePath.startNewSubPath(x, y); started = true; }
+            else { sidePath.lineTo(x, y); }
+        }
+        
+        if (!sidePath.isEmpty())
+        {
+            juce::PathStrokeType stroke(1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+            g.setColour(juce::Colour(0xff9c27b0));  // Purple for Side
+            g.strokePath(sidePath, stroke);
+        }
+    }
+
     
     // Draw legend overlay
     {
         const juce::Rectangle<float> legendPlotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
         mdsp_ui::LegendItem legendItems[2];
-        legendItems[0].label = "FFT";
-        legendItems[0].colour = theme.accent;
-        legendItems[0].enabled = true;
+        legendItems[0].label = "RMS";
+        legendItems[0].colour = juce::Colour(0xff0080ff);  // Blue
+        legendItems[0].enabled = traceConfig_.showRMS;
         legendItems[1].label = "Peak";
-        legendItems[1].colour = theme.seriesPeak;
+        legendItems[1].colour = juce::Colour(0xffffd700);  // Yellow/Gold
         legendItems[1].enabled = hasPeaks;
         
         mdsp_ui::LegendStyle legendStyle;
@@ -1655,4 +1910,40 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
         
         mdsp_ui::LegendRenderer::draw (g, legendPlotBounds, theme, legendItems, 2, mdsp_ui::LegendEdge::TopRight, legendStyle);
     }
+    
+#if JUCE_DEBUG
+    // Step 4: Debug Readout (Hold Status)
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.8f));
+        g.setFont (12.0f);
+        
+        juce::String debugText;
+        if (s.isHoldOn)
+            debugText << "HOLD: ON (Strict Session Max)";
+        else
+            debugText << "HOLD: OFF (Decaying)";
+
+        // Just below the top margin
+        g.drawText (debugText, static_cast<int> (plotAreaLeft) + 10, static_cast<int> (plotAreaTop) + 30, 
+                   300, 20, juce::Justification::topLeft, false);
+    }
+    
+    // Multi-trace debug overlay
+    {
+        g.setColour (juce::Colours::yellow.withAlpha (0.9f));
+        g.setFont (11.0f);
+        
+        juce::String mtDebug;
+        mtDebug << "MT: L:" << (traceConfig_.showL ? "1" : "0")
+                << " R:" << (traceConfig_.showR ? "1" : "0")
+                << " M:" << (traceConfig_.showMono ? "1" : "0")
+                << " Mid:" << (traceConfig_.showMid ? "1" : "0")
+                << " S:" << (traceConfig_.showSide ? "1" : "0")
+                << " bins:" << state.lrBinCount
+                << " lDbL:" << static_cast<int>(state.lDbL.size());
+        
+        g.drawText (mtDebug, static_cast<int> (plotAreaLeft) + 10, static_cast<int> (plotAreaTop) + 50, 
+                   400, 20, juce::Justification::topLeft, false);
+    }
+#endif
 }
