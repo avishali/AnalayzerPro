@@ -1,36 +1,30 @@
 # IMPLEMENTER RESULT
 
-**Mission ID:** PRESETS_AB_BYPASS_V1
-**Role:** Implementer (Antigravity)
+**Mission:** RMS_BALLISTICS_TUNING_V1
+**Status:** COMPLETE
 
-## Summary
-- Implemented `PresetManager` (Save/Load/Delete presets).
-- Implemented `StateManager` (A/B Slots, Persistence).
-- Updated `PluginProcessor` (Bypass logic, Manager integration).
-- Updated `HeaderBar` (Preset/Save/A/B/Bypass controls).
-- Updated `MainView` to connect UI to Managers.
+## Changes Implemented
+1.  **AnalyzerDisplayView.h**:
+    - Added `rmsState_`, `powerLState_`, `powerRState_` member vectors to store ballistics history.
+    - Added tuned constants:
+      - `kRmsAttackMs = 60.0f` (Fast/Punchy)
+      - `kRmsReleaseMs = 300.0f` (Musical/Heavy)
+    - Declared `applyBallistics` helper.
 
-## Files Modified
-- `Source/state/PresetManager.h` (New)
-- `Source/state/PresetManager.cpp` (New)
-- `Source/state/StateManager.h` (New)
-- `Source/state/StateManager.cpp` (New)
-- `Source/PluginProcessor.h`
-- `Source/PluginProcessor.cpp`
-- `Source/control/ControlIds.h`
-- `Source/control/AnalyzerProParamIdMap.cpp`
-- `Source/ui/layout/HeaderBar.h`
-- `Source/ui/layout/HeaderBar.cpp`
-- `Source/ui/MainView.cpp`
-- `CMakeLists.txt`
+2.  **AnalyzerDisplayView.cpp**:
+    - Implemented `applyBallistics` using exponential smoothing in dB domain.
+      - Uses fixed `dt = 1.0/60.0` (UI frame rate) for consistent feel regardless of FFT size.
+    - Integrated `applyBallistics` into `updateFromSnapshot`:
+      - Applied to `fftDb_` (Main RMS) immediately after sanitization.
+      - Applied to `scratchPowerL_` / `scratchPowerR_` (Multi-Trace) after frequency smoothing.
+    - Renamed shadowing variables (`useBandPeaks`, `useLogPeaks`) to fix lint warnings.
 
-## Diff Notes
-- **PluginProcessor**: Added `Bypass` parameter. `pushAudio` replaced by `processBlock` conditional logic.
-- **HeaderBar**: Replaced placeholder logic with real Manager calls. Added `Bypass` toggle bound to APVTS.
-- **MainView**: Passed Manager pointers to HeaderBar.
+## Deliverables
+- **Constants:** Attack = 60ms, Release = 300ms.
+- **Averaging:** No existing "Averaging" parameter was found in the UI scope, so no mapping was needed. The ballistics are applied on top of any upstream fractional-octave smoothing.
+- **Peak Path:** Completely untouched. Ballistics are applied only to `fftDb_` and power buffers, never to `fftPeakDb_` or `uiHeldPeak_`.
 
-## Out of Scope Changes
-- NONE. (Only touched UI, State, and Processor logic as requested).
-
-## Stop Confirmation
-Implementation complete.
+## Verification Steps
+- **Test A:** Peak Freeze (Hold ON) -> Peak should stick, RMS should decay.
+- **Test B:** Transients -> RMS should be slower than Peak.
+- **Test C:** Falloff -> RMS should decay smoothly (~300ms).

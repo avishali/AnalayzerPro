@@ -15,6 +15,7 @@
 #include "analyzer/AnalyzerDisplayView.h"
 #include "analyzer/StereoScopeView.h"
 #include "meters/MeterGroupComponent.h"
+#include "loudness/LoudnessNumericPanel.h"
 #include <memory>
 #if JUCE_DEBUG
 #include <set>
@@ -75,6 +76,7 @@ private:
     FooterBar footer_;
     AnalyzerDisplayView analyzerView_;
     StereoScopeView stereoScopeView_;
+    LoudnessNumericPanel loudnessPanel_; // New Loudness Panel
     MeterGroupComponent outputMeters_;
     MeterGroupComponent inputMeters_;
 

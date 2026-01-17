@@ -21,10 +21,13 @@ namespace
 constexpr std::array<Spec, static_cast<std::size_t>(ControlId::Count)> kSpecs = {
     Spec{ ControlId::AnalyzerEnable, Stage{}, Type{}, "Enable", "analyzer.enable" },
     Spec{ ControlId::MeterInGain, Stage{}, Type{}, "Gain", "meter.gain" },
+    Spec{ ControlId::AnalyzerMode, Stage{}, Type{}, "Mode", "analyzer.mode" },
     Spec{ ControlId::AnalyzerFftSize, Stage{}, Type{}, "FFT Size", "analyzer.fftSize" },
     Spec{ ControlId::AnalyzerAveraging, Stage{}, Type{}, "Averaging", "analyzer.averaging" },
-    Spec{ ControlId::AnalyzerHold, Stage{}, Type{}, "Hold", "analyzer.hold" },
+    Spec{ ControlId::AnalyzerHoldPeaks, Stage{}, Type{}, "Hold Peaks", "analyzer.holdPeaks" },
     Spec{ ControlId::AnalyzerPeakDecay, Stage{}, Type{}, "Peak Decay", "analyzer.peakDecay" },
+    Spec{ ControlId::AnalyzerTilt, Stage{}, Type{}, "Tilt", "analyzer.tilt" },
+    Spec{ ControlId::MasterBypass, Stage{}, Type{}, "Bypass", "master.bypass" },
 };
 
 // Static assert to verify order matches ControlId enum

@@ -1,192 +1,71 @@
-MISSION TYPE
-<UI_LAYOUT | UI_REFACTOR | BUGFIX | ARCH_REFACTOR | DOCS_ONLY | BUILD_FIX>
+Obey 00_SYSTEM_RULES.txt.
+You are the IMPLEMENTER.
 
-MISSION ID
-<YYYY-MM-DD>-<short-descriptive-name>
+Mission: MULTI_TRACE_DUALFFT_V1 — PHASE 3 (Option B: L/R only)
 
-OWNER
-Avishay / MelechDSP
+Goal:
+Visually validate dual FFT by rendering an L trace (and optionally R) in addition to existing Peak (yellow) and RMS (blue).
+Do NOT implement Mono/Mid/Side yet.
 
-SOURCE OF TRUTH
-PROMPTS/MISSIONS/CURRENT_MISSION.txt
+Hard constraints:
+- Minimal diffs (~85 lines target).
+- No allocations in paint().
+- No audio-thread changes.
+- Do NOT modify computeFFT().
+- STOP after each step and report.
 
-================================================================================
-0. MULTI-AGENT MODE (MANDATORY)
-================================================================================
-Enabled: YES
+Scope (ONLY):
+- Source/ui/analyzer/AnalyzerDisplayView.cpp
+- Source/ui/analyzer/RTADisplay.h
+- Source/ui/analyzer/RTADisplay.cpp
 
-Roles:
-- IMPLEMENTER (code changes only)
-- VERIFIER (verification only)
+Design (LOCKED):
+- Use existing snapshot.powerL / snapshot.powerR.
+- Convert to dB using the same scale/mapping as current peak/RMS.
+- Colors:
+  - Peak: existing yellow (unchanged)
+  - RMS: existing blue (unchanged)
+  - L trace: green (e.g., 0xff00c853)
+  - R trace (optional): magenta (e.g., 0xffd81b60)
+- Traces controlled by existing toggles:
+  - showL → L trace
+  - showR → R trace
 
-Role File I/O (MANDATORY PATHS):
-- Implementer MUST write:  PROMPTS/MISSIONS/IMPLEMENTER_RESULT.md
-- Verifier MUST write:     PROMPTS/MISSIONS/VERIFIER_RESULT.md
-- Verifier MUST write final merged report to: PROMPTS/MISSIONS/LAST_RESULT.md
+Execution:
 
-Verifier allowed to edit code:
-NO
+STEP 3B.1 — Pass L/R data into RTADisplay
+- In AnalyzerDisplayView.cpp, where snapshot is applied:
+  - Add calls like:
+      rtaDisplay.setLData(snapshot.powerL)
+      rtaDisplay.setRData(snapshot.powerR)
+- Feature-flagged by enableMultiTrace_ if necessary.
+STOP and report.
 
-If Verifier detects failures:
-- Verifier MUST NOT patch code.
-- Verifier MUST report failure and STOP.
+STEP 3B.2 — Extend RTADisplay API
+- In RTADisplay.h:
+  - Add members to store L/R power spans or references.
+  - Add setters: setLData(...), setRData(...).
+STOP and report.
 
-================================================================================
-1. OBJECTIVE (ONE SENTENCE)
-================================================================================
-<Write exactly one objective sentence. No secondary objectives.>
+STEP 3B.3 — Render L/R traces
+- In RTADisplay::paint():
+  - After Peak/RMS rendering, check:
+      if (traceConfig.showL) → render L trace
+      if (traceConfig.showR) → render R trace
+  - Use the same decimation + path stroke pipeline as peak/RMS.
+  - No allocations.
+STOP and report.
 
-Example:
-Group Peak-related analyzer controls into a single compact control row in the bottom Analyzer section.
-
-================================================================================
-2. SCOPE (HARD BOUNDARIES)
-================================================================================
-You MAY modify files ONLY in these paths:
-- Source/ui/**
-- third_party/melechdsp-hq/shared/mdsp_ui/**
-
-You MUST NOT modify:
-- DSP / engine / processor code
-- APVTS parameter IDs or ranges
-- third_party dependencies outside mdsp_ui
-- Build scripts unless explicitly listed in “Allowed Build Files”
-
-Allowed Build Files (only if explicitly required by this mission):
-- <leave blank unless needed>
-- (If blank: NO build files may be modified.)
-
-If any out-of-scope change seems necessary:
-STOP and report in your role’s result file. Do not proceed.
-
-================================================================================
-3. FORBIDDEN ACTIONS (ABSOLUTE)
-================================================================================
-- No rm / rm -rf / delete commands
-- No file system operations outside the repo
-- No wildcard deletes
-- No speculative cleanup/refactors
-- No formatting-only changes
-- No renaming public APIs without explicit instruction
-- No behavior changes unless explicitly stated
-
-================================================================================
-4. REQUIRED CONTEXT (ASSUMED ARCHITECTURE)
-================================================================================
-- JUCE + CMake project
-- UI architecture principles:
-  - HeaderBar = primary analyzer state controls
-  - MainView = layout authority (bounds/zones only)
-  - Control primitives use design tokens (Theme/Metrics/Typography) in mdsp_ui
-  - Compact control rows preferred over tall vertical stacks
-  - CollapsibleSection used for bottom panels when density is high
-- All changes must preserve existing visual language and bindings
-
-================================================================================
-5. TASK BREAKDOWN (ORDERED, FINITE)
-================================================================================
-Perform ONLY these steps, in order.
-
-[ ] Step 1:
-<explicit mechanical change>
-
-[ ] Step 2:
-<explicit mechanical change>
-
-[ ] Step 3:
-<explicit mechanical change>
-
-Do NOT add steps. If a step cannot be completed, STOP.
-
-================================================================================
-6. ACCEPTANCE CRITERIA (MUST ALL PASS)
-================================================================================
-- Build succeeds on macOS (CMake/Xcode)
-- No files modified outside declared scope
-- No parameter IDs/ranges changed
-- No duplicate UI controls for a single parameter
-- No controls clipped / out of bounds at minimum window size
-- Code warning-clean (no new warnings)
-
-================================================================================
-7. VERIFICATION REQUIRED (VERIFIER ONLY)
-================================================================================
-Verifier MUST run and report:
-
-Build Command:
-<exact command to run, e.g.>
-cmake --build build-xcode --config Debug
-
-Build Result:
-SUCCESS | FAILURE
-
-If FAILURE:
-- Provide first compiler/linker error only (file + line)
-- Do NOT attempt fixes
-- STOP
-
-Optional UI sanity checks (if relevant):
-- Resize window to minimum width/height used by project
-- Confirm header controls remain within bounds
-- Confirm affected controls render correctly and remain clickable
-
-================================================================================
-8. ROLE INSTRUCTIONS (MANDATORY)
-================================================================================
-
-----------------------------------------
-ROLE: IMPLEMENTER
-----------------------------------------
-You must:
-- Make code changes only (no build/test required unless explicitly allowed)
-- Stay strictly within Scope
-- Keep diffs minimal and behavior unchanged except as stated
-
-You must write results to:
-PROMPTS/MISSIONS/IMPLEMENTER_RESULT.md
-
-Implementer output must include:
-- SUMMARY (3–5 bullets, implementation only)
-- FILES MODIFIED (paths only)
-- DIFF NOTES (max 5 bullets, what verifier should watch)
-- OUT OF SCOPE CHANGES (NONE or STOPPED)
-- STOP CONFIRMATION (signed)
-
-Then STOP. Do not continue.
-
-----------------------------------------
-ROLE: VERIFIER
-----------------------------------------
-You must:
-- Read CURRENT_MISSION.txt
-- Read PROMPTS/MISSIONS/IMPLEMENTER_RESULT.md
-- Perform verification only (NO code edits)
-- Audit scope (ensure only allowed paths changed)
-- Run build command and record result
-- Validate acceptance criteria PASS/FAIL
-- If any failure, report and STOP (no patches)
-
-You must write:
-1) PROMPTS/MISSIONS/VERIFIER_RESULT.md
-2) PROMPTS/MISSIONS/LAST_RESULT.md (merged final)
-
-Merged LAST_RESULT.md must include:
-- MERGED SUMMARY (implementation + verification)
-- FILES MODIFIED
-- OUT OF SCOPE CHANGES
-- BUILD VERIFICATION (command + result)
-- UI sanity checks (PASS/FAIL/N/A)
-- ACCEPTANCE CRITERIA (each PASS/FAIL)
-- STOP confirmations (both roles)
-
-Then STOP. Do not continue.
-
-================================================================================
-9. STOP RULE (ABSOLUTE)
-================================================================================
-After writing your required file(s):
+STEP 3B.4 — Visual sanity test
+Test signals:
+A) Left-only sine:
+   - L trace strong
+   - R trace near floor
+B) Right-only sine:
+   - Opposite
+C) Stereo identical:
+   - L and R traces overlap
+Deliverable:
+- Files changed
+- Test results
 STOP.
-Do not propose next tasks.
-Do not refactor anything else.
-
-END OF MULTI-AGENT MISSION

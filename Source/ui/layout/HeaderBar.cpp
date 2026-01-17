@@ -68,11 +68,12 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
         if (presetManager)
         {
             juce::PopupMenu m;
-            m.addItem ("Factory", [this] { presetManager->loadFactoryPreset(); });
-            m.addItem ("Default", [this] { presetManager->loadDefaultPreset(); });
+            m.addItem ("Factory", [this] { presetManager->loadFactory(); });
+            m.addItem ("Default", [this] { presetManager->loadDefaultOrFactory(); });
+            m.addItem ("Save as Default", [this] { presetManager->saveDefault(); });
             m.addSeparator();
             
-            auto presets = presetManager->getPresetList();
+            auto presets = presetManager->listPresets();
             for (const auto& p : presets)
                 m.addItem (p, [this, p] { presetManager->loadPreset (p); });
 
@@ -98,7 +99,7 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
                 {
                     auto name = w->getTextEditorContents ("name");
                     if (name.isNotEmpty())
-                        presetManager->savedPreset (name);
+                        presetManager->savePreset (name);
                 }
             }));
         }
@@ -106,7 +107,7 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     addAndMakeVisible (saveButton);
 
     // A/B Slots
-    auto initSlotBtn = [&](juce::TextButton& b, const juce::String& text, AnalyzerPro::state::StateManager::Slot slot)
+    auto initSlotBtn = [&](juce::TextButton& b, const juce::String& text, AnalyzerPro::presets::ABStateManager::Slot slot)
     {
         b.setButtonText (text);
         b.setRadioGroupId (2002);
@@ -115,13 +116,13 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
         b.setColour (juce::TextButton::buttonOnColourId, theme.accent);
         b.onClick = [this, slot]
         {
-            if (stateManager)
-                stateManager->setActiveSlot (slot);
+            if (abStateManager)
+                abStateManager->setActiveSlot (slot);
         };
         addAndMakeVisible (b);
     };
-    initSlotBtn (slotAButton, "A", AnalyzerPro::state::StateManager::Slot::A);
-    initSlotBtn (slotBButton, "B", AnalyzerPro::state::StateManager::Slot::B);
+    initSlotBtn (slotAButton, "A", AnalyzerPro::presets::ABStateManager::Slot::A);
+    initSlotBtn (slotBButton, "B", AnalyzerPro::presets::ABStateManager::Slot::B);
     slotAButton.setToggleState (true, juce::dontSendNotification);
 
     // Bypass
@@ -244,19 +245,19 @@ void HeaderBar::setControlBinder (AnalyzerPro::ControlBinder& binder)
     }
 }
 
-void HeaderBar::setManagers (AnalyzerPro::state::PresetManager* pm, AnalyzerPro::state::StateManager* sm)
+void HeaderBar::setManagers (AnalyzerPro::presets::PresetManager* pm, AnalyzerPro::presets::ABStateManager* sm)
 {
     presetManager = pm;
-    stateManager = sm;
+    abStateManager = sm;
     
-    if (stateManager)
+    if (abStateManager)
     {
-        stateManager->onSlotChanged = [this] (AnalyzerPro::state::StateManager::Slot slot)
+        abStateManager->onSlotChanged = [this] (AnalyzerPro::presets::ABStateManager::Slot slot)
         {
             // Update UI on message thread (callback likely on msg thread but safe to force)
             juce::MessageManager::callAsync ([this, slot]
             {
-                if (slot == AnalyzerPro::state::StateManager::Slot::A)
+                if (slot == AnalyzerPro::presets::ABStateManager::Slot::A)
                     slotAButton.setToggleState (true, juce::dontSendNotification);
                 else
                     slotBButton.setToggleState (true, juce::dontSendNotification);
@@ -269,16 +270,16 @@ void HeaderBar::setManagers (AnalyzerPro::state::PresetManager* pm, AnalyzerPro:
     
     presetButton.setEnabled (presetManager != nullptr);
     saveButton.setEnabled (presetManager != nullptr);
-    slotAButton.setEnabled (stateManager != nullptr);
-    slotBButton.setEnabled (stateManager != nullptr);
+    slotAButton.setEnabled (abStateManager != nullptr);
+    slotBButton.setEnabled (abStateManager != nullptr);
 }
 
 void HeaderBar::updateActiveSlot()
 {
-    if (stateManager)
+    if (abStateManager)
     {
-        auto slot = stateManager->getActiveSlot();
-        if (slot == AnalyzerPro::state::StateManager::Slot::A)
+        auto slot = abStateManager->getActiveSlot();
+        if (slot == AnalyzerPro::presets::ABStateManager::Slot::A)
             slotAButton.setToggleState (true, juce::dontSendNotification);
         else
             slotBButton.setToggleState (true, juce::dontSendNotification);

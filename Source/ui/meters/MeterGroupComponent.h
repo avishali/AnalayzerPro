@@ -23,6 +23,9 @@ public:
     int getChannelCount() const noexcept { return channelCount_; }
 
     int getPreferredWidth() const noexcept;
+    
+    enum class ChannelMode { Stereo, MidSide }; // 0=Stereo, 1=MidSide
+    void setChannelMode (ChannelMode mode);
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -37,6 +40,7 @@ private:
 
     int channelCount_ = 2;
     MeterComponent::DisplayMode displayMode_ = MeterComponent::DisplayMode::RMS;
+    ChannelMode channelMode_ = ChannelMode::Stereo; // Default Stereo
 
     juce::TextButton rmsButton_ { "RMS" };
     juce::TextButton peakButton_ { "PEAK" };

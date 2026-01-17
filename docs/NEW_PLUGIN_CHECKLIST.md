@@ -14,26 +14,26 @@ If you follow these steps in order, you will avoid architectural drift and keep 
 
 ## 1. Repository & Identity
 
-- [ ] Copy or fork the template repository
-- [ ] Rename the repository to the new plugin name
-- [ ] Update `CMakeLists.txt`:
-  - [ ] `PROJECT_NAME`
-  - [ ] `COMPANY_NAME`
-  - [ ] Plugin formats (AU / VST3 / Standalone)
-- [ ] Update bundle identifiers (reverse-DNS)
-- [ ] Rename binary / artefact names if required
+- [x] Copy or fork the template repository
+- [x] Rename the repository to the new plugin name
+- [x] Update `CMakeLists.txt`:
+  - [x] `PROJECT_NAME`
+  - [x] `COMPANY_NAME`
+  - [x] Plugin formats (AU / VST3 / Standalone)
+- [x] Update bundle identifiers (reverse-DNS)
+- [x] Rename binary / artefact names if required
 
 ---
 
 ## 2. Build Sanity Check (before changes)
 
-- [ ] Configure CMake with correct JUCE path
+- [x] Configure CMake with correct JUCE path
   ```bash
   cmake -S . -B build -DJUCE_PATH=/path/to/JUCE
   ```
-- [ ] Build the project
-- [ ] Run Standalone
-- [ ] Confirm plugin opens with no errors
+- [x] Build the project
+- [x] Run Standalone
+- [x] Confirm plugin opens with no errors
 
 > ⚠️ Do not start editing DSP or UI until this passes.
 
@@ -43,11 +43,11 @@ If you follow these steps in order, you will avoid architectural drift and keep 
 
 For **each new parameter**:
 
-- [ ] Add atomic value to `Parameters`
-- [ ] Add getter
-- [ ] Add setter with clamping
-- [ ] Add persistence to state (`getState` / `setState`)
-- [ ] Choose native range carefully (not normalized)
+- [x] Add atomic value to `Parameters`
+- [x] Add getter
+- [x] Add setter with clamping
+- [x] Add persistence to state (`getState` / `setState`)
+- [x] Choose native range carefully (not normalized)
 
 Rule:
 > Parameters own truth. Never clamp elsewhere.
@@ -56,9 +56,9 @@ Rule:
 
 ## 4. Control IDs
 
-- [ ] Assign a unique `ControlId` for each parameter
-- [ ] Keep IDs stable once released
-- [ ] Group IDs logically (future hardware pages)
+- [x] Assign a unique `ControlId` for each parameter
+- [x] Keep IDs stable once released
+- [x] Group IDs logically (future hardware pages)
 
 Example:
 ```cpp
@@ -72,11 +72,11 @@ constexpr ui_core::ControlId kOutputControlId = 1002;
 
 For each parameter:
 
-- [ ] Create slider / control
-- [ ] Set native range (matches Parameters)
-- [ ] Add label
-- [ ] Add to layout in `MainView::resized()`
-- [ ] Ensure controls do not overlap at minimum window size
+- [x] Create slider / control
+- [x] Set native range (matches Parameters)
+- [x] Add label
+- [x] Add to layout in `MainView::resized()`
+- [x] Ensure controls do not overlap at minimum window size
 
 ---
 
@@ -84,12 +84,12 @@ For each parameter:
 
 For each parameter:
 
-- [ ] Add a mapped binding to `BindingRegistry`
-- [ ] Define:
-  - [ ] `toNative(normalized)`
-  - [ ] `toNormalized(native)`
-- [ ] Update UI inside setter (use `dontSendNotification`)
-- [ ] Send hardware LED feedback (normalized)
+- [x] Add a mapped binding to `BindingRegistry`
+- [x] Define:
+  - [x] `toNative(normalized)`
+  - [x] `toNormalized(native)`
+- [x] Update UI inside setter (use `dontSendNotification`)
+- [x] Send hardware LED feedback (normalized)
 
 Rule:
 > All routing goes through bindings.
@@ -100,24 +100,24 @@ Rule:
 
 For each interactive control:
 
-- [ ] Register with `FocusManager`
-- [ ] Set focus on `onDragStart`
-- [ ] Draw focus outline in `paint()`
-- [ ] Persist focus to `Parameters`
-- [ ] Restore focus on editor open
+- [x] Register with `FocusManager`
+- [x] Set focus on `onDragStart`
+- [x] Draw focus outline in `paint()`
+- [x] Persist focus to `Parameters`
+- [x] Restore focus on editor open
 
 Verify:
-- [ ] Tab cycles focus correctly
-- [ ] Hardware focus output updates
+- [x] Tab cycles focus correctly
+- [x] Hardware focus output updates
 
 ---
 
 ## 8. Hardware Input
 
-- [ ] Route all simulated / real hardware input through `PluginHardwareAdapter`
-- [ ] Use normalized values (0..1)
-- [ ] Use relative mode for encoders
-- [ ] Never write to Parameters directly
+- [x] Route all simulated / real hardware input through `PluginHardwareAdapter`
+- [x] Use normalized values (0..1)
+- [x] Use relative mode for encoders
+- [x] Never write to Parameters directly
 
 Test:
 - [ ] Absolute events work
@@ -127,10 +127,10 @@ Test:
 
 ## 9. Hardware Output
 
-- [ ] Implement `PluginHardwareOutputAdapter`
-- [ ] Send focus changes
-- [ ] Send normalized value updates
-- [ ] Verify DBG output (or real hardware)
+- [x] Implement `PluginHardwareOutputAdapter`
+- [x] Send focus changes
+- [x] Send normalized value updates
+- [x] Verify DBG output (or real hardware)
 
 Rule:
 > Hardware output mirrors state — it never drives it.
@@ -158,22 +158,22 @@ If not needed:
 
 Confirm the following survive reopen / reload:
 
-- [ ] Parameter values
-- [ ] Focused control
-- [ ] Window size (if enabled)
+- [x] Parameter values
+- [x] Focused control
+- [x] Window size (if enabled)
 
 Test in:
-- [ ] Standalone
-- [ ] At least one DAW
+- [x] Standalone
+- [x] At least one DAW
 
 ---
 
 ## 12. Cleanup Before First Commit
 
-- [ ] Remove unused demo code
-- [ ] Remove unused ControlIds
-- [ ] Remove DBG spam
-- [ ] Commit with a clean message:
+- [x] Remove unused demo code
+- [x] Remove unused ControlIds
+- [x] Remove DBG spam
+- [x] Commit with a clean message:
   ```
   Initial plugin scaffold based on template
   ```

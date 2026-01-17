@@ -19,7 +19,53 @@
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
+#include <juce_data_structures/juce_data_structures.h>
 #include "audio/DeviceRoutingHelper.h"
+
+struct AnalayzerProAudioProcessor::StandalonePersistence : private juce::Timer
+{
+    StandalonePersistence()
+    {
+        // Defer init to ensure StandalonePluginHolder is fully ready
+        startTimer (10);
+    }
+
+    ~StandalonePersistence() override
+    {
+        stopTimer();
+        helper.reset(); // Destroy helper (unregisters listener) before properties
+    }
+
+    void timerCallback() override
+    {
+        stopTimer();
+        init();
+    }
+
+    void init()
+    {
+        auto* holder = juce::StandalonePluginHolder::getInstance();
+        if (!holder) return;
+
+        // Setup Properties
+        juce::PropertiesFile::Options opts;
+        opts.applicationName = "AnalyzerPro";
+        opts.filenameSuffix  = ".settings";
+        opts.folderName      = "AnalyzerPro";
+        opts.osxLibrarySubFolder = "Preferences";
+        opts.commonToAllUsers = false;
+        opts.ignoreCaseOfKeyNames = true;
+        opts.storageFormat = juce::PropertiesFile::storeAsXML;
+
+        appProperties.setStorageParameters (opts);
+
+        // Instantiate helper which handles restore and persistence
+        helper = std::make_unique<analyzerpro::DeviceRoutingHelper> (holder->deviceManager, appProperties);
+    }
+
+    juce::ApplicationProperties appProperties;
+    std::unique_ptr<analyzerpro::DeviceRoutingHelper> helper;
+};
 #endif
 
 //==============================================================================
@@ -64,40 +110,33 @@ AnalayzerProAudioProcessor::AnalayzerProAudioProcessor()
     // Cache raw parameter pointers once (valid for lifetime of APVTS)
     pFftSize_   = apvts.getRawParameterValue ("FftSize");
     pAveraging_ = apvts.getRawParameterValue ("Averaging");
-    pPeakHold_  = apvts.getRawParameterValue ("PeakHold");
-    pHold_      = apvts.getRawParameterValue ("Hold");
+    pHoldPeaks_ = apvts.getRawParameterValue ("HoldPeaks");
     pPeakDecay_ = apvts.getRawParameterValue ("PeakDecay");
-    pDbRange_   = apvts.getRawParameterValue ("DbRange");
+    
+    pTraceShowLR_   = apvts.getRawParameterValue ("TraceShowLR"); // Legacy
+    pTraceShowMono_ = apvts.getRawParameterValue ("analyzerShowMono");
+    pTraceShowL_    = apvts.getRawParameterValue ("analyzerShowL");
+    pTraceShowR_    = apvts.getRawParameterValue ("analyzerShowR");
+    pTraceShowMid_  = apvts.getRawParameterValue ("analyzerShowMid");
+    pTraceShowSide_ = apvts.getRawParameterValue ("analyzerShowSide");
+    pTraceShowRMS_  = apvts.getRawParameterValue ("analyzerShowRMS");
+    // pAnalyzerWeighting_ = apvts.getRawParameterValue ("analyzerWeighting"); // Add if needed in Processor
 
     #if JUCE_DEBUG
     jassert (pFftSize_   != nullptr);
     jassert (pAveraging_ != nullptr);
-    jassert (pPeakHold_  != nullptr);
-    jassert (pHold_      != nullptr);
+    jassert (pHoldPeaks_ != nullptr);
     jassert (pPeakDecay_ != nullptr);
-    jassert (pDbRange_   != nullptr);
     #endif
 #if JucePlugin_Build_Standalone
-    // Auto-configure macOS loopback routing for standalone builds
-    // Defer the routing setup to ensure StandalonePluginHolder is initialized
-    juce::Timer::callAfterDelay(100, []
-    {
-        if (auto* holder = juce::StandalonePluginHolder::getInstance())
-        {
-            auto& dm = holder->deviceManager;
-            auto r = analyzerpro::DeviceRoutingHelper::applyMacSystemCapture(dm, "AnalyzerPro Aggregate", 48000.0, 256);
-            DBG("[AnalyzerPro] " + r.message);
-        }
-        else
-        {
-            DBG("[AnalyzerPro] StandalonePluginHolder instance not available.");
-        }
-    });
+    // Initialize Standalone Persistence (manages device state)
+    standalonePersistence = std::make_unique<StandalonePersistence>();
 #endif
 
     // Initialize State Managers
-    presetManager = std::make_unique<AnalyzerPro::state::PresetManager> (apvts);
-    stateManager  = std::make_unique<AnalyzerPro::state::StateManager> (apvts);
+    // Initialize State Managers
+    presetManager = std::make_unique<AnalyzerPro::presets::PresetManager> (apvts);
+    abStateManager  = std::make_unique<AnalyzerPro::presets::ABStateManager> (apvts);
     
     // Cache Bypass
     pBypass_ = apvts.getRawParameterValue ("Bypass");
@@ -178,6 +217,7 @@ void AnalayzerProAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     DBG ("Prepare: inCh=" << getTotalNumInputChannels() << " outCh=" << getTotalNumOutputChannels());
 #endif
     analyzerEngine.prepare (sampleRate, samplesPerBlock);
+    loudnessAnalyzer.prepare (sampleRate, samplesPerBlock);
 
     meterSampleRate_ = (sampleRate > 1.0 ? sampleRate : 48000.0);
     for (int ch = 0; ch < 2; ++ch)
@@ -200,12 +240,16 @@ void AnalayzerProAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     lastAveragingIndex_ = -1;
     lastHold_ = false;
     lastPeakDecayDbPerSec_ = std::numeric_limits<float>::quiet_NaN();
+
+    analysisBuffer.setSize (2, samplesPerBlock);
+    outputAnalysisBuffer.setSize (2, samplesPerBlock);
 }
 
 
 void AnalayzerProAudioProcessor::releaseResources()
 {
     analyzerEngine.reset();
+    loudnessAnalyzer.reset();
 }
 
 bool AnalayzerProAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -243,8 +287,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     if (JUCE_UNLIKELY (pFftSize_ == nullptr ||
                        pAveraging_ == nullptr ||
-                       pPeakHold_ == nullptr ||
-                       pHold_ == nullptr ||
+                       pHoldPeaks_ == nullptr ||
                        pPeakDecay_ == nullptr))
     {
         return; // Safety guard (should never happen)
@@ -261,8 +304,92 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     const int n = buffer.getNumSamples();
     const float dtSec = static_cast<float> (n / juce::jmax (1.0, meterSampleRate_));
 
-    // Input meters: measure buffer pre-processing.
-    const int inChCount = juce::jlimit (0, 2, totalNumInputChannels);
+    // --- Analysis Path Transform ---
+    // 1. Copy to scratch buffer
+    // 2. Apply Mode (L-R, Mono, M/S)
+    // 3. Feed Consumers (Meters, Analyzer, Loudness)
+    
+    // Ensure scratch buffer is big enough (should be resized in prepareToPlay)
+    if (analysisBuffer.getNumSamples() < n)
+        analysisBuffer.setSize (2, n, true, false, true);
+
+    const int numAnalChannels = juce::jmin (2, buffer.getNumChannels());
+    
+    // Copy input to scratch
+    for (int ch = 0; ch < numAnalChannels; ++ch)
+        analysisBuffer.copyFrom (ch, 0, buffer, ch, 0, n);
+    
+    // Zero any unused channels in scratch
+    for (int ch = numAnalChannels; ch < analysisBuffer.getNumChannels(); ++ch)
+        analysisBuffer.clear (ch, 0, n);
+
+    // Apply Mode derived from Trace Config
+    // Logic: If M or S is ON (and LR is OFF), use M/S. If Mono is ON (and LR is OFF), use Mono. Else L-R.
+    int modeIdx = 0; // Default L-R
+    
+    const bool showLR   = (pTraceShowLR_   && pTraceShowLR_->load() > 0.5f);
+    const bool showMono = (pTraceShowMono_ && pTraceShowMono_->load() > 0.5f);
+    const bool showMid  = (pTraceShowMid_  && pTraceShowMid_->load() > 0.5f);
+    const bool showSide = (pTraceShowSide_ && pTraceShowSide_->load() > 0.5f);
+    
+    if ((showMid || showSide) && !showLR)
+    {
+        modeIdx = 2; // M/S
+    }
+    else if (showMono && !showLR)
+    {
+        modeIdx = 1; // Mono
+    }
+    else
+    {
+        modeIdx = 0; // L-R
+    }
+    
+    // Mode mappings: 0=L-R, 1=Mono, 2=M/S
+    if (modeIdx == 1 && numAnalChannels >= 2) // Mono
+    {
+        // Mono sum: L = R = 0.5 * (L + R)
+        analysisBuffer.addFrom (0, 0, analysisBuffer, 1, 0, n);
+        analysisBuffer.applyGain (0, 0, n, 0.5f);
+        analysisBuffer.copyFrom (1, 0, analysisBuffer, 0, 0, n);
+    }
+    else if (modeIdx == 2 && numAnalChannels >= 2) // M/S
+    {
+        // Mid = 0.5 * (L + R)
+        // Side = 0.5 * (L - R)
+        // L -> Mid, R -> Side
+        
+        // We can do this in-place or with temp.
+        // Temp buffers for M and S
+        const float* l = analysisBuffer.getReadPointer (0);
+        const float* r = analysisBuffer.getReadPointer (1);
+        float* mid = analysisBuffer.getWritePointer (0);
+        float* side = analysisBuffer.getWritePointer (1);
+        
+        for (int i = 0; i < n; ++i)
+        {
+            const float L = l[i];
+            const float R = r[i];
+            
+            // Be careful about aliasing if writing back to same buffer
+            // Since we read s[i] before writing d[i], and i is strictly increasing,
+            // and L/R are separate pointers (channels),
+            // wait, getReadPointer and getWritePointer return the SAME memory if it's the same channel.
+            // So 'mid' points to 'l'.
+            
+            const float m = 0.5f * (L + R);
+            const float s = 0.5f * (L - R);
+            
+            mid[i] = m;
+            side[i] = s;
+        }
+    }
+
+    // Input meters: measure ANALYSIS buffer (post-transform)
+    // Note: Previously this measured 'buffer' (pre-gain). Now we measure transformed analysis buffer.
+    // The requirement is "Analyzer and Meters must reflect the selected mode".
+    
+    const int inChCount = juce::jlimit (0, 2, analysisBuffer.getNumChannels());
     for (int ch = 0; ch < 2; ++ch)
         {
         if (ch >= inChCount)
@@ -272,7 +399,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             continue;
         }
 
-        const float* x = buffer.getReadPointer (ch);
+        const float* x = analysisBuffer.getReadPointer (ch);
         float blockPeak = 0.0f;
         float sumSq = 0.0f;
         bool clipped = false;
@@ -314,7 +441,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // Apply gain
+    // Apply gain (to OUTPUT buffer, NOT analysis buffer)
     const auto gainValue = parameters.getGain();
     if (gainValue != 1.0f)
     {
@@ -327,7 +454,6 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // Note: Mode is UI-only, handled on message thread
     auto* fftSizeParam = apvts.getRawParameterValue ("FftSize");
     auto* avgParam     = apvts.getRawParameterValue ("Averaging");
-    auto* holdParam    = apvts.getRawParameterValue ("Hold");
     auto* decayParam   = apvts.getRawParameterValue ("PeakDecay");
     
     if (fftSizeParam != nullptr)
@@ -350,13 +476,13 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
     }
     
-    if (avgParam != nullptr)
-    {
-        constexpr float avgMs[] = { 0.0f, 50.0f, 100.0f, 250.0f, 500.0f, 1000.0f };
-        constexpr int kNumAvg = static_cast<int> (std::size (avgMs));
+        // Map index to octave bandwidth
+        // 0: Off, 1: 1/24, 2: 1/12, 3: 1/6, 4: 1/3, 5: 1.0
+        constexpr float octaves[] = { 0.0f, 1.0f/24.0f, 1.0f/12.0f, 1.0f/6.0f, 1.0f/3.0f, 1.0f };
+        constexpr int kNumOpts = static_cast<int> (std::size (octaves));
 
         const float raw = avgParam->load();
-        const int index = juce::jlimit (0, kNumAvg - 1, static_cast<int> (raw));
+        const int index = juce::jlimit (0, kNumOpts - 1, static_cast<int> (raw));
 
        #if JUCE_DEBUG
         jassert (std::abs (raw - static_cast<float> (index)) < 0.001f);
@@ -365,33 +491,21 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         if (index != lastAveragingIndex_)
         {
             lastAveragingIndex_ = index;
-            analyzerEngine.setAveragingMs (avgMs[index]);
+            analyzerEngine.setSmoothingOctaves (octaves[index]);
+            
+            // If smoothing is enabled, we might want to reduce time averaging to keep it responsive,
+            // or keep it fixed. For now, we only set octaves. 
+            // AnalyzerEngine defaults can handle time averaging separately.
         }
-    }
     
-    if (holdParam != nullptr)
+    if (pHoldPeaks_ != nullptr)
     {
-        const bool hold = (holdParam->load() > 0.5f);
+        const bool hold = (pHoldPeaks_->load() > 0.5f);
         if (hold != lastHold_)
         {
             lastHold_ = hold;
             analyzerEngine.setHold (hold);
         }
-    }
-    
-    if (pPeakHold_ != nullptr)
-    {
-        // Check if Peak Hold (Enable) changed - no cached var for boolean, just apply since it's cheap?
-        // Or cache it like lastHold_. Let's cache it. we need a new member lastPeakHoldEnabled_.
-        // Ah, I need to add that member first or just use a static local if I was lazy, but let's do it properly?
-        // Wait, I can't add member in .cpp without modifying .h.
-        // I will check status vs engine getter? Engine doesn't expose getter publicly easily?
-        // I'll just apply it every block? It's a bool setter.
-        // `setPeakHoldEnabled` does `if (!enabled) resetPeaks()`. So calling it repeatedly with true is cheap.
-        // Calling it repeatedly with false is also cheap (returns early).
-        // Safest is to just apply it.
-        const bool enabled = (pPeakHold_->load() > 0.5f);
-        analyzerEngine.setPeakHoldEnabled (enabled);
     }
     
     if (decayParam != nullptr)
@@ -416,10 +530,51 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
         else
         {
-             analyzerEngine.processBlock (buffer);
+             analyzerEngine.processBlock (analysisBuffer); // Feed transformed buffer
+             loudnessAnalyzer.process (analysisBuffer);    // Feed transformed buffer
         }
         
-        // Software Metering (Post-Fader / Post-Processing)
+
+    // --- Output Metering Path ---
+    // 1. Copy Output (post-gain) to scratch
+    // 2. Apply Mode (same as Input)
+    // 3. Feed Output Meters
+
+    if (outputAnalysisBuffer.getNumSamples() < n)
+        outputAnalysisBuffer.setSize (2, n, true, false, true);
+    
+    // Copy output (buffer) to scratch
+    for (int ch = 0; ch < numAnalChannels; ++ch)
+        outputAnalysisBuffer.copyFrom (ch, 0, buffer, ch, 0, n);
+    for (int ch = numAnalChannels; ch < outputAnalysisBuffer.getNumChannels(); ++ch)
+        outputAnalysisBuffer.clear (ch, 0, n);
+
+    // Apply Mode (Reuse modeIdx from Input Analysis)
+    if (modeIdx == 1 && numAnalChannels >= 2) // Mono
+    {
+        outputAnalysisBuffer.addFrom (0, 0, outputAnalysisBuffer, 1, 0, n);
+        outputAnalysisBuffer.applyGain (0, 0, n, 0.5f);
+        outputAnalysisBuffer.copyFrom (1, 0, outputAnalysisBuffer, 0, 0, n);
+    }
+    else if (modeIdx == 2 && numAnalChannels >= 2) // M/S
+    {
+        const float* l = outputAnalysisBuffer.getReadPointer (0);
+        const float* r = outputAnalysisBuffer.getReadPointer (1);
+        float* mid = outputAnalysisBuffer.getWritePointer (0);
+        float* side = outputAnalysisBuffer.getWritePointer (1);
+        
+        for (int i = 0; i < n; ++i)
+        {
+            const float L = l[i];
+            const float R = r[i];
+            const float m = 0.5f * (L + R);
+            const float s = 0.5f * (L - R);
+            mid[i] = m;
+            side[i] = s;
+        }
+    }
+
+    // 4. Feed Output Meters
     const int outChCount = juce::jlimit (0, 2, totalNumOutputChannels);
     for (int ch = 0; ch < 2; ++ch)
     {
@@ -430,7 +585,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             continue;
         }
 
-        const float* y = buffer.getReadPointer (ch);
+        const float* y = outputAnalysisBuffer.getReadPointer (ch); // Read from transformed Output Buffer
         float blockPeak = 0.0f;
         float sumSq = 0.0f;
         bool clipped = false;
@@ -528,8 +683,12 @@ void AnalayzerProAudioProcessor::getStateInformation (juce::MemoryBlock& destDat
     auto state = apvts.copyState();
     
     // Inject A/B + Active Slot
-    if (stateManager)
-        stateManager->saveToState (state);
+    // Inject A/B + Active Slot
+    if (abStateManager)
+    {
+        // TODO (Step 4): Implement save for ABStateManager
+        abStateManager->saveToState (state);
+    }
         
     std::unique_ptr<juce::XmlElement> xml (state.createXml());
     copyXmlToBinary (*xml, destData);
@@ -545,9 +704,16 @@ void AnalayzerProAudioProcessor::setStateInformation (const void* data, int size
         {
             auto state = juce::ValueTree::fromXml (*xmlState);
             
+            // Migrate legacy parameters
+            migrateLegacyParameters (state);
+            
             // Restore A/B and apply active state
-            if (stateManager)
-                stateManager->restoreFromState (state);
+            // Restore A/B and apply active state
+            if (abStateManager)
+            {
+                // TODO (Step 4): Implement restore for ABStateManager
+                abStateManager->restoreFromState (state);
+            }
             else
                 apvts.replaceState (state);
         }
@@ -576,6 +742,26 @@ void AnalayzerProAudioProcessor::parameterChanged (const juce::String& parameter
     juce::ignoreUnused (parameterID, newValue);
 }
 
+// Helper to migrate old state
+void AnalayzerProAudioProcessor::migrateLegacyParameters (juce::ValueTree& state)
+{
+    // Migrate "Hold" (Freeze) -> "HoldPeaks"
+    // If "Hold" was true, set "HoldPeaks" true.
+    // We ignore old "PeakHold" (Enable) state as we now always enable peaks.
+    if (state.hasProperty ("Hold"))
+    {
+        const bool oldHold = static_cast<bool> (state.getProperty ("Hold"));
+        state.removeProperty ("Hold", nullptr);
+        state.setProperty ("HoldPeaks", oldHold, nullptr);
+    }
+    
+    // Clean up "PeakHold"
+    if (state.hasProperty ("PeakHold"))
+    {
+        state.removeProperty ("PeakHold", nullptr);
+    }
+}
+
 // ADD — Source/PluginProcessor.cpp (very bottom, after all code)
 //==============================================================================
 juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::createParameterLayout()
@@ -588,6 +774,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
         juce::StringArray { "FFT", "BANDS", "LOG" },
         0,  // Default: FFT (index 0)
         "Mode"));
+
+    // Channel Mode REMOVED in favor of granular trace toggles
+    // params.push_back (std::make_unique<juce::AudioParameterChoice> ("ChannelMode"...));
     
     // Analyzer FFT Size (choice: 1024, 2048, 4096, 8192)
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
@@ -596,24 +785,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
         2,  // Default: 4096 (index 2)
         "FFT Size"));
     
-    // Analyzer Averaging (choice: Off=0, 50ms=1, 100ms=2, 250ms=3, 500ms=4, 1s=5)
+    // Analyzer Smoothing (Fractional Octave)
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
-        "Averaging", "Averaging",
-        juce::StringArray { "Off", "50 ms", "100 ms", "250 ms", "500 ms", "1 s" },
-        3,  // Default: 250ms (index 3)
-        "Averaging"));
+        "Averaging", "Smoothing",
+        juce::StringArray { "Off", "1/24 Oct", "1/12 Oct", "1/6 Oct", "1/3 Oct", "1 Octave" },
+        3,  // Default: 1/6 Oct (index 3)
+        "Smoothing"));
     
-    // Analyzer Peak Hold (bool, default true - peaks enabled by default)
+    // Analyzer Hold Peaks (bool, default false - normal decay)
+    // Consolidates old "PeakHold" (enable) and "Hold" (freeze)
     params.push_back (std::make_unique<juce::AudioParameterBool> (
-        "PeakHold", "Peak Hold",
-        true,  // Default: enabled
-        "Peak Hold"));
-    
-    // Analyzer Hold (bool, default false - freezes decay)
-    params.push_back (std::make_unique<juce::AudioParameterBool> (
-        "Hold", "Hold",
-        false,  // Default: off
-        "Hold"));
+        "HoldPeaks", "Hold Peaks",
+        false,  // Default: off (decaying peaks)
+        "Hold Peaks"));
     
     // Analyzer Peak Decay (0..10 dB/sec, default 1.0 dB/sec)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
@@ -642,6 +826,75 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
         juce::StringArray { "-60 dB", "-90 dB", "-120 dB" },
         2,  // Default: -120 dB (index 2)
         "dB Range"));
+
+    // Master Bypass (bool, default false)
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        "Bypass", "Bypass",
+        false,  // Default: off (active)
+        "Bypass"));
+
+    // --- Trace Visibility Controls ---
+    
+    // Show L-R (Stereo Pair)
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        "TraceShowLR", "Show L-R",
+        true,   // Default: On
+        "Show Stereo"));
+
+    // Show Mono Sum
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        "analyzerShowMono", "Show Mono",
+        false,   // Default: Off
+        "Show Mono"));
+
+    // Show Left
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        "analyzerShowL", "Show Left",
+        false,   // Default: Off
+        "Show Left"));
+
+    // Show Right
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        "analyzerShowR", "Show Right",
+        false,   // Default: Off
+        "Show Right"));
+
+    // Show Mid
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        "analyzerShowMid", "Show Mid",
+        false,   // Default: Off
+        "Show Mid"));
+
+    // Show Side
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        "analyzerShowSide", "Show Side",
+        false,   // Default: Off
+        "Show Side"));
+
+    // Show RMS
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        "analyzerShowRMS", "Show RMS",
+        true,   // Default: On
+        "Show RMS"));
+        
+    // Weighting
+    params.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "analyzerWeighting", "Weighting",
+        juce::StringArray { "None", "A-Weighting", "BS.468-4" },
+        0));
+        
+    // Scope Channel Mode
+    params.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "scopeChannelMode", "Scope Input",
+        juce::StringArray { "Stereo", "Mid-Side" }, // 0=Stereo, 1=M/S
+        1)); // Default M/S (Classic Vector Scope)
+
+    // Meter Channel Mode
+    params.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "meterChannelMode", "Meter Input",
+        juce::StringArray { "Stereo", "Mid-Side" }, // 0=Stereo, 1=M/S
+        0)); // Default Stereo
+
     
     return { params.begin(), params.end() };
 }

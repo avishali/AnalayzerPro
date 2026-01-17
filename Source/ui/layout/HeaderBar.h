@@ -3,8 +3,8 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <mdsp_ui/UiContext.h>
 #include "../../control/ControlIds.h"
-#include "../../state/PresetManager.h"
-#include "../../state/StateManager.h"
+#include "../../presets/PresetManager.h"
+#include "../../presets/ABStateManager.h"
 #include <functional>
 
 namespace AnalyzerPro { class ControlBinder; }
@@ -33,15 +33,15 @@ public:
     std::function<void()> onResetPeaks;
 
     // State Managment
-    void setManagers (AnalyzerPro::state::PresetManager* pm, AnalyzerPro::state::StateManager* sm);
+    void setManagers (AnalyzerPro::presets::PresetManager* pm, AnalyzerPro::presets::ABStateManager* sm);
     
 private:
     void updateActiveSlot();
 
     mdsp_ui::UiContext& ui_;
     AnalyzerPro::ControlBinder* controlBinder = nullptr;
-    AnalyzerPro::state::PresetManager* presetManager = nullptr;
-    AnalyzerPro::state::StateManager* stateManager = nullptr;
+    AnalyzerPro::presets::PresetManager* presetManager = nullptr;
+    AnalyzerPro::presets::ABStateManager* abStateManager = nullptr;
 
     juce::Label titleLabel;
     

@@ -35,7 +35,7 @@ echo ""
 
 # Configure CMake
 echo "Configuring CMake..."
-cmake -S . -B "$BUILD_DIR" \
+cmake -S "$SCRIPT_DIR/.." -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE="$CONFIG" \
     -DJUCE_PATH="$JUCE_PATH"
 

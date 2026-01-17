@@ -14,6 +14,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
       footer_ (ui_),
       analyzerView_ (p),
       stereoScopeView_ (ui, p.getAnalyzerEngine().getStereoScopeAnalyzer()),
+      loudnessPanel_ (ui, p),
       outputMeters_ (ui_, p, MeterGroupComponent::GroupType::Output),
       inputMeters_ (ui_, p, MeterGroupComponent::GroupType::Input)
 {
@@ -27,12 +28,13 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     addAndMakeVisible (footer_);
     addAndMakeVisible (analyzerView_);
     addAndMakeVisible (stereoScopeView_);
+    addAndMakeVisible (loudnessPanel_);
     addAndMakeVisible (outputMeters_);
     addAndMakeVisible (inputMeters_);
     
     // Initialize header and rail with control binder
     header_.setControlBinder (controls_.getBinder());
-    header_.setManagers (&p.getPresetManager(), &p.getStateManager());
+    header_.setManagers (&p.getPresetManager(), &p.getABStateManager());
     rail_.setControlBinder (controls_.getBinder());
     rail_.setResetPeaksCallback ([this]
     {
@@ -42,6 +44,20 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     {
         triggerResetPeaks();
     });
+    
+    rail_.onScopeModeChanged = [this] (int id)
+    {
+        // 1=Peak, 2=RMS
+        stereoScopeView_.setScopeMode (id == 2 ? StereoScopeView::ScopeMode::RMS : StereoScopeView::ScopeMode::Peak);
+        stereoScopeView_.repaint();
+    };
+    
+    rail_.onScopeShapeChanged = [this] (int id)
+    {
+        // 1=Basic (Lissajous), 2=PAZ (Scatter)
+        stereoScopeView_.setScopeShape (id == 2 ? StereoScopeView::ScopeShape::Scatter : StereoScopeView::ScopeShape::Lissajous);
+        stereoScopeView_.repaint();
+    };
 
     // Wire parameter changes to AnalyzerEngine and AnalyzerDisplayView
     if (apvts != nullptr)
@@ -49,12 +65,14 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         apvts->addParameterListener ("Mode", this);
         apvts->addParameterListener ("FftSize", this);
         apvts->addParameterListener ("Averaging", this);
-        apvts->addParameterListener ("PeakHold", this);
-        apvts->addParameterListener ("Hold", this);
+        apvts->addParameterListener ("HoldPeaks", this);
         apvts->addParameterListener ("PeakDecay", this);
         apvts->addParameterListener ("DbRange", this);
         apvts->addParameterListener ("DisplayGain", this);
+        apvts->addParameterListener ("DisplayGain", this);
         apvts->addParameterListener ("Tilt", this);
+        apvts->addParameterListener ("scopeChannelMode", this); // New
+        apvts->addParameterListener ("meterChannelMode", this); // New
     }
 
     // HeaderBar is authoritative for Mode/FFT/Averaging controls
@@ -124,6 +142,24 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
             analyzerView_.setMode (viewMode);
         }
     }
+        
+    // Apply Scope Channel Mode
+    if (apvts_ != nullptr)
+    {
+        if (auto* raw = apvts_->getRawParameterValue ("scopeChannelMode"))
+        {
+            const int val = juce::roundToInt (raw->load());
+            stereoScopeView_.setChannelMode (val == 0 ? StereoScopeView::ChannelMode::Stereo : StereoScopeView::ChannelMode::MidSide);
+        }
+
+        if (auto* raw = apvts_->getRawParameterValue ("meterChannelMode"))
+        {
+            const int val = juce::roundToInt (raw->load());
+            const auto mode = (val == 0 ? MeterGroupComponent::ChannelMode::Stereo : MeterGroupComponent::ChannelMode::MidSide);
+            outputMeters_.setChannelMode (mode);
+            inputMeters_.setChannelMode (mode);
+        }
+    }
 
     //setSize (900, 650);  // Slightly bigger to fit all controls
 
@@ -136,6 +172,8 @@ MainView::~MainView()
 {
     shutdown();
 }
+
+
 
 void MainView::shutdown()
 {
@@ -150,8 +188,7 @@ void MainView::shutdown()
         apvts_->removeParameterListener ("Mode", this);
         apvts_->removeParameterListener ("FftSize", this);
         apvts_->removeParameterListener ("Averaging", this);
-        apvts_->removeParameterListener ("PeakHold", this);
-        apvts_->removeParameterListener ("Hold", this);
+        apvts_->removeParameterListener ("HoldPeaks", this);
         apvts_->removeParameterListener ("PeakDecay", this);
         apvts_->removeParameterListener ("DbRange", this);
         apvts_->removeParameterListener ("DisplayGain", this);
@@ -227,12 +264,26 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
         if (index >= 0 && index < 6)
             audioProcessor.getAnalyzerEngine().setAveragingMs (avgMs[index]);
     }
-    else if (parameterID == "PeakHold")
+    else if (parameterID == "scopeChannelMode")
     {
-        // Enable/disable peak hold overlay
-        audioProcessor.getAnalyzerEngine().setPeakHoldEnabled (newValue > 0.5f);
+        const int val = juce::roundToInt (newValue);
+        juce::MessageManager::callAsync ([this, val]
+        {
+            stereoScopeView_.setChannelMode (val == 0 ? StereoScopeView::ChannelMode::Stereo : StereoScopeView::ChannelMode::MidSide);
+            stereoScopeView_.repaint();
+        });
     }
-    else if (parameterID == "Hold")
+    else if (parameterID == "meterChannelMode")
+    {
+        const int val = juce::roundToInt (newValue);
+        juce::MessageManager::callAsync ([this, val]
+        {
+            const auto mode = (val == 0 ? MeterGroupComponent::ChannelMode::Stereo : MeterGroupComponent::ChannelMode::MidSide);
+            outputMeters_.setChannelMode (mode);
+            inputMeters_.setChannelMode (mode);
+        });
+    }
+    else if (parameterID == "HoldPeaks")
     {
         audioProcessor.getAnalyzerEngine().setHold (newValue > 0.5f);
     }
@@ -435,16 +486,22 @@ void MainView::resized()
     // Gap between meters and center
     // mainArea.reduce (ui_.metrics().gapSmall, 0); // Optional gap
 
-    // Split Center: Analyzer (Top 70%) / Phase (Bottom 30%)
+    // Split Center: Analyzer (Top 70%) / Bottom Area (Bottom 30%)
     // But Phase Scope is usually square-ish. Let's try flexible height.
     const int phaseH = juce::jlimit (150, 300, mainArea.getHeight() / 3);
     
-    auto phaseArea = mainArea.removeFromBottom (phaseH);
+    auto bottomArea = mainArea.removeFromBottom (phaseH);
     // Add gap between analyzer and phase
-    phaseArea.removeFromTop (ui_.metrics().gapSmall); 
+    bottomArea.removeFromTop (ui_.metrics().gapSmall); 
     
-    debugPhaseBottom = phaseArea;
-    stereoScopeView_.setBounds (phaseArea);
+    // Split bottom area: Left 50% for Stereo Scope, Right 50% for Loudness
+    auto stereoArea = bottomArea.removeFromLeft (bottomArea.getWidth() / 2);
+    stereoArea.removeFromRight (ui_.metrics().gapSmall / 2); // Internal gap
+    bottomArea.removeFromLeft (ui_.metrics().gapSmall / 2);  // Internal gap
+    
+    debugPhaseBottom = stereoArea;
+    stereoScopeView_.setBounds (stereoArea);
+    loudnessPanel_.setBounds (bottomArea); // Right side
 
     // Remaining is Analyzer
     debugAnalyzerTop = mainArea;
@@ -464,7 +521,8 @@ void MainView::setTooltipManager (mdsp_ui::TooltipManager* manager)
             "Stereo Scope",
             "This view visualizes the stereo width and phase correlation of the signal. "
             "Use the sliders below to adjust decay and hold time.",
-            []() { return ""; }
+            []() { return ""; },
+            nullptr
         });
     }
 }
@@ -492,6 +550,18 @@ void MainView::auditApvtsParameters()
     apvtsParams.insert ("DisplayGain");
     apvtsParams.insert ("Tilt");
     apvtsParams.insert ("DbRange");
+    // Trace toggle params
+    apvtsParams.insert ("TraceShowLR");
+    apvtsParams.insert ("analyzerShowMono");
+    apvtsParams.insert ("analyzerShowL");
+    apvtsParams.insert ("analyzerShowR");
+    apvtsParams.insert ("analyzerShowMid");
+    apvtsParams.insert ("analyzerShowSide");
+    apvtsParams.insert ("analyzerShowRMS");
+    apvtsParams.insert ("analyzerShowRMS");
+    apvtsParams.insert ("analyzerWeighting");
+    apvtsParams.insert ("scopeChannelMode");
+    apvtsParams.insert ("meterChannelMode");
 
     // Collect UI-represented parameters (best effort manual set)
     std::set<juce::String> uiRepresented;

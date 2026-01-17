@@ -37,16 +37,17 @@ void DeviceRoutingHelper::logAvailableDevices(juce::AudioDeviceManager& dm)
         const auto outs = t->getDeviceNames(false);
 
         DBG("  Inputs:");
-        for (auto& n : ins)  DBG("    - " + n);
+        for (auto& n : ins)  { juce::ignoreUnused (n); DBG("    - " + n); }
 
         DBG("  Outputs:");
-        for (auto& n : outs) DBG("    - " + n);
+        for (auto& n : outs) { juce::ignoreUnused (n); DBG("    - " + n); }
     }
     DBG("----------------------------");
 }
 
 void DeviceRoutingHelper::logSetup(const juce::AudioDeviceManager::AudioDeviceSetup& s)
 {
+    juce::ignoreUnused (s);
     DBG("---- AudioDeviceSetup ----");
     DBG(" inputDeviceName  : " + s.inputDeviceName);
     DBG(" outputDeviceName : " + s.outputDeviceName);
@@ -81,7 +82,7 @@ DeviceRoutingHelper::Result DeviceRoutingHelper::applyPreset(juce::AudioDeviceMa
         if (! isNotEmpty(aggregateMatch))
             aggregateMatch = inputMatch;
         if (! isNotEmpty(aggregateMatch))
-            aggregateMatch = "AnalyzerPro Aggregate";
+            aggregateMatch = "BlsckHole 2ch";
 
         inputMatch  = aggregateMatch;
         outputMatch = aggregateMatch;
@@ -223,7 +224,7 @@ DeviceRoutingHelper::Result DeviceRoutingHelper::applyMacSystemCapture(juce::Aud
                                                                        int bufferSize)
 {
     if (! isNotEmpty(aggregateMatch))
-        aggregateMatch = "AnalyzerPro Aggregate";
+        aggregateMatch = "BlackHole 2ch";
 
     DeviceRoutingPreset p;
     p.inputMatch = aggregateMatch;
@@ -287,7 +288,49 @@ bool DeviceRoutingHelper::restoreSavedSetup(juce::AudioDeviceManager& dm, juce::
         return false;
     }
 
-    DBG("Restore OK.");
     return true;
 }
+
+//==============================================================================
+DeviceRoutingHelper::DeviceRoutingHelper (juce::AudioDeviceManager& dm, juce::ApplicationProperties& props)
+    : deviceManager (dm), appProps_ (props)
+{
+    // Step 2: Restore device state on init
+    if (auto* settings = appProps_.getUserSettings())
+    {
+        const auto xmlString = settings->getValue (deviceStateKey_);
+        if (xmlString.isNotEmpty())
+        {
+            auto xml = juce::XmlDocument::parse (xmlString);
+            if (xml != nullptr)
+            {
+                dm.initialise (256, 256, xml.get(), true);
+                DBG ("[DeviceRoutingHelper] Restored state from XML.");
+            }
+        }
+    }
+
+    // Register listener
+    deviceManager.addChangeListener (this);
+}
+
+DeviceRoutingHelper::~DeviceRoutingHelper()
+{
+    deviceManager.removeChangeListener (this);
+}
+
+void DeviceRoutingHelper::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    // Step 3: Save state on device change
+    if (auto* settings = appProps_.getUserSettings())
+    {
+        if (auto xml = deviceManager.createStateXml())
+        {
+            settings->setValue (deviceStateKey_, xml->toString());
+            appProps_.saveIfNeeded();
+            DBG ("[DeviceRoutingHelper] Saved state on change.");
+        }
+    }
+}
+
 } // namespace analyzerpro

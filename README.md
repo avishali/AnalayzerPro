@@ -311,3 +311,10 @@ README.md
 (how to start a new plugin safely)
 
 
+rm -rf build
+cmake -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-debug --config Debug
+
+
+
+./build-debug/AnalyzerPro_artefacts/Debug/Standalone/AnalyzerPro.app/Contents/MacOS/AnalyzerPro

@@ -5,13 +5,8 @@
 
 namespace
 {
-    constexpr float kMeterMinDb = -60.0f;
-    constexpr float kMeterMaxDb = 0.0f;
-
-    static inline juce::String utf8 (const char* s)
-    {
-        return juce::String (juce::CharPointer_UTF8 (s));
-    }
+    constexpr float kMeterMinDb = -120.0f;
+    constexpr float kMeterMaxDb = 6.0f;
 }
 
 MeterComponent::MeterComponent (mdsp_ui::UiContext& ui,
@@ -36,6 +31,33 @@ void MeterComponent::setLabelText (juce::String labelText)
         return;
 
     label_ = std::move (labelText);
+    repaint();
+}
+
+void MeterComponent::setBypassed (bool bypassed)
+{
+    if (isBypassed_ == bypassed)
+        return;
+        
+    isBypassed_ = bypassed;
+    repaint();
+}
+
+void MeterComponent::setLevels (float peakDb, float rmsDb, bool clipped)
+{
+    // Update internal state directly
+    cachedPeakDb_ = peakDb;
+    cachedRmsDb_  = rmsDb;
+    cachedClip_   = clipped;
+    
+    // Handle visual decay/hold
+    if (cachedPeakDb_ > maxPeakDb_) maxPeakDb_ = cachedPeakDb_;
+    if (cachedRmsDb_ > maxRmsDb_)   maxRmsDb_  = cachedRmsDb_;
+    
+    // Convert for rendering
+    cachedPeakNorm_ = dbToNorm (cachedPeakDb_);
+    cachedRmsNorm_  = dbToNorm (cachedRmsDb_);
+    
     repaint();
 }
 
@@ -107,15 +129,36 @@ void MeterComponent::updateFromAtomics()
     repaint();
 }
 
-void MeterComponent::mouseDown (const juce::MouseEvent&)
+void MeterComponent::resetPeakHold()
 {
-    // Reset max values to current
     if (peakDb_ && rmsDb_)
     {
         maxPeakDb_ = peakDb_->load (std::memory_order_relaxed);
         maxRmsDb_  = rmsDb_->load (std::memory_order_relaxed);
         updateFromAtomics(); // Force update
         repaint();
+    }
+}
+
+void MeterComponent::mouseDown (const juce::MouseEvent& e)
+{
+    // Clip Reset (Global)
+    if (ledArea_.contains (e.getPosition()))
+    {
+        if (onClipReset)
+            onClipReset();
+        return;
+    }
+
+    // Peak Reset (Linked L/R)
+    if (onPeakReset)
+    {
+        onPeakReset();
+    }
+    else
+    {
+        // Fallback if no callback set
+        resetPeakHold();
     }
 }
 
@@ -141,16 +184,32 @@ void MeterComponent::paint (juce::Graphics& g)
     g.setColour (theme.panel.withAlpha (0.9f));
     g.fillRoundedRectangle (meterArea_.toFloat(), m.rSmall);
 
+    // Clip Zone Background (> 0dB)
+    const float norm0 = dbToNorm (0.0f);
+    const float y0 = static_cast<float> (meterArea_.getBottom()) - (norm0 * static_cast<float> (meterArea_.getHeight()));
+    const float yTop = static_cast<float> (meterArea_.getY());
+    
+    if (y0 > yTop)
+    {
+        // Fill Red Zone
+        g.setColour (theme.danger.withAlpha (0.15f));
+        g.fillRect (static_cast<float> (meterArea_.getX()), yTop, 
+                    static_cast<float> (meterArea_.getWidth()), y0 - yTop);
+    }
+
     g.setColour (theme.background.withAlpha (0.65f));
     g.drawRoundedRectangle (meterArea_.toFloat(), m.rSmall, m.strokeThin);
     
     // Draw dB Scale
-    g.setColour (theme.textMuted.withAlpha (0.4f));
-    g.setFont (ui_.type().labelFont().withHeight (9.0f));
+    g.setColour (theme.textMuted.withAlpha (0.5f));
+    g.setFont (ui_.type().labelFont().withHeight (8.0f)); // Smaller font for dense scale
     
-    constexpr float dbTicks[] = { 0.0f, -6.0f, -12.0f, -24.0f, -36.0f, -48.0f };
+    constexpr float dbTicks[] = { 6.0f, 0.0f, -6.0f, -12.0f, -24.0f, -48.0f, -72.0f, -96.0f, -120.0f };
     const float yMax = static_cast<float> (meterArea_.getBottom());
     const float h    = static_cast<float> (meterArea_.getHeight());
+    const float xLeft = static_cast<float> (meterArea_.getX());
+    const float xRight = static_cast<float> (meterArea_.getRight());
+    const float width = static_cast<float> (meterArea_.getWidth());
     
     for (float db : dbTicks)
     {
@@ -158,46 +217,90 @@ void MeterComponent::paint (juce::Graphics& g)
         const float y = yMax - (norm * h);
         
         // Tick mark
-        g.drawLine (static_cast<float> (meterArea_.getX()), y, static_cast<float> (meterArea_.getRight()), y, 1.0f);
-        
-        // Label (skip 0 to avoid clutter if desired, or keep)
-        // Draw centered
-        // g.drawText (juce::String (static_cast<int>(db)), ...); 
-        // Small detail: maybe just lines for cleanliness or tiny numbers if space permits?
-        // User asked for "draw a db scale". I'll add lines.
+        if (std::abs(db) < 0.001f)
+        {
+            // 0 dB Line - Emphasized
+            g.setColour (theme.text.withAlpha (0.6f));
+            g.drawLine (xLeft, y, xRight, y, 1.0f);
+        }
+        else if (db > 0.0f)
+        {
+            // Positive ticks - Warmer
+            g.setColour (theme.danger.withAlpha (0.4f));
+            g.drawLine (xLeft, y, xRight, y, 1.0f);
+        }
+        else
+        {
+            // Negative ticks
+            g.setColour (theme.textMuted.withAlpha (0.3f));
+            g.drawLine (xLeft, y, xRight, y, 1.0f);
+        }
+
+        // Labels (if space allows)
+        // Draw centered small numbers
+        // Only label select values to avoid clutter
+        if (db == 6.0f || db == 0.0f || db == -12.0f || db == -24.0f || db == -48.0f || db == -96.0f) 
+        {
+            g.setColour (db >= 0.0f ? theme.danger.withAlpha(0.8f) : theme.textMuted.withAlpha(0.8f));
+            juce::String label = juce::String (static_cast<int> (db));
+            if (db > 0) label = "+" + label;
+            g.drawText (label, xLeft, y - 4.0f, width, 8.0f, juce::Justification::centred);
+        }
     }
 
-    // RMS body (dominant)
-    const float rmsH = cachedRmsNorm_ * h;
-    const float rmsTop = yMax - rmsH;
+    // Determine Main Bar Level based on mode
+    float mainNorm = 0.0f;
+    if (displayMode_ == DisplayMode::Peak)
+        mainNorm = cachedPeakNorm_;
+    else
+        mainNorm = cachedRmsNorm_; // RMS Mode
+
+    // Main Body
+    const float mainH = mainNorm * h;
+    const float mainTop = yMax - mainH;
     
-    if (rmsH > 0.5f)
+    if (mainH > 0.5f)
     {
-        auto rmsRect = meterArea_.withTop (static_cast<int> (std::round (rmsTop)));
+        auto mainRect = meterArea_.withTop (static_cast<int> (std::round (mainTop)));
         g.setColour (theme.accent.withAlpha (0.85f));
-        g.fillRoundedRectangle (rmsRect.toFloat(), m.rSmall);
+        g.fillRoundedRectangle (mainRect.toFloat(), m.rSmall);
     }
 
-    // Range Fill (Peak - RMS)
-    // Draw from Peak Top down to RMS Top
-    const float peakTop = yMax - (cachedPeakNorm_ * h);
-    if (cachedPeakNorm_ > cachedRmsNorm_)
+    // Range Fill & Peak Cap (Logic varies by mode)
+    float peakTop = yMax - (cachedPeakNorm_ * h);
+    
+    if (displayMode_ == DisplayMode::RMS)
     {
-        // Fill the gap
-        g.setColour (theme.accent.withAlpha (0.3f));
-        g.fillRect (static_cast<float> (meterArea_.getX()) + 2.0f, 
-                    peakTop, 
-                    static_cast<float> (meterArea_.getWidth()) - 4.0f, 
-                    rmsTop - peakTop);
+        // RMS Mode: Show separate Peak cap and range fill
+        if (cachedPeakNorm_ > cachedRmsNorm_)
+        {
+            // Fill the gap
+            g.setColour (theme.accent.withAlpha (0.3f));
+            g.fillRect (xLeft + 2.0f, 
+                        peakTop, 
+                        width - 4.0f, 
+                        mainTop - peakTop);
+        }
+        
+        // Peak cap (thin line)
+        g.setColour (theme.seriesPeak.withAlpha (0.95f));
+        g.drawLine (xLeft + m.strokeThick,
+                    peakTop,
+                    xRight - m.strokeThick,
+                    peakTop,
+                    m.strokeMed);
     }
-
-    // Peak cap (thin line)
-    g.setColour (theme.seriesPeak.withAlpha (0.95f));
-    g.drawLine (static_cast<float> (meterArea_.getX()) + m.strokeThick,
-                peakTop,
-                static_cast<float> (meterArea_.getRight()) - m.strokeThick,
-                peakTop,
-                m.strokeMed);
+    else
+    {
+        // Peak Mode: Bar is already peak. Just draw cap at bar top for definition or skip.
+        // Let's draw the cap at the bar top for visual consistency
+        g.setColour (theme.seriesPeak.withAlpha (0.95f));
+        g.drawLine (xLeft + m.strokeThick,
+                    mainTop,
+                    xRight - m.strokeThick,
+                    mainTop,
+                    m.strokeMed);
+    }
 
     // Channel label
     g.setColour (theme.text.withAlpha (0.9f));
@@ -230,5 +333,16 @@ void MeterComponent::paint (juce::Graphics& g)
     
     g.setColour (theme.accent.withAlpha (0.9f));
     g.drawText (numericTextRms_, rmsBounds, juce::Justification::centred);
+    
+    // Bypass Overlay
+    if (isBypassed_)
+    {
+        g.setColour (theme.background.withAlpha (0.7f));
+        g.fillRoundedRectangle (meterArea_.toFloat(), m.rSmall);
+        
+        g.setColour (theme.danger);
+        g.setFont (ui_.type().labelFont().withHeight (10.0f).boldened());
+        
+        g.drawText ("BYPASS", meterArea_, juce::Justification::centred);
+    }
 }
-

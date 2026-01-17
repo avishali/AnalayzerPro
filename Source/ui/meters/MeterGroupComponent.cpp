@@ -29,18 +29,12 @@ MeterGroupComponent::MeterGroupComponent (mdsp_ui::UiContext& ui,
     // Button Listeners: Update Source of Truth (Processor)
     rmsButton_.onClick = [this]
     {
-        if (type_ == GroupType::Input)
-            processor_.setInputMeterMode (AnalayzerProAudioProcessor::MeterMode::RMS);
-        else
-            processor_.setOutputMeterMode (AnalayzerProAudioProcessor::MeterMode::RMS);
+        processor_.setMeterMode (AnalayzerProAudioProcessor::MeterMode::RMS);
     };
 
     peakButton_.onClick = [this]
     {
-        if (type_ == GroupType::Input)
-            processor_.setInputMeterMode (AnalayzerProAudioProcessor::MeterMode::Peak);
-        else
-            processor_.setOutputMeterMode (AnalayzerProAudioProcessor::MeterMode::Peak);
+        processor_.setMeterMode (AnalayzerProAudioProcessor::MeterMode::Peak);
     };
 
     addAndMakeVisible (rmsButton_);
@@ -50,11 +44,28 @@ MeterGroupComponent::MeterGroupComponent (mdsp_ui::UiContext& ui,
     setDisplayMode (MeterComponent::DisplayMode::RMS);
 
     // Build meter components (wiring to processor state).
-    const auto* states = (type_ == GroupType::Output) ? processor_.getOutputMeterStates()
-                                                      : processor_.getInputMeterStates();
+    // Build meter components (wiring to processor state).
+    // const auto* states = (type_ == GroupType::Output) ? processor_.getOutputMeterStates()
+    //                                                   : processor_.getInputMeterStates();
 
-    meter0_ = std::make_unique<MeterComponent> (ui_, &states[0].peakDb, &states[0].rmsDb, &states[0].clipLatched, channelLabel (channelCount_, 0));
-    meter1_ = std::make_unique<MeterComponent> (ui_, &states[1].peakDb, &states[1].rmsDb, &states[1].clipLatched, channelLabel (channelCount_, 1));
+    // Define reset handlers
+    auto handleClipReset = [this] { processor_.resetMeterClipLatches(); };
+    
+    // Peak reset linked for this group
+    auto handlePeakReset = [this] 
+    { 
+        if (meter0_) meter0_->resetPeakHold();
+        if (meter1_) meter1_->resetPeakHold();
+    };
+
+    // Initialize with nullptr for atomics (we drive manually for M/S support)
+    meter0_ = std::make_unique<MeterComponent> (ui_, nullptr, nullptr, nullptr, channelLabel (channelCount_, 0));
+    meter0_->onClipReset = handleClipReset;
+    meter0_->onPeakReset = handlePeakReset;
+    
+    meter1_ = std::make_unique<MeterComponent> (ui_, nullptr, nullptr, nullptr, channelLabel (channelCount_, 1));
+    meter1_->onClipReset = handleClipReset;
+    meter1_->onPeakReset = handlePeakReset;
 
     addAndMakeVisible (*meter0_);
     addAndMakeVisible (*meter1_);
@@ -100,20 +111,22 @@ void MeterGroupComponent::setDisplayMode (MeterComponent::DisplayMode mode)
     // Update buttons
     rmsButton_.setToggleState (mode == MeterComponent::DisplayMode::RMS, juce::dontSendNotification);
     peakButton_.setToggleState (mode == MeterComponent::DisplayMode::Peak, juce::dontSendNotification);
-    
-    // Style buttons
-    const auto& theme = ui_.theme();
-    auto applyButtonStyle = [&] (juce::TextButton& b, bool on)
-    {
-        b.setColour (juce::TextButton::buttonColourId, (on ? theme.accent.withAlpha (0.35f) : theme.panel.withAlpha (0.85f)));
-        b.setColour (juce::TextButton::buttonOnColourId, theme.accent.withAlpha (0.35f));
-        b.setColour (juce::TextButton::textColourOffId, theme.text.withAlpha (0.85f));
-        b.setColour (juce::TextButton::textColourOnId, theme.text.withAlpha (0.95f));
-    };
+}
 
-    const bool rmsOn = (mode == MeterComponent::DisplayMode::RMS);
-    applyButtonStyle (rmsButton_, rmsOn);
-    applyButtonStyle (peakButton_, ! rmsOn);
+void MeterGroupComponent::setChannelMode (ChannelMode mode)
+{
+    if (channelMode_ == mode)
+        return;
+        
+    channelMode_ = mode;
+    
+    // Update labels immediately
+    if (meter0_) meter0_->setLabelText (channelMode_ == ChannelMode::Stereo ? "L" : "M");
+    if (meter1_) meter1_->setLabelText (channelMode_ == ChannelMode::Stereo ? "R" : "S");
+    
+    resized();
+    
+
 }
 
 void MeterGroupComponent::timerCallback()
@@ -127,8 +140,7 @@ void MeterGroupComponent::timerCallback()
     }
     
     // Poll Meter Mode
-    const auto procMode = (type_ == GroupType::Input) ? processor_.getInputMeterMode()
-                                                      : processor_.getOutputMeterMode();
+    const auto procMode = processor_.getMeterMode();
     
     // Map Processor mode to UI mode
     MeterComponent::DisplayMode targetUiMode = MeterComponent::DisplayMode::RMS;
@@ -141,8 +153,59 @@ void MeterGroupComponent::timerCallback()
         setDisplayMode (targetUiMode);
     }
 
-    if (meter0_ != nullptr) meter0_->updateFromAtomics();
-    if (meter1_ != nullptr) meter1_->updateFromAtomics();
+    const bool bypassed = processor_.getBypassState();
+    
+    // Manual Drive Logic
+    const auto* states = (type_ == GroupType::Output) ? processor_.getOutputMeterStates()
+                                                      : processor_.getInputMeterStates();
+
+    if (meter0_ && meter1_)
+    {
+        meter0_->setBypassed (bypassed);
+        meter1_->setBypassed (bypassed);
+        
+        if (!bypassed)
+        {
+            // Read Raw Values
+            float lPeakDb = states[0].peakDb.load (std::memory_order_relaxed);
+            float lRmsDb  = states[0].rmsDb.load (std::memory_order_relaxed);
+            bool  lClip   = states[0].clipLatched.load (std::memory_order_relaxed);
+            
+            float rPeakDb = states[1].peakDb.load (std::memory_order_relaxed);
+            float rRmsDb  = states[1].rmsDb.load (std::memory_order_relaxed);
+            bool  rClip   = states[1].clipLatched.load (std::memory_order_relaxed);
+            
+            if (channelMode_ == ChannelMode::MidSide)
+            {
+                // M/S Processing
+                // Convert DB to Linear
+                auto dbToLin = [] (float db) { return std::pow (10.0f, db / 20.0f); };
+                auto linToDb = [] (float lin) { return (lin > 0.000001f) ? 20.0f * std::log10 (lin) : -120.0f; };
+                
+                float lPeak = dbToLin (lPeakDb);
+                float rPeak = dbToLin (rPeakDb);
+                float lRms  = dbToLin (lRmsDb);
+                float rRms  = dbToLin (rRmsDb);
+                
+                // M = (L+R)/2
+                // S = (L-R)/2
+                float midPeak = (lPeak + rPeak) * 0.5f;
+                float sidePeak = std::abs (lPeak - rPeak) * 0.5f;
+                
+                float midRms = (lRms + rRms) * 0.5f;
+                float sideRms = std::abs (lRms - rRms) * 0.5f;
+                
+                meter0_->setLevels (linToDb (midPeak), linToDb (midRms), lClip || rClip);
+                meter1_->setLevels (linToDb (sidePeak), linToDb (sideRms), lClip || rClip);
+            }
+            else
+            {
+                // Stereo Pass-through
+                meter0_->setLevels (lPeakDb, lRmsDb, lClip);
+                meter1_->setLevels (rPeakDb, rRmsDb, rClip);
+            }
+        }
+    }
 }
 void MeterGroupComponent::paint (juce::Graphics& g)
 {

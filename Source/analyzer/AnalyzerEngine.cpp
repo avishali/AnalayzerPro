@@ -28,8 +28,8 @@ void AnalyzerEngine::prepare (double sampleRate, int /* samplesPerBlock */)
     published_.data.isValid = false;
     
     // Initialize smoothing
-    averagingMs_ = 100.0f;  // Default 100ms
-    updateSmoothingCoeff (averagingMs_, sampleRate);
+    // averagingMs_ removed. Ballistics default in header.
+    // updateSmoothingCoeff removed.
     
     prepared = true;
 }
@@ -50,14 +50,54 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     fifoBuffer.resize (fftSizeSz, 0.0f);
     const int numBins = fftSize / 2 + 1;
     smoothedMagnitude.resize (static_cast<size_t> (numBins), 0.0f);
+    smoothedPeak.resize (static_cast<size_t> (numBins), 0.0f);
+    
+    // Resize smoothing buffers
+    smoothLowBounds.resize (static_cast<size_t> (numBins), 0);
+    smoothHighBounds.resize (static_cast<size_t> (numBins), 0);
+    updateSmoothingBounds();
+    prefixSumMag.resize (static_cast<size_t> (numBins + 1), 0.0f);
+    
     peakHold.resize (static_cast<size_t> (numBins), kDbFloor);
-
+    
     peakHoldFramesRemaining_.resize (static_cast<size_t> (numBins), 0);
     
     // Resize per-frame computation buffers (eliminates allocations in computeFFT)
     magnitudes_.resize (static_cast<size_t> (numBins), 0.0f);
     dbValues_.resize (static_cast<size_t> (numBins), 0.0f);
     dbRaw_.resize (static_cast<size_t> (numBins), 0.0f);
+    dbInstant_.resize (static_cast<size_t> (numBins), 0.0f);
+    
+    // Multi-trace: Preallocate L/R-channel FIFOs
+    fifoBufferL_.resize (fftSizeSz, 0.0f);
+    fifoWritePosL_ = 0;
+    samplesCollectedL_ = 0;
+    
+    fifoBufferR_.resize (fftSizeSz, 0.0f);
+    fifoWritePosR_ = 0;
+    samplesCollectedR_ = 0;
+    
+    // Multi-trace: Preallocate power spectrum buffers for all 5 traces
+    const size_t numBinsSz = static_cast<size_t>(numBins);
+    powerL_.resize (numBinsSz, 0.0f);
+    powerR_.resize (numBinsSz, 0.0f);
+    powerMono_.resize (numBinsSz, 0.0f);
+    powerMid_.resize (numBinsSz, 0.0f);
+    powerSide_.resize (numBinsSz, 0.0f);
+    
+    // Multi-trace: Preallocate smoothed buffers
+    smoothedL_.resize (numBinsSz, 0.0f);
+    smoothedR_.resize (numBinsSz, 0.0f);
+    smoothedMono_.resize (numBinsSz, 0.0f);
+    smoothedMid_.resize (numBinsSz, 0.0f);
+    smoothedSide_.resize (numBinsSz, 0.0f);
+    
+    // Multi-trace: Preallocate peak buffers
+    peakL_.resize (numBinsSz, kDbFloor);
+    peakR_.resize (numBinsSz, kDbFloor);
+    peakMono_.resize (numBinsSz, kDbFloor);
+    peakMid_.resize (numBinsSz, kDbFloor);
+    peakSide_.resize (numBinsSz, kDbFloor);
     
     
     // Initialize window (Hann)
@@ -103,6 +143,7 @@ void AnalyzerEngine::reset()
     magnitudes_.clear();
     dbValues_.clear();
     dbRaw_.clear();
+    dbInstant_.clear();
 }
 
 void AnalyzerEngine::processBlock (const juce::AudioBuffer<float>& buffer)
@@ -122,23 +163,62 @@ void AnalyzerEngine::processBlock (const juce::AudioBuffer<float>& buffer)
     // Accumulate into FIFO buffer
     for (int i = 0; i < numSamples; ++i)
     {
-        // Sum channels if stereo
-        float sample = inputChannel[i];
-        if (numChannels > 1)
-        {
-            sample = (sample + buffer.getReadPointer (1)[i]) * 0.5f;
-        }
+        const float sampleL = inputChannel[i];
+        const float sampleR = (numChannels > 1) ? buffer.getReadPointer (1)[i] : sampleL;
+        const float sampleMono = (sampleL + sampleR) * 0.5f;
         
-        const std::size_t fifoIdx = static_cast<std::size_t> (fifoWritePos);
-        fifoBuffer[fifoIdx] = sample;
+        // 1. Mono Sum FIFO (Legacy)
+        fifoBuffer[static_cast<std::size_t> (fifoWritePos)] = sampleMono;
         fifoWritePos = (fifoWritePos + 1) % currentFFTSize;
         samplesCollected++;
+
+        // 2. Multi-trace True L/R FIFOs
+        if (enableMultiTrace_ && numChannels > 1)
+        {
+            // L FIFO
+            fifoBufferL_[static_cast<std::size_t>(fifoWritePosL_)] = sampleL;
+            fifoWritePosL_ = (fifoWritePosL_ + 1) % currentFFTSize;
+            samplesCollectedL_++;
+
+            // R FIFO
+            fifoBufferR_[static_cast<std::size_t>(fifoWritePosR_)] = sampleR;
+            fifoWritePosR_ = (fifoWritePosR_ + 1) % currentFFTSize;
+            samplesCollectedR_++;
+        }
         
         // When we have enough samples, compute FFT
         if (samplesCollected >= currentHopSize)
         {
             samplesCollected = 0;
-            computeFFT();
+            
+            if (!enableMultiTrace_)
+            {
+                // Legacy path: single FFT on mono mix
+                computeFFT();
+            }
+            else
+            {
+                // Multi-trace path: compute L and R FFTs
+                const int numBins = currentFFTSize / 2 + 1;
+                
+                // L channel: Use fifoBufferL_
+                samplesCollectedL_ = 0;
+                applyWindow(fifoBufferL_, fifoWritePosL_);
+                fft->performRealOnlyForwardTransform (fftOutput.data(), false);
+                extractMagnitudes(powerL_.data(), numBins);
+                
+                // R channel: Use fifoBufferR_
+                if (numChannels > 1)
+                {
+                    samplesCollectedR_ = 0;
+                    applyWindow(fifoBufferR_, fifoWritePosR_);
+                    fft->performRealOnlyForwardTransform (fftOutput.data(), false);
+                    extractMagnitudes(powerR_.data(), numBins);
+                }
+                
+                // Finally, do the Legacy FFT (Mono) to populate fftDb for the main traces
+                computeFFT();
+            }
         }
     }
 
@@ -158,7 +238,7 @@ void AnalyzerEngine::computeFFT()
         return;
     
     // Apply window and write directly to FFT output buffer
-    applyWindow();
+    applyWindow(fifoBuffer, fifoWritePos);
     
     // Perform real-only forward FFT (fftOutput now contains valid time-domain samples)
     fft->performRealOnlyForwardTransform (fftOutput.data(), false);
@@ -166,50 +246,124 @@ void AnalyzerEngine::computeFFT()
     // Compute magnitudes and convert to dB
     const int numBins = currentFFTSize / 2 + 1;
     
-    // Compute magnitudes from complex FFT output (reuse member buffer, no allocation)
-    // Real-only FFT output format: [DC, Nyquist, real1, imag1, real2, imag2, ...]
-    // buffer[0] = DC, buffer[1] = Nyquist, buffer[2*i] = real, buffer[2*i+1] = imag
-    magnitudes_[static_cast<std::size_t> (0)] = std::abs (fftOutput[static_cast<std::size_t> (0)]);  // DC component (real only)
-    for (int i = 1; i < numBins - 1; ++i)
-    {
-        const std::size_t idx = static_cast<std::size_t> (i);
-        const std::size_t fftIdx1 = static_cast<std::size_t> (2 * i);
-        const std::size_t fftIdx2 = static_cast<std::size_t> (2 * i + 1);
-        const float real = fftOutput[fftIdx1];
-        const float imag = fftOutput[fftIdx2];
-        magnitudes_[idx] = std::sqrt (real * real + imag * imag);
-    }
-    const std::size_t nyquistIdx = static_cast<std::size_t> (numBins - 1);
-    magnitudes_[nyquistIdx] = std::abs (fftOutput[static_cast<std::size_t> (1)]);  // Nyquist (real only, at index 1)
+    // Extract power spectrum using helper (same math, now reusable for dual-FFT)
+    extractMagnitudes(magnitudes_.data(), numBins);
     
-    // Normalize by FFT size
-    const float scale = 1.0f / static_cast<float> (currentFFTSize);
+    // -------------------------------------------------------------------------
+    // Frequency Smoothing (Fractional Octave) - Applied to POWER
+    // -------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // Frequency Smoothing (Fractional Octave) - Applied to POWER
+    // -------------------------------------------------------------------------
+    // We reuse fftOutput as a scratch buffer for spectrally smoothed power.
+    // This serves as the "Instantaneous Smoothed Power" (pre-ballistics).
+    float* freqSmoothed = fftOutput.data();
+    
+    int binsProcessed = 0;
+    int binsFilled = 0;
+    juce::ignoreUnused (binsProcessed, binsFilled);
+
+    if (smoothingOctaves_ > 0.0f && static_cast<int>(smoothLowBounds.size()) == numBins)
+    {
+        // 1. Compute Prefix Sum of magnitudes (Power) (O(N))
+        if(static_cast<int>(prefixSumMag.size()) != numBins + 1)
+             prefixSumMag.resize(static_cast<std::size_t>(numBins + 1), 0.0f);
+
+        prefixSumMag[0] = 0.0f;
+        for (int i = 0; i < numBins; ++i)
+        {
+            prefixSumMag[static_cast<std::size_t> (i + 1)] = prefixSumMag[static_cast<std::size_t> (i)] + magnitudes_[static_cast<std::size_t> (i)];
+        }
+        
+        // 2. Apply smoothing using bounds (O(N))
+        for (int i = 0; i < numBins; ++i)
+        {
+            const int low = smoothLowBounds[static_cast<std::size_t> (i)];
+            const int high = smoothHighBounds[static_cast<std::size_t> (i)];
+            const int count = high - low + 1;
+            
+            if (count > 0)
+            {
+                const float sum = prefixSumMag[static_cast<std::size_t> (high + 1)] - prefixSumMag[static_cast<std::size_t> (low)];
+                freqSmoothed[i] = sum / static_cast<float> (count);
+            }
+            else
+            {
+                freqSmoothed[i] = magnitudes_[static_cast<std::size_t> (i)];
+            }
+            binsFilled++;
+        }
+        binsProcessed = numBins;
+    }
+    else
+    {
+        // Bypass: Copy raw magnitudes (Power) to freqSmoothed
+        // This ensures downstream logic (Time Smoothing, Peaks) always sees consumption-ready data
+        std::copy (magnitudes_.begin(), magnitudes_.begin() + numBins, freqSmoothed);
+        
+        binsProcessed = numBins;
+        binsFilled = numBins;
+    }
+
+    // -------------------------------------------------------------------------
+    // Time Smoothing (Ballistics) - Applied to Power
+    // -------------------------------------------------------------------------
+    // Calculate coefficients based on current hop time
+    const double hopSec = static_cast<double> (currentHopSize) / currentSampleRate;
+    
+    auto calcCoeff = [hopSec](float timeMs) -> float {
+        if (timeMs <= 0.1f) return 0.0f; // Instant
+        return static_cast<float>(std::exp(-hopSec / (static_cast<double>(timeMs) / 1000.0)));
+    };
+
+    const float rmsAttCoeff = calcCoeff(rmsAttackMs_);
+    const float rmsRelCoeff = calcCoeff(rmsReleaseMs_);
+    const float peakAttCoeff = calcCoeff(peakAttackMs_);
+    const float peakRelCoeff = calcCoeff(peakReleaseMs_);
+
     for (int i = 0; i < numBins; ++i)
     {
         const std::size_t idx = static_cast<std::size_t> (i);
-        magnitudes_[idx] *= scale;
+        const float inputPower = freqSmoothed[idx];
+
+        // RMS Ballistics
+        float& rmsState = smoothedMagnitude[idx];
+        const float rmsCoeff = (inputPower > rmsState) ? rmsAttCoeff : rmsRelCoeff;
+        rmsState = rmsCoeff * rmsState + (1.0f - rmsCoeff) * inputPower;
+
+        // Peak Ballistics
+        float& peakState = smoothedPeak[idx];
+        const float peakCoeff = (inputPower > peakState) ? peakAttCoeff : peakRelCoeff;
+        peakState = peakCoeff * peakState + (1.0f - peakCoeff) * inputPower;
     }
     
-    // Apply smoothing (EMA): smoothed = alpha * smoothed + (1 - alpha) * magnitude
-    for (int i = 0; i < numBins; ++i)
+#if JUCE_DEBUG
+    // DEBUG: Log smoothing stats once per second
+    static uint32_t smoothDebugCounter = 0;
+    if ((++smoothDebugCounter % 100) == 0)
     {
-        const std::size_t idx = static_cast<std::size_t> (i);
-        smoothedMagnitude[idx] = smoothingCoeff * smoothedMagnitude[idx] + (1.0f - smoothingCoeff) * magnitudes_[idx];
+        DBG ("FFT Smoothing: oct=" << smoothingOctaves_ << " rmsAtt=" << rmsAttackMs_ << " rmsRel=" << rmsReleaseMs_);
     }
+#endif
     
-    // Convert smoothed magnitude to dB for display (reuse member buffer, no allocation)
+    // Convert Time-Smoothed POWER to dB for display (Main Trace / RMS)
     convertToDb (smoothedMagnitude.data(), dbValues_.data(), numBins);
     
-    // Convert raw (unsmoothed) magnitude to dB for peak tracking (reuse member buffer, no allocation)
-    // Peaks should track raw FFT, not smoothed display
-    convertToDb (magnitudes_.data(), dbRaw_.data(), numBins);
+    // Convert Fast-Peak Smoothed POWER to dB (Ballistic/Live Trace)
+    // Feeds into the Peak Hold logic for decay tracking
+    convertToDb (smoothedPeak.data(), dbRaw_.data(), numBins);
     
-    // Update peak hold: tracks raw dB, allows freeze
-    updatePeakHold (dbRaw_.data(), peakHold.data(), numBins);
+    // Strict Latch V1: Calculate Instantaneous dB from freqSmoothed (Power, pre-ballistics)
+    // This ensures we latch the TRUE session max.
+    convertToDb (freqSmoothed, dbInstant_.data(), numBins);
+    
+    // Update peak hold
+    // Pass dbInstant_ for Latching, dbRaw_ for Release tracking
+    updatePeakHold (dbInstant_.data(), dbRaw_.data(), peakHold.data(), numBins);
     
     // CRITICAL: numBins must equal expectedBins (fftSize/2 + 1)
-    const int expectedBins = currentFFTSize / 2 + 1;
-    jassert (numBins == expectedBins);  // DEBUG assert: bin count must match FFT size
+    // CRITICAL: numBins must equal expectedBins (fftSize/2 + 1)
+    jassert (numBins == (currentFFTSize / 2 + 1));  // DEBUG assert: bin count must match FFT size
     
     // Build local snapshot with computed FFT data
     AnalyzerSnapshot snapshot;
@@ -220,7 +374,9 @@ void AnalyzerEngine::computeFFT()
     snapshot.fftSize = currentFFTSize;
     snapshot.displayBottomDb = -120.0f;
     snapshot.displayTopDb = 0.0f;
+    snapshot.displayTopDb = 0.0f;
     snapshot.isValid = true;
+    snapshot.isHoldOn = freezePeaks_.load (std::memory_order_relaxed);
     
     // Safety guard: ensure numBins doesn't exceed array capacity
     jassert (numBins <= static_cast<int> (snapshot.fftDb.size()));
@@ -239,6 +395,18 @@ void AnalyzerEngine::computeFFT()
         snapshot.fftPeakDb[idx] = juce::jmax (dbFloor, peakHold[idx]);
     }
     
+    // Multi-trace: Copy power domain arrays for UI-side derivation
+    snapshot.multiTraceEnabled = enableMultiTrace_;
+    if (enableMultiTrace_)
+    {
+        for (int i = 0; i < copyBins; ++i)
+        {
+            const std::size_t idx = static_cast<std::size_t> (i);
+            snapshot.powerL[idx] = powerL_[idx];
+            snapshot.powerR[idx] = powerR_[idx];
+        }
+    }
+    
 #if JUCE_DEBUG
     // DEBUG: Log FFT data range once per second (throttled)
     static uint32_t debugLogCounter = 0;
@@ -253,8 +421,7 @@ void AnalyzerEngine::computeFFT()
             maxDb = juce::jmax (maxDb, dbValues_[idx]);
         }
         DBG ("FFT bins=" << numBins << " minDb=" << minDb << " maxDb=" << maxDb
-             << " fftSize=" << currentFFTSize << " hop=" << currentHopSize
-             << " coeff=" << smoothingCoeff);
+             << " fftSize=" << currentFFTSize << " hop=" << currentHopSize);
         
         // Assert bin count consistency
         jassert (numBins <= static_cast<int> (AnalyzerSnapshot::kMaxFFTBins));
@@ -267,16 +434,16 @@ void AnalyzerEngine::computeFFT()
     publishSnapshot (snapshot);
 }
 
-void AnalyzerEngine::applyWindow()
+void AnalyzerEngine::applyWindow(const std::vector<float>& fifoIn, int writePosIn)
 {
     // Write windowed time-domain samples into the SAME buffer we pass to JUCE FFT.
     // JUCE real-only FFT expects first N floats to contain the real samples.
     for (int i = 0; i < currentFFTSize; ++i)
     {
-        const int fifoIndex = (fifoWritePos + i) % currentFFTSize;
+        const int fifoIndex = (writePosIn + i) % currentFFTSize;
         const std::size_t idx = static_cast<std::size_t> (i);
         const std::size_t fifoIdx = static_cast<std::size_t> (fifoIndex);
-        fftOutput[idx] = fifoBuffer[fifoIdx] * window[idx];
+        fftOutput[idx] = fifoIn[fifoIdx] * window[idx];
     }
 
     // Zero-pad the remainder (JUCE uses this buffer in-place for output too)
@@ -284,23 +451,59 @@ void AnalyzerEngine::applyWindow()
     std::fill (fftOutput.begin() + static_cast<std::ptrdiff_t> (fftSizeSz), fftOutput.end(), 0.0f);
 }
 
+void AnalyzerEngine::extractMagnitudes(float* powerOut, int numBins)
+{
+    // Extract power spectrum from fftOutput (assumes FFT already performed)
+    // Real-only FFT output format: [DC, Nyquist, real1, imag1, real2, imag2, ...]
+    
+    // DC bin (real only)
+    powerOut[0] = fftOutput[0] * fftOutput[0];
+    
+    // Middle bins (complex)
+    for (int i = 1; i < numBins - 1; ++i)
+    {
+        const std::size_t fftIdx1 = static_cast<std::size_t> (2 * i);
+        const std::size_t fftIdx2 = static_cast<std::size_t> (2 * i + 1);
+        const float real = fftOutput[fftIdx1];
+        const float imag = fftOutput[fftIdx2];
+        powerOut[i] = real * real + imag * imag;
+    }
+    
+    // Nyquist bin (real only, stored at index 1)
+    const float nyquistVal = fftOutput[1];
+    powerOut[numBins - 1] = nyquistVal * nyquistVal;
+    
+    // Apply FFT normalization
+    const float scale = 2.0f / static_cast<float> (currentFFTSize);
+    const float powerScale = (scale * scale) * 4.0f;  // Hann window correction
+    
+    for (int i = 0; i < numBins; ++i)
+    {
+        powerOut[i] *= powerScale;
+    }
+    
+    // Correct DC and Nyquist (factor of 0.25)
+    powerOut[0] *= 0.25f;
+    powerOut[numBins - 1] *= 0.25f;
+}
+
 void AnalyzerEngine::convertToDb (const float* magnitudes, float* dbOut, int numBins)
 {
-    // Convert magnitude to dB with floor
+    // Convert POWER to dB
     // Use -120.0f floor for consistency (matches snapshot clamping)
     constexpr float dbFloor = -120.0f;
-    constexpr float magFloor = 1e-8f;  // Avoid log(0)
+    constexpr float powerFloor = 1e-12f;  // 10*log10(1e-12) = -120dB
     
     for (int i = 0; i < numBins; ++i)
     {
         const std::size_t idx = static_cast<std::size_t> (i);
-        const float mag = juce::jmax (magFloor, magnitudes[idx]);
-        const float db = 20.0f * std::log10 (mag);
+        const float power = juce::jmax (powerFloor, magnitudes[idx]);
+        const float db = 10.0f * std::log10 (power); // 10*log10 for Power
         dbOut[i] = juce::jmax (dbFloor, db);
     }
 }
 
-void AnalyzerEngine::updatePeakHold (const float* dbRawIn, float* peakOut, int numBins)
+void AnalyzerEngine::updatePeakHold (const float* dbInstant, const float* dbBallistic, float* peakOut, int numBins)
 {
     // Legacy flag: if disabled, behave like Off.
     if (! peakHoldEnabled_ || peakHoldMode_ == PeakHoldMode::Off)
@@ -326,37 +529,50 @@ void AnalyzerEngine::updatePeakHold (const float* dbRawIn, float* peakOut, int n
                                   ? juce::jmax (1, static_cast<int> (std::ceil ((peakHoldTimeMs_ / 1000.0f) / hopSec)))
                                   : 0;
 
+    // Strict Hold Logic V1
+    const bool isHoldOn = freezePeaks_.load (std::memory_order_acquire);
+
     for (int i = 0; i < numBins; ++i)
     {
         const std::size_t idx = static_cast<std::size_t> (i);
+        const float instant = dbInstant[idx];
+        const float ballistic = dbBallistic[idx];
 
-        // Always update to new louder peaks
-        if (dbRawIn[idx] > peakOut[idx])
+        // 1. Strict Latch (Attack):
+        // Always bump UP if we see a higher instantaneous peak.
+        // This applies in BOTH Hold ON and Hold OFF modes (Peak never drops below instant)
+        if (instant > peakOut[idx])
         {
-            peakOut[idx] = dbRawIn[idx];
-
+            peakOut[idx] = instant;
+            
             if (peakHoldMode_ == PeakHoldMode::HoldThenDecay && holdFramesTotal > 0)
                 peakHoldFramesRemaining_[idx] = holdFramesTotal;
         }
 
-        // User “Hold” checkbox: freeze the peak trace completely (no decay, no timer countdown).
-        if (freezePeaks_)
-            continue;
+        // 2. Hold ON: Strict Freeze
+        if (isHoldOn)
+        {
+            // Requirement 1: NEVER decay.
+            // Requirement 2: Strict Session Max (handled by Attack above).
+            // Requirement 3: Do NOT reset to 'instant' on transition (True Freeze).
+            continue; 
+        }
 
+        // 4. Hold OFF: Release/Decay Mode (Step 3)
+        // Requirement 2: Decay towards Live Peak (Ballistic), never below it.
+        
         switch (peakHoldMode_)
         {
             case PeakHoldMode::Infinite:
-                // No decay
                 break;
 
             case PeakHoldMode::Decay:
-                // Continuous decay
-                peakOut[idx] = juce::jmax (kDbFloor, peakOut[idx] - decayPerFrame);
+                // Decay, but clamp to Ballistic floor
+                peakOut[idx] = juce::jmax (ballistic, peakOut[idx] - decayPerFrame);
                 break;
 
             case PeakHoldMode::HoldThenDecay:
             {
-                // Sticky hold for N frames, then decay
                 int& frames = peakHoldFramesRemaining_[idx];
                 if (frames > 0)
                 {
@@ -364,16 +580,20 @@ void AnalyzerEngine::updatePeakHold (const float* dbRawIn, float* peakOut, int n
                 }
                 else
                 {
-                    peakOut[idx] = juce::jmax (kDbFloor, peakOut[idx] - decayPerFrame);
+                    peakOut[idx] = juce::jmax (ballistic, peakOut[idx] - decayPerFrame);
                 }
                 break;
             }
 
             case PeakHoldMode::Off:
             default:
-                // Already handled above
                 break;
         }
+        
+        // Final guard: Ensure we didn't drift below RMS (Consistency)
+        // Note: ballistic usually >= RMS, but just in case.
+        if (peakOut[idx] < dbValues_[idx])
+            peakOut[idx] = dbValues_[idx];
     }
 }
 
@@ -427,63 +647,50 @@ void AnalyzerEngine::requestFftSize (int fftSize)
     published_.data.fftBinCount = numBins;
 }
 
-void AnalyzerEngine::applyPendingFftSizeIfNeeded()
-{
-#if JUCE_DEBUG
-    jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
-#endif
-
-    if (! fftResizeRequested_.load (std::memory_order_acquire))
-        return;
-
-    const int requested = pendingFftSize_.load (std::memory_order_acquire);
-
-    // Nothing meaningful pending: clear the request state.
-    if (requested <= 0 || requested == currentFFTSize)
+    void AnalyzerEngine::applyPendingFftSizeIfNeeded()
     {
+    #if JUCE_DEBUG
+        jassert (juce::MessageManager::getInstance()->isThisTheMessageThread());
+    #endif
+
+        if (! fftResizeRequested_.load (std::memory_order_acquire))
+            return;
+
+        const int requested = pendingFftSize_.load (std::memory_order_acquire);
+
+        // Nothing meaningful pending: clear the request state.
+        if (requested <= 0 || requested == currentFFTSize)
+        {
+            pendingFftSize_.store (0, std::memory_order_release);
+            fftResizeRequested_.store (false, std::memory_order_release);
+            return;
+        }
+
+        // Apply the resize on the message thread (allocations/resizes are allowed here).
+        initializeFFT (requested);
+        // updateSmoothingCoeff removed
+
+        // If a newer request arrived while we were resizing, keep the flag set.
+        const int nowPending = pendingFftSize_.load (std::memory_order_acquire);
+        if (nowPending > 0 && nowPending != currentFFTSize)
+        {
+            fftResizeRequested_.store (true, std::memory_order_release);
+            return;
+        }
+
+        // No newer request: clear state.
         pendingFftSize_.store (0, std::memory_order_release);
         fftResizeRequested_.store (false, std::memory_order_release);
-        return;
     }
 
-    // Apply the resize on the message thread (allocations/resizes are allowed here).
-    initializeFFT (requested);
-    updateSmoothingCoeff (averagingMs_, currentSampleRate);
-
-    // If a newer request arrived while we were resizing, keep the flag set.
-    const int nowPending = pendingFftSize_.load (std::memory_order_acquire);
-    if (nowPending > 0 && nowPending != currentFFTSize)
+    void AnalyzerEngine::setAveragingMs (float averagingMs)
     {
-        fftResizeRequested_.store (true, std::memory_order_release);
-        return;
+        // Removed in favor of Attack/Release. 
+        // Mapping legacy "Averaging" to "Release" for basic compatibility if needed, 
+        // or just ignoring.
+        // For now, let's map it to RMS Release to keep some control if UI calls this.
+        rmsReleaseMs_ = juce::jlimit(10.0f, 2000.0f, averagingMs);
     }
-
-    // No newer request: clear state.
-    pendingFftSize_.store (0, std::memory_order_release);
-    fftResizeRequested_.store (false, std::memory_order_release);
-}
-
-void AnalyzerEngine::setAveragingMs (float averagingMs)
-{
-    averagingMs_ = averagingMs;
-    updateSmoothingCoeff (averagingMs, currentSampleRate);
-}
-
-void AnalyzerEngine::setPeakHoldEnabled (bool enabled)
-{
-    peakHoldEnabled_ = enabled;
-
-    if (! enabled)
-    {
-        peakHoldMode_ = PeakHoldMode::Off;
-        resetPeaks();
-        return;
-    }
-
-    // If enabling from Off, restore a sensible default mode.
-    if (peakHoldMode_ == PeakHoldMode::Off)
-        peakHoldMode_ = PeakHoldMode::HoldThenDecay;
-}
 
 void AnalyzerEngine::resetPeaks()
 {
@@ -517,7 +724,8 @@ void AnalyzerEngine::setPeakHoldTimeMs (float holdTimeMs)
 
 void AnalyzerEngine::setHold (bool hold)
 {
-    freezePeaks_ = hold;  // Freeze means no decay
+    // V2: Just set the atomic flag. Reset logic is handled by edge detection in updatePeakHold.
+    freezePeaks_.store (hold, std::memory_order_release);
 }
 
 void AnalyzerEngine::setPeakDecayDbPerSec (float decayDbPerSec)
@@ -535,22 +743,58 @@ void AnalyzerEngine::setPeakDecayTimeConstantSec (float seconds)
     peakDecayTimeConstantSec_ = juce::jlimit (0.01f, 10.0f, seconds);
 }
 
-void AnalyzerEngine::updateSmoothingCoeff (float averagingMs, double sampleRate)
+void AnalyzerEngine::setSmoothingOctaves (float octaves)
 {
-    // Compute EMA retention coefficient: coeff = exp(-hopSec / tauSec)
-    // tauSec = averaging time in seconds, hopSec = hop time in seconds
-    if (averagingMs > 0.0f && sampleRate > 0.0 && currentHopSize > 0)
+    if (std::abs(smoothingOctaves_ - octaves) < 1e-4f)
+        return;
+        
+    smoothingOctaves_ = octaves;
+    updateSmoothingBounds();
+}
+
+void AnalyzerEngine::updateSmoothingBounds()
+{
+    if (smoothingOctaves_ <= 0.0f)
+        return;
+
+    const int numBins = currentFFTSize / 2 + 1;
+    if (static_cast<int>(smoothLowBounds.size()) != numBins)
+        smoothLowBounds.resize (static_cast<size_t> (numBins));
+    if (static_cast<int>(smoothHighBounds.size()) != numBins)
+        smoothHighBounds.resize (static_cast<size_t> (numBins));
+        
+    // Standard octave bandwidth calculation:
+    // f_upper = f_center * 2^(oct/2)
+    // f_lower = f_center * 2^(-oct/2)
+    const double octaveFactor = std::pow (2.0, static_cast<double> (smoothingOctaves_) * 0.5);
+    const double invOctaveFactor = 1.0 / octaveFactor;
+    
+    for (int i = 0; i < numBins; ++i)
     {
-        const double tauSec = juce::jmax (1.0, static_cast<double> (averagingMs)) / 1000.0;  // Clamp min 1ms
-        const double hopSec = static_cast<double> (currentHopSize) / sampleRate;
-        smoothingCoeff = static_cast<float> (std::exp (-hopSec / tauSec));
-        smoothingCoeff = juce::jlimit (0.0f, 0.995f, smoothingCoeff);  // Clamp to [0.0, 0.995] (avoid stuck smoothing)
-    }
-    else
-    {
-        smoothingCoeff = 0.0f;  // No smoothing (instantaneous response) when averagingMs <= 0
+        if (i == 0) // DC
+        {
+            smoothLowBounds[0] = 0;
+            smoothHighBounds[0] = 0;
+            continue;
+        }
+        
+        int low = static_cast<int> (std::floor (static_cast<double> (i) * invOctaveFactor));
+        int high = static_cast<int> (std::ceil (static_cast<double> (i) * octaveFactor));
+        
+        // Clamp
+        low = juce::jlimit (0, numBins - 1, low);
+        high = juce::jlimit (0, numBins - 1, high);
+        
+        // Ensure effective smoothing for low bins (at least self)
+        if (low > i) low = i;
+        if (high < i) high = i;
+        
+        smoothLowBounds[static_cast<size_t> (i)] = low;
+        smoothHighBounds[static_cast<size_t> (i)] = high;
     }
 }
+
+// Wave smoothing update removed.
 
 void AnalyzerEngine::publishSnapshot (const AnalyzerSnapshot& source)
 {
@@ -571,7 +815,9 @@ void AnalyzerEngine::publishSnapshot (const AnalyzerSnapshot& source)
     published_.data.sampleRate = source.sampleRate;
     published_.data.fftSize = source.fftSize;
     published_.data.displayBottomDb = source.displayBottomDb;
+    published_.data.displayBottomDb = source.displayBottomDb;
     published_.data.displayTopDb = source.displayTopDb;
+    published_.data.isHoldOn = source.isHoldOn;
     
     // Deep copy arrays (fixed-size, but copy only used portion)
     const int numBins = binCount;
@@ -588,6 +834,21 @@ void AnalyzerEngine::publishSnapshot (const AnalyzerSnapshot& source)
         const std::size_t idx = static_cast<std::size_t> (i);
         published_.data.fftDb[idx] = source.fftDb[idx];
         published_.data.fftPeakDb[idx] = source.fftPeakDb[idx];
+    }
+    
+    // Multi-trace: Copy power domain arrays
+    published_.data.multiTraceEnabled = source.multiTraceEnabled;
+    if (source.multiTraceEnabled)
+    {
+        jassert (numBins <= static_cast<int> (published_.data.powerL.size()));
+        jassert (numBins <= static_cast<int> (published_.data.powerR.size()));
+        
+        for (int i = 0; i < copyBins; ++i)
+        {
+            const std::size_t idx = static_cast<std::size_t> (i);
+            published_.data.powerL[idx] = source.powerL[idx];
+            published_.data.powerR[idx] = source.powerR[idx];
+        }
     }
     
     // Increment sequence AFTER data copy completes (release fence ensures visibility)
@@ -620,7 +881,9 @@ bool AnalyzerEngine::getLatestSnapshot (AnalyzerSnapshot& dest) const
         dest.sampleRate = published_.data.sampleRate;
         dest.fftSize = published_.data.fftSize;
         dest.displayBottomDb = published_.data.displayBottomDb;
+        dest.displayBottomDb = published_.data.displayBottomDb;
         dest.displayTopDb = published_.data.displayTopDb;
+        dest.isHoldOn = published_.data.isHoldOn;
         
         // Deep copy arrays
         // Prefer fftBinCount for FFT bin counts; fallback to numBins exists for legacy snapshots only.
@@ -639,6 +902,18 @@ bool AnalyzerEngine::getLatestSnapshot (AnalyzerSnapshot& dest) const
             const std::size_t idx = static_cast<std::size_t> (i);
             dest.fftDb[idx] = published_.data.fftDb[idx];
             dest.fftPeakDb[idx] = published_.data.fftPeakDb[idx];
+        }
+
+        // Multi-trace: Copy power domain arrays
+        dest.multiTraceEnabled = published_.data.multiTraceEnabled;
+        if (dest.multiTraceEnabled)
+        {
+            for (int i = 0; i < copyBins; ++i)
+            {
+                const std::size_t idx = static_cast<std::size_t> (i);
+                dest.powerL[idx] = published_.data.powerL[idx];
+                dest.powerR[idx] = published_.data.powerR[idx];
+            }
         }
         
         // Second read to verify stability
