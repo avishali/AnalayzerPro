@@ -1,32 +1,53 @@
-# VERIFIER RESULT
+# VERIFIER_RESULT.md
 
-**Mission:** RMS_BALLISTICS_TUNING_V1
-**Status:** PASS
+## Mission ID
+SIDE_TRACE_SMOOTHING_AND_SMOOTHING_SWITCH_FIX_V1
 
-## Verification Checks
+## Role
+VERIFIER
 
-### Build Status
-- [x] **Build:** SUCCESS (Checked via `cmake --build`)
-- [x] **Warnings:** Minimal (sign conversion, acceptable). No major regressions.
+## Status
+**PASS**
 
-### Code Audit
-- [x] **Ballistics Implementation:** 
-    - `rmsState_`, `powerLState_`, `powerRState_` added correctly to persist state.
-    - `applyBallistics` uses exponential smoothing with fixed 60Hz dt.
-    - Tuning: Attack = 60ms, Release = 300ms (within requested range).
-- [x] **Integration:**
-    - Applied to `fftDb_` immediately after sanitization.
-    - Applied to Multi-trace buffers appropriately.
-    - **CRITICAL:** Peak trace (`fftPeakDb_`) is NOT touched by ballistics. This preserves the "True Hold" integrity.
-- [x] **Cleanup:**
-    - Unused `mapDbToDisplayDb` removed.
-    - Shadowing variables fixed.
+---
 
-### Manual Test Matrix (Simulated/Confirmed by Design)
-- [x] **Test 1 (Transient Separation):** Peak trace is untouched, RMS is smoothed.
-- [x] **Test 2 (Hold Isolation):** `fftPeakDb_` is bypassed, so Hold mechanics (based on Peak) are unaffected.
-- [x] **Test 3 (Silence Falloff):** 300ms release ensures smooth decay to silence.
-- [x] **Test 4 (Mode Stability):** UI 60Hz dt ensures ballistics consistency across FFT sizes.
+## Code Verification
 
-## Conclusion
-The implementation meets all acceptance criteria. The code is robust and follows the architecture rules.
+### Gate 1: SIDE Smoothing Wired
+| Check | Status | Notes |
+|-------|--------|-------|
+| `smoother_.process` applied | ✅ PASS | Lines 1069-1070 of `AnalyzerDisplayView.cpp` apply `smoother_.process` to `scratchPowerL_` and `scratchPowerR_` *before* data is sent to `setLRPowerData`. |
+| SIDE derived from smoothed data | ✅ PASS | `RTADisplay::setLRPowerData` (line 258) computes `sideDb` from input L/R, which is already smoothed. |
+
+**Result**: SIDE is smoothed when smoothing is enabled.
+
+### Gate 2: Smoothing Change Resets State
+| Check | Status | Notes |
+|-------|--------|-------|
+| State cleared on change | ✅ PASS | Lines 638-641: `powerLState_.clear()`, `powerRState_.clear()`, `rmsState_.clear()` are called when `lastSmoothingIdx_` changes. |
+
+**Result**: Ballistics state is reset on smoothing param change.
+
+### Gate 3: Render Guards
+| Check | Status | Notes |
+|-------|--------|-------|
+| `hasValidMultiTraceData` | ✅ PASS | Line 1768 guards against uninitialized data. |
+| `lrBinCount > 0` | ✅ PASS | Line 1768. |
+| Per-trace `.empty()` checks | ✅ PASS | Lines 1771, 1777, etc. ensure each trace buffer is non-empty. |
+
+**Result**: Render guards prevent drawing mismatched or empty buffers.
+
+---
+
+## Runtime Verification (Pending Manual Test)
+The code audit passes all gates. Manual tests A, B, C should be performed by the user:
+- **A**: Enable Side only, cycle smoothing rapidly. Expect no artifacts.
+- **B**: Multi-trace + smoothing change. Expect coherent updates.
+- **C**: FFT size change with smoothing. Expect correct Side.
+
+---
+
+## Final Verdict
+**PASS** — Code correctly wires SIDE through the smoothing pipeline and provides reset + guards.
+
+STOP.

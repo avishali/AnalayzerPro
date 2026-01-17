@@ -1,0 +1,269 @@
+Mission ID: MULTI_TRACE_DATA_PIPELINE_FIX_V2
+
+Goal
+Fix multi-trace FFT rendering so that:
+	•	Stereo trace renders (currently missing)
+	•	Side trace is mathematically correct and visually sane (no “weird” shape from bad derivation/log domain math)
+	•	On first load, the Peak trace does NOT render as a “flat line with a vertical drop” (invalid/uninitialized data must not be drawn)
+
+Non-Negotiables
+	•	No allocations on audio thread.
+	•	No new per-block FFT work.
+	•	Derived traces must be computed from already-available L/R spectra (UI-side or snapshot-side), and converted in linear domain (NOT by subtracting dB curves).
+	•	Keep diffs surgical.
+
+Scope
+This mission is strictly about data correctness + initial-state handling for multi-trace.
+Do NOT:
+	•	Change colors/theme.
+	•	Change smoothing UI.
+	•	Change peak hold behavior.
+	•	Rework meter/scope routing.
+
+Assumptions
+	•	RTADisplay has a declaration setLRPowerData(…) (exists in header) but implementation is missing in RTADisplay.cpp.
+	•	AnalyzerDisplayView has a commented-out call that should feed L/R spectra into RTADisplay.
+	•	The analyzer already produces at least one “base” spectrum array per channel somewhere in snapshot/view (L/R or equivalent).
+
+Files Allowed To Touch
+	•	Source/RTADisplay.cpp
+	•	Source/RTADisplay.h (only if signature mismatch forces it; prefer not)
+	•	Source/AnalyzerDisplayView.cpp
+
+Do NOT Touch
+	•	AnalyzerEngine (unless you find there is literally no L/R data available anywhere upstream; if so STOP and report).
+	•	Audio thread processing code.
+
+Implementation Steps
+
+Step 1 — Restore the feed (uncomment + wire correctly)
+In AnalyzerDisplayView.cpp:
+	1.	Find the commented call to RTADisplay::setLRPowerData (or similarly named).
+	2.	Uncomment it and ensure it is called every time the UI receives a new analyzer snapshot / frame.
+	3.	Confirm the arguments you pass are:
+	•	L spectrum array pointer/span
+	•	R spectrum array pointer/span
+	•	numBins
+	•	any required meta (sampleRate/fftSize/minDb/maxDb) that RTADisplay needs
+	4.	If the view currently only has ONE spectrum (e.g., “currentMagnitude”):
+	•	STOP. Log a brief blocker: “No L/R spectra available at UI layer; cannot derive multi-trace without it.”
+	•	Do not guess.
+
+Step 2 — Implement RTADisplay::setLRPowerData in RTADisplay.cpp
+Implement the method with these rules:
+
+A) Validate inputs
+	•	If pointers are null, numBins <= 0, or meta invalid -> mark traces invalid and return.
+	•	Keep a “hasValidSpectrumFrame_” boolean that becomes true only after the first valid call.
+
+B) Work in LINEAR domain
+Assume incoming data is either:
+	•	linear magnitude/power per bin, OR
+	•	dB per bin
+
+You must detect/confirm what it is based on existing code conventions:
+	•	Search how the existing Peak/RMS arrays are generated/stored in RTADisplay.
+	•	If internal code expects dB arrays, still compute derived traces in linear first:
+	•	Convert incoming to linear power (or magnitude) before deriving.
+	•	Then convert back to dB for storage/rendering.
+
+C) Derive traces (recommended definitions)
+Use stable, standard definitions per bin in linear magnitude domain (or power; be consistent):
+
+Let L and R be linear magnitudes (not dB). If you use power, adjust conversions accordingly.
+
+Mono:
+	•	mono = 0.5 * (L + R)
+
+Mid:
+	•	mid = 0.5 * (L + R)  (same as mono for magnitude-only; if you want strict MS: apply on complex FFT, but we are NOT doing that here)
+
+Side:
+	•	side = 0.5 * abs(L - R)
+
+Stereo (for “Show Stereo”)
+Define “Stereo” as “combined energy envelope” so it’s always meaningful:
+Option 1 (recommended for visibility):
+	•	stereo = max(L, R)
+Option 2:
+	•	stereo = sqrt(0.5*(L^2 + R^2))  (RMS-combined magnitude)
+
+Pick ONE and document it in a short comment next to the code so future you remembers.
+
+D) Convert to dB safely
+	•	Use epsilon clamp: x = max(x, 1e-12f) before log.
+	•	db = 20*log10(x) for magnitude.
+	•	Clamp db to [minDb, maxDb] (or at least to minDb) before storing.
+
+E) Store into per-trace buffers that the renderer already uses
+	•	Populate arrays for:
+	•	traceStereoDb[]
+	•	traceLeftDb[]
+	•	traceRightDb[]
+	•	traceMonoDb[]
+	•	traceMidDb[]
+	•	traceSideDb[]
+	•	Ensure all are sized to numBins and persistent (preallocated) OR use existing member arrays that are already sized on resize/fftSize change.
+	•	No per-frame heap allocation. If resizing is needed, do it in a safe UI-thread path that’s already used elsewhere (e.g., on fftSize change), not inside audio thread. RTADisplay is UI-side, but still avoid realloc churn each frame.
+
+Step 3 — Fix “Peak flat line with vertical drop” on first load
+This symptom usually comes from rendering invalid buffers (all zeros / all minDb) as if real.
+
+In RTADisplay rendering path (where peak path is built):
+	•	If !hasValidSpectrumFrame_:
+	•	Do NOT draw Peak/RMS paths.
+	•	Draw nothing OR draw a “no data” overlay if you already have a mechanism (optional).
+	•	If hasValidSpectrumFrame_ but a specific trace is disabled or invalid (all bins <= minDb + tinyEps):
+	•	Skip drawing that trace path.
+
+Additionally:
+	•	Ensure peak buffer initialization uses minDb consistently, not 0.0 dB or uninitialized memory.
+	•	Ensure the “first path point” is not created at yTop with a second at yBottom due to NaN/inf mapping.
+	•	Guard against NaN/inf when converting db->y.
+
+Step 4 — Side trace sanity check (most common bug)
+If Side looks weird, you’re probably:
+	•	subtracting dB curves (wrong), or
+	•	taking log of negative numbers (wrong), or
+	•	missing abs() for (L-R), or
+	•	not clamping epsilon.
+
+Confirm Side is computed as abs(L-R) in linear, then clamped, then log.
+
+Step 5 — Keep Scope toggles independent (do not couple here)
+User reports toggles affect Scope only. That’s okay for now.
+This mission only ensures analyzer traces receive data and render. Do not touch scope routing logic here.
+
+Acceptance Criteria
+	•	“Show Stereo” draws a visible stereo trace (not blank).
+	•	“Show Side” draws a trace that behaves plausibly:
+	•	If L==R, Side is near minDb (very low).
+	•	If stereo widens (L differs from R), Side rises.
+	•	On first launch (before audio starts), analyzer does NOT show the peak “flat line with vertical drop”.
+	•	No new allocations on audio thread. (UI allocations should be stable; no per-frame realloc loops.)
+
+Manual Test Checklist (required)
+	1.	Launch standalone, do NOT play audio:
+	•	Analyzer panel should be empty (or stable), no vertical-drop artifact.
+	2.	Play a mono source:
+	•	L and R similar
+	•	Side should be very low
+	•	Mono/Mid should resemble Stereo/Left/Right
+	3.	Pan hard L:
+	•	Left rises, Right drops
+	•	Stereo follows Left (if using max) or a combined curve (if using RMS-combine)
+	•	Side rises meaningfully
+	4.	Toggle each trace on/off:
+	•	Only visibility changes; no weird jumps, no crashes.
+	5.	Change FFT size:
+	•	Traces still render, no indexing bugs.
+
+Deliverables
+	•	Commit-ready implementation changes.
+	•	Update LAST_RESULT.md with:
+	•	What was changed (file + brief)
+	•	How Stereo/Mid/Side were defined
+	•	Evidence from tests (what you observed)
+
+PROMPTS/RUNBOOKS/MULTI_TRACE_DATA_PIPELINE_FIX_V2_VERIFIER.txt
+
+Mission ID: MULTI_TRACE_DATA_PIPELINE_FIX_V2
+
+Verifier Goal
+Confirm that multi-trace FFT render pipeline is actually receiving data and rendering correctly, and that startup artifacts are eliminated.
+
+Hard Fail Conditions
+	•	setLRPowerData still not implemented in RTADisplay.cpp.
+	•	AnalyzerDisplayView.cpp still has the feed call commented out.
+	•	Stereo trace still not drawn when “Show Stereo” is enabled.
+	•	Side trace computed in dB domain (e.g., SideDb = LeftDb - RightDb) or without abs/epsilon clamp.
+	•	First-load “vertical drop / flat line” peak artifact still appears.
+
+Audit Steps
+	1.	Code Audit: Data Feed Restored
+
+	•	Open AnalyzerDisplayView.cpp
+	•	Locate call site feeding RTADisplay:
+	•	Confirm call is active (not commented out)
+	•	Confirm it executes on snapshot update / timer tick / UI frame update
+	•	Confirm it passes L and R spectra, not a single merged spectrum
+
+PASS if: call exists and is reachable on each UI update frame.
+	2.	Code Audit: setLRPowerData Implemented
+
+	•	Open RTADisplay.cpp
+	•	Confirm setLRPowerData has a real implementation (not stub).
+	•	Confirm it:
+	•	Validates pointers + numBins
+	•	Marks “hasValidSpectrumFrame_” true only after first valid frame
+	•	Computes derived traces in linear domain
+	•	Converts to dB with epsilon clamp
+	•	Avoids per-frame heap allocations (no resizing each call unless proven stable)
+
+PASS if: implementation matches constraints.
+	3.	Math Audit: Side and Stereo Definitions
+
+	•	Side:
+	•	Must be side = 0.5*abs(L-R) (linear) then log.
+	•	Stereo:
+	•	Must be defined (max(L,R) OR combined RMS magnitude). Must not be missing.
+
+PASS if: definitions are documented in comments and implemented accordingly.
+	4.	Startup Artifact Audit
+
+	•	Find renderer path build code for peak trace (or whichever draws first).
+	•	Confirm guards:
+	•	If no valid frame yet, skip drawing (or draw “no data”)
+	•	Guard against NaN/inf in db->y mapping
+
+PASS if: there is a clear guard preventing pre-data rendering.
+
+Runtime Verification (Manual)
+
+Test A — Cold Launch, No Audio
+	•	Launch standalone, do not route audio.
+Expected:
+	•	No “flat line with vertical drop” on peak trace.
+	•	Either nothing is drawn or a stable “no data” state.
+
+PASS/FAIL.
+
+Test B — Mono Source
+	•	Feed identical L/R (mono).
+Expected:
+	•	Left ~ Right
+	•	Side is very low
+	•	Mid/Mono similar to Left/Right
+	•	Stereo visible
+
+PASS/FAIL.
+
+Test C — Hard Pan L
+	•	Feed signal on L only.
+Expected:
+	•	Left rises, Right low
+	•	Stereo follows Left (if max) OR is between (if combined)
+	•	Side rises
+
+PASS/FAIL.
+
+Test D — Toggle Coverage
+	•	Toggle Show Stereo/Left/Right/Mono/Mid/Side on/off.
+Expected:
+	•	Each trace appears/disappears with no crash, no stale garbage line.
+
+PASS/FAIL.
+
+Test E — FFT Size Change
+	•	Change fft size while audio playing.
+Expected:
+	•	All enabled traces still render correctly (no missing stereo, no indexing artifacts).
+
+PASS/FAIL.
+
+Verifier Output
+Write VERIFIER_RESULT.md with:
+	•	Code audit results (feed, implementation, math, startup guard)
+	•	Runtime test results A–E
+	•	Final status: PASS/FAIL
+	•	If FAIL: exact file/line and the minimal fix needed (no speculation)

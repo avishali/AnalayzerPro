@@ -5,7 +5,6 @@
 #include <mdsp_ui/AxisHoverController.h>
 #include <mdsp_ui/PeakSnapController.h>
 #include <vector>
-#include <type_traits>
 #include <cstdint>
 #include <cmath>
 
@@ -99,6 +98,9 @@ public:
 
     /** Set hold status (UI-only, affects debug overlay) */
     void setHoldStatus (bool isHoldOn);
+
+    /** Set session marker (visual indicator for highest peak in session) */
+    void setSessionMarker (bool visible, int bin, float db);
     
     /** Check structural generation and clear cache if changed (call before pulling data) */
     void checkStructuralGeneration (uint32_t currentGen);
@@ -155,9 +157,12 @@ private:
         int lrBinCount = 0;
         
         // Derived traces (computed from L/R in setLRPowerData, NOT in paint)
+        std::vector<float> stereoDb; // Max(L, R) combined envelope
         std::vector<float> monoDb;
         std::vector<float> midDb;
         std::vector<float> sideDb;
+        
+        bool hasValidMultiTraceData = false;
         
         // Meta (optional)
         double sampleRate = 48000.0;
@@ -167,6 +172,11 @@ private:
         DataStatus status = DataStatus::Ok;
         juce::String noDataReason;
         bool isHoldOn = false;
+        
+        // Session Marker
+        bool sessionMarkerVisible = false;
+        int sessionMarkerBin = -1;
+        float sessionMarkerDb = 0.0f;
 
         // Unified source of truth for rendering limit
         float getEffectiveMaxHz() const

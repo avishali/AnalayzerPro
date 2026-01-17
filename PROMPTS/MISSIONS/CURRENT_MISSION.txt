@@ -1,151 +1,115 @@
-PROMPTS/RUNBOOKS/RMS_BALLISTICS_TUNING_V1.txt
+SIDE_TRACE_SMOOTHING_AND_SMOOTHING_SWITCH_FIX_V1_IMPLEMENTER.txt
 
-⸻
+Mission ID: SIDE_TRACE_SMOOTHING_AND_SMOOTHING_SWITCH_FIX_V1
 
-MISSION ID: RMS_BALLISTICS_TUNING_V1
-SYSTEM: AnalyzerPro
-SCOPE: UI + Analyzer Engine (No Audio Thread Allocations)
-RISK LEVEL: MEDIUM
-PRIORITY: FEEL / PROFESSIONAL METER RESPONSE
+Goal
+	1.	Apply octave smoothing to the SIDE trace (and only where smoothing is intended).
+	2.	Fix rendering glitches when selecting/changing smoothing (no “jump”, no stale buffers, no broken first frame, no partial curves).
 
-⸻
+Constraints
+	•	No allocations on the audio thread.
+	•	Prefer reusing the existing smoothing pipeline helper already used by RMS/other derived traces.
+	•	Changes must be UI-side (AnalyzerDisplayView / RTADisplay) unless a clearly UI-owned smoothing stage lives elsewhere.
 
-OBJECTIVE
+Files Allowed To Touch
+	•	Source/AnalyzerDisplayView.cpp
+	•	Source/AnalyzerDisplayView.h (only if needed for state)
+	•	Source/RTADisplay.cpp
+	•	Source/RTADisplay.h (only if needed)
+	•	Source/AnalyzerDisplayView.cpp (if that’s where smoothing helper lives)
+	•	Source/AnalyzerDisplayView.* or Source/AnalyzerDisplayView* equivalents (match your repo)
 
-Tune RMS analyzer and meters to behave like professional reference tools (FabFilter Pro-Q, iZotope Insight, PAZ):
-	•	RMS must feel weighty, stable, musical
-	•	Peak remains fast and transient-accurate
-	•	RMS should never “chase” peak
-	•	Ballistics must apply consistently to:
-	•	FFT RMS trace
-	•	Input meters
-	•	Output meters
-	•	Loudness momentary/short-term display (if shared path)
+Do NOT Touch
+	•	Audio thread analyzer engine / DSP FFT computation (unless you discover smoothing is wrongly applied there; if so STOP and report).
 
-⸻
+Diagnosis (what’s likely happening)
+	•	SIDE is either:
+A) bypassing the smoothing path (so it remains jagged), OR
+B) being smoothed but using an uninitialized/incorrect smoothing state, OR
+C) smoothing state changes aren’t resetting/rehydrating per-trace buffers, causing artifacts when the smoothing dropdown changes.
 
-DEFINITION OF DONE
-	•	RMS attack/release is perceptually slower than Peak
-	•	RMS trace feels “anchored” during dense mixes
-	•	Fast transients move Peak immediately but only gently influence RMS
-	•	Switching FFT size or smoothing does NOT change RMS feel
-	•	Hold ON does NOT affect RMS behavior
-	•	No allocations on audio thread
-	•	No regressions in Peak Hold, Smoothing, or Multi-Trace modes
+Implementation Plan
 
-⸻
+Step 1 — Identify the single “authoritative” smoothing function
+Search in UI code for the smoothing application point:
+	•	look for names: applySmoothing, smoothingProcessor, octaveSmooth, freqSmoothed, smoothDb, smoothingOct
+Confirm:
+	•	Where smoothing amount is read (APVTS param or UI control)
+	•	Which traces currently receive smoothing (likely RMS and/or derived traces)
 
-FILES YOU MAY TOUCH
-	•	Source/analyzer/AnalyzerEngine.cpp
-	•	Source/analyzer/AnalyzerEngine.h
-	•	Source/ui/analyzer/AnalyzerDisplayView.cpp
-	•	Source/ui/analyzer/AnalyzerDisplayView.h
+Rule: There must be exactly ONE place where smoothing is applied per frame, per trace, in UI.
 
-⸻
+Step 2 — Ensure SIDE trace flows through the same smoothing stage
+If you have per-trace db arrays like:
+	•	leftDb, rightDb, monoDb, midDb, sideDb, stereoDb
+And per-trace “smoothed” arrays like:
+	•	leftSmoothedDb, rightSmoothedDb, etc
 
-FILES YOU MUST NOT TOUCH
-	•	PluginProcessor.cpp
-	•	APVTS parameter layout
-	•	FFT allocation / buffer creation logic
-	•	Snapshot struct layout
+Then:
+	•	Add sideDb -> sideSmoothedDb using the SAME smoothing call used for the other derived traces.
+	•	Ensure the smoothing call expects dB arrays (or expects linear); match what you already do for other traces.
+	•	Ensure any “bypass smoothing for peak” logic is untouched (this mission is SIDE only + smoothing switching stability).
 
-⸻
+Definition
+	•	SIDE must be smoothed when smoothing != Off.
+	•	If smoothing == Off: SIDE should use unsmoothed sideDb.
 
-ARCHITECTURE CONSTRAINTS
-	•	RMS smoothing must happen:
-	•	Either in AnalyzerEngine (preferred for correctness)
-	•	Or UI-side if already mirrored for multi-trace
-	•	No malloc/new/std::vector resize in audio thread
-	•	Use only preallocated buffers
-	•	Must operate per-bin, not global average
+Step 3 — Fix smoothing switching glitches (root cause: stale smoothing state)
+On smoothing change (dropdown / APVTS param change):
+	•	Reset the smoothing processor state so it does not interpolate from the previous smoothing kernel.
+	•	Clear smoothed caches for ALL traces that depend on smoothing (at least Side + any other smoothed traces).
+	•	Force a “recompute from current raw buffers” on next paint/tick.
 
-⸻
+Implementation options (choose minimal that matches your architecture):
 
-TARGET BALLISTICS MODEL
+Option A (preferred): Generation counter
+	•	Maintain a uint32 smoothingGeneration_ in AnalyzerDisplayView or RTADisplay.
+	•	When smoothing param value changes: ++smoothingGeneration_; call resetSmoothingState().
+	•	Each trace smoothing buffer stores lastAppliedGeneration_.
+	•	If generation differs: rebuild smoothing output from current raw arrays without using any previous smoothed output.
 
-Reference Behavior:
+Option B: Hard reset on change
+	•	When smoothing changes:
+	•	smoothingProcessor.reset()
+	•	fill all smoothed arrays with minDb (or copy raw) to prevent “partial curve”
+	•	set a flag smoothingJustChanged_ = true for one frame so renderer skips drawing until at least one fresh smoothing pass ran (optional; only if needed to avoid first-frame junk)
 
-Peak:
-	•	Attack: Instant (1 frame)
-	•	Release: Controlled by PeakDecay param
+You must also handle FFT size change similarly (bin count changes implies smoothing buffers must resize/reset). Use existing resizing logic.
 
-RMS:
-	•	Attack: Slow rise (30–80ms equivalent)
-	•	Release: Slower fall (150–400ms equivalent)
-	•	Must be logarithmic / exponential, not linear
+Step 4 — Rendering stability on smoothing change
+Common failure: renderer draws using mismatched array sizes during transition.
 
-⸻
+Add guards at render start (where paths are built):
+	•	If any enabled trace has buffer size != expected numBins: skip that trace this frame.
+	•	If smoothingJustChanged_ and you don’t have a fresh output yet: skip drawing smoothed traces for one frame (draw raw or draw nothing).
 
-RECOMMENDED MODEL
+Step 5 — Logging (temporary, DEBUG only)
+Add minimal debug logs (JUCE_DEBUG only):
+	•	When smoothing param changes: log old->new, bins, and that you reset smoothing state.
+	•	When applying smoothing to SIDE: log once (or rate limited) that SIDE smoothing is active and buffer sizes match.
 
-Per-bin exponential smoothing:
+Acceptance Criteria
+	•	SIDE trace looks smoothed the same way as other smoothed traces at 1/3, 1/6, 1/12, 1/24, etc.
+	•	Switching smoothing options does not:
+	•	produce broken partial curves
+	•	cause sudden vertical drop lines
+	•	leave stale traces on screen
+	•	crash
+	•	No audio thread changes, no per-block allocations.
 
-For each bin:
-RMS_out = max(
-incoming,
-prev * releaseCoeff + incoming * (1 - releaseCoeff)
-)
+Manual Test Checklist
+	1.	Play audio, enable Side trace only:
+	•	Toggle smoothing Off -> 1/3 -> 1/24 -> Off repeatedly
+	•	Side should smoothly change “texture” but remain stable and continuous
+	2.	Enable multiple traces (L/R/Mid/Side/RMS):
+	•	Change smoothing while playing
+	•	No trace should disappear permanently or show partial bins
+	3.	Change FFT size while smoothing != Off:
+	•	Side still renders correctly and smoothed
 
-Where:
-	•	If incoming > prev → use attackCoeff
-	•	Else → use releaseCoeff
-
-⸻
-
-PARAMETER MAPPING
-
-Hardcode first pass (no UI yet):
-
-Attack Time Targets:
-	•	Fast: 30 ms
-	•	Default: 60 ms
-	•	Slow: 90 ms
-
-Release Time Targets:
-	•	Fast: 150 ms
-	•	Default: 250 ms
-	•	Slow: 400 ms
-
-Convert to coefficient:
-coeff = exp(-1 / (timeSeconds * frameRate))
-
-FrameRate = UI update rate OR FFT hop rate (choose consistently)
-
-⸻
-
-IMPLEMENTER PROMPT
-
-You are implementing RMS_BALLISTICS_TUNING_V1
-
-GOALS:
-	•	RMS trace must feel slower, heavier, and musical
-	•	Peak remains unchanged
-	•	Multi-trace RMS (L/R/M/S/Mono) must all use same ballistics
-	•	No smoothing bypass for RMS
-	•	Hold logic must NOT interfere with RMS
-
-TASKS:
-	1.	Locate RMS path
-	•	Identify where FFT RMS values are generated or post-processed
-	•	Confirm whether smoothing is currently shared with Peak
-	2.	Add RMS Ballistics State
-	•	Add per-trace, per-bin persistent buffers:
-rmsBallisticBuffer[trace][bin]
-	•	Initialize once on FFT resize
-	3.	Implement Dual-Time-Constant Smoothing
-	•	Use exponential attack/release model
-	•	Attack when rising
-	•	Release when falling
-	4.	Integrate Before Rendering
-	•	Apply AFTER fractional-octave smoothing
-	•	Apply BEFORE dB mapping to screen coordinates
-	5.	Enforce Isolation
-	•	Ensure Peak Hold never modifies RMS buffers
-	•	Ensure RMS never borrows Peak values
-	6.	Performance Check
-	•	No heap allocations
-	•	No vector resizing
-	•	O(N bins * traces) only
-	7.	Add Debug Toggle
-	•	DBG RMS attack/release coefficients on startup
-	•	DBG when FFT size changes and buffers resize
+Deliverables
+	•	Code changes committed
+	•	LAST_RESULT.md updated:
+	•	Where SIDE smoothing is applied
+	•	How smoothing reset works on parameter change
+	•	What tests you ran and results
