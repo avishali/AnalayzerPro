@@ -22,6 +22,7 @@ void StereoScopeView::resized()
     if (area.isEmpty()) return;
     
     accumImage_ = juce::Image (juce::Image::ARGB, area.getWidth(), area.getHeight(), true);
+    heldImage_ = juce::Image (juce::Image::ARGB, area.getWidth(), area.getHeight(), true);
 }
 
 void StereoScopeView::timerCallback()
@@ -31,10 +32,23 @@ void StereoScopeView::timerCallback()
     
     if (numSamples > 0)
     {
-        // Decay existing image
-        accumImage_.multiplyAllAlphas (decayFactor_);
+        // Decay existing image (only if hold is OFF)
+        if (!holdEnabled_)
+        {
+            accumImage_.multiplyAllAlphas (decayFactor_);
+        }
         
         renderScopeToImage();
+        
+        // If hold enabled, composite with max logic
+        if (holdEnabled_ && !heldImage_.isNull())
+        {
+            // Composite: for each pixel, take max alpha (brightest)
+            // Simple approach: just overlay new on held
+            juce::Graphics hg (heldImage_);
+            hg.drawImageAt (accumImage_, 0, 0);
+        }
+        
         repaint();
     }
 }
@@ -209,8 +223,12 @@ void StereoScopeView::paint (juce::Graphics& g)
         g.drawText ("L", juce::Rectangle<float> (area.getRight() - 20, cy - 12, 15, 12), juce::Justification::centredRight, false);
     }
     
-    // Draw Accumulation Buffer
-    if (!accumImage_.isNull())
+    // Draw Accumulation Buffer (or held if holding)
+    if (holdEnabled_ && !heldImage_.isNull())
+    {
+        g.drawImageAt (heldImage_, 0, 0);
+    }
+    else if (!accumImage_.isNull())
     {
         g.drawImageAt (accumImage_, 0, 0);
     }
@@ -218,4 +236,23 @@ void StereoScopeView::paint (juce::Graphics& g)
     // Border
     g.setColour (theme.borderDivider);
     g.drawRect (area, 1.0f);
+}
+
+void StereoScopeView::setHoldEnabled (bool hold)
+{
+    holdEnabled_ = hold;
+    
+    if (!holdEnabled_)
+    {
+        // Reset held image when hold is turned off
+        resetHold();
+    }
+}
+
+void StereoScopeView::resetHold()
+{
+    if (!heldImage_.isNull())
+    {
+        heldImage_.clear (heldImage_.getBounds());
+    }
 }

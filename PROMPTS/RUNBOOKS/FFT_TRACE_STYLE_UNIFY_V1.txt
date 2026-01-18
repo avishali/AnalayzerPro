@@ -1,0 +1,57 @@
+MISSION_ID: FFT_TRACE_STYLE_UNIFY_V1
+
+GOAL
+Make ALL traces (RMS, Stereo, L, R, Mono, Mid, Side) use the same “silk” rendering quality as Peak:
+- same quadratic smoothing option
+- same rounded joins/caps
+- same multi-pass (glow+core) at least
+Peak can still get highlight pass; others can be glow+core only.
+
+NON-NEGOTIABLES
+- Render-only. Do not change FFT data or smoothing math.
+- No allocations in paint().
+- Minimal diffs.
+
+FILES ALLOWED
+- Source/ui/analyzer/RTADisplay.cpp
+- Source/ui/analyzer/RTADisplay.h (only if needed)
+
+IMPLEMENTER
+
+STEP 1 — Identify Peak draw path
+Find the exact function/branch where Peak is drawn:
+- drawSilkTrace(...)
+- useQuadraticSmoothing
+- buildTracePath with quadratic segments
+Record what Peak uses.
+
+STEP 2 — Make all other traces use the same path builder
+For each non-peak trace:
+- Ensure it uses the SAME path construction method as Peak (quadratic smoothing ON).
+- Ensure it uses the SAME stroke style: PathStrokeType(curved, rounded caps).
+
+STEP 3 — Apply silk stroke helper consistently
+If you have drawSilkTrace():
+- call it for RMS and all L/R/M/S/Mono traces too.
+- For non-peak traces: skip the highlight pass (or pass isPeak=false).
+
+STEP 4 — Confirm no per-frame allocations
+Paths must be:
+- stack paths OR member scratchPath cleared and rebuilt
+No vector resizing in paint.
+
+STOP and write IMPLEMENTER_RESULT.md with:
+- Which traces were changed to use the peak-style builder
+- Confirm paint does not allocate
+
+VERIFIER
+
+CHECK A
+Enable Side only + RMS only:
+- PASS if curves are rounded like Peak (no stair steps).
+
+CHECK B
+FFT sizes: 1024/2048/4096/8192:
+- PASS if smoothness consistent, no regression.
+
+Write VERIFIER_RESULT.md and STOP.

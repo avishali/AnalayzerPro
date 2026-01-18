@@ -26,6 +26,8 @@ ap::control::ParamIdMap ap::control::makeDefaultParamIdMap()
     m[ap::control::ControlId::AnalyzerWeighting] = "analyzerWeighting";
     m[ap::control::ControlId::ScopeChannelMode]  = "scopeChannelMode";
     m[ap::control::ControlId::MeterChannelMode]  = "meterChannelMode";
+    m[ap::control::ControlId::MeterPeakHold]     = "meterPeakHold";
+    m[ap::control::ControlId::ScopePeakHold]     = "scopePeakHold";
     
     return [m](ap::control::ControlId id) -> juce::String
     {

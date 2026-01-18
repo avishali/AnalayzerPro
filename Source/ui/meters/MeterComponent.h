@@ -33,6 +33,9 @@ public:
     
     // Explicitly reset the visual peak hold (linked reset support)
     void resetPeakHold();
+    
+    // Enable/disable true-freeze hold (independent from analyzer hold)
+    void setHoldEnabled (bool hold);
 
     // Callbacks for linked behavior
     std::function<void()> onClipReset;
@@ -63,12 +66,14 @@ private:
 
     float cachedPeakNorm_ = 0.0f;
     float cachedRmsNorm_  = 0.0f;
+    float maxPeakNorm_    = 0.0f;  // Normalized max peak for rendering hold marker
 
     // Max Holds for Numeric Display
     float maxPeakDb_ = -120.0f;
     float maxRmsDb_  = -120.0f;
 
     DisplayMode displayMode_ = DisplayMode::RMS;
+    bool holdEnabled_ = false; // True-freeze peak hold
 
     juce::Rectangle<int> labelArea_;
     juce::Rectangle<int> ledArea_;

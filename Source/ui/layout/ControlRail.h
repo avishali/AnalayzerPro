@@ -48,9 +48,11 @@ private:
     juce::ComboBox scopeModeCombo;
     juce::ComboBox scopeShapeCombo;
     juce::ComboBox scopeInputCombo; // New
+    juce::ToggleButton scopePeakHoldButton;
     
     // Meter Controls
     juce::ComboBox meterInputCombo; // New
+    juce::ToggleButton meterPeakHoldButton;
     
     // Section headers
     mdsp_ui::SectionHeader navigateHeader;
@@ -66,7 +68,9 @@ private:
     mdsp_ui::ChoiceRow scopeModeRow;
     mdsp_ui::ChoiceRow scopeShapeRow;
     mdsp_ui::ChoiceRow scopeInputRow; // New
+    mdsp_ui::ToggleRow scopePeakHoldRow;
     mdsp_ui::ChoiceRow meterInputRow; // New
+    mdsp_ui::ToggleRow meterPeakHoldRow;
     
     // Trace Toggles
     juce::ToggleButton showLrButton;

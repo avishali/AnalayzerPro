@@ -1,51 +1,5 @@
-PROMPTS/RUNBOOKS/SIDE_TRACE_SMOOTHING_AND_SMOOTHING_SWITCH_FIX_V1_VERIFIER.txt
-
-Mission ID: SIDE_TRACE_SMOOTHING_AND_SMOOTHING_SWITCH_FIX_V1
-
-Verifier Goal
-Confirm SIDE is smoothed when smoothing is enabled, and smoothing option switching is artifact-free.
-
-Code Verification
-	1.	SIDE smoothing wired
-
-	•	Find the smoothing application point.
-	•	Confirm SIDE passes through it when smoothing != Off.
-PASS if: SIDE uses smoothed buffer when smoothing enabled; raw buffer when Off.
-
-	2.	Smoothing change resets state
-
-	•	Confirm there is explicit handling when smoothing param changes:
-	•	reset smoothing processor state OR generation mechanism
-	•	invalidate caches for smoothed traces
-PASS if: change handling exists and affects SIDE at minimum.
-
-	3.	Render guards
-
-	•	Confirm renderer checks buffer sizes (numBins) and avoids drawing mismatched buffers.
-PASS if: no “use stale vector size” risk remains.
-
-Runtime Verification
-
-Test A — Side-only smoothing
-	•	Enable Side trace only.
-	•	Cycle smoothing options rapidly while audio plays.
-Expected:
-	•	SIDE remains visible, no partial curves, no vertical drop artifacts.
-
-Test B — Multi-trace smoothing switching
-	•	Enable several traces including Side.
-	•	Change smoothing options.
-Expected:
-	•	No trace corruption; all traces update coherently.
-
-Test C — FFT size + smoothing
-	•	With smoothing enabled, change FFT size 2048/4096/8192.
-Expected:
-	•	Side remains correct; no artifacts.
-
-Report
-Write VERIFIER_RESULT.md with PASS/FAIL for:
-	•	Side smoothing applied
-	•	Smoothing switch stability
-	•	FFT size interaction
-If FAIL: specify exact missing reset/guard and the minimal fix.
+Verification steps:
+1) Confirm RTADisplay.h no longer contains a by-value member of RenderConfigKey before the full struct definition.
+2) Clean build the standalone target (and any plugin targets if present).
+3) Confirm no other files were modified besides RTADisplay.h.
+Outcome must be PASS if build succeeds.

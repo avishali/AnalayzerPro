@@ -50,13 +50,33 @@ void MeterComponent::setLevels (float peakDb, float rmsDb, bool clipped)
     cachedRmsDb_  = rmsDb;
     cachedClip_   = clipped;
     
-    // Handle visual decay/hold
-    if (cachedPeakDb_ > maxPeakDb_) maxPeakDb_ = cachedPeakDb_;
-    if (cachedRmsDb_ > maxRmsDb_)   maxRmsDb_  = cachedRmsDb_;
+    // Handle visual hold: if holdEnabled_, only latch upward
+    if (holdEnabled_)
+    {
+        if (cachedPeakDb_ > maxPeakDb_) maxPeakDb_ = cachedPeakDb_;
+        if (cachedRmsDb_ > maxRmsDb_)   maxRmsDb_  = cachedRmsDb_;
+    }
+    else
+    {
+        // Live mode: max follows current (but still latches for this frame for display)
+        if (cachedPeakDb_ > maxPeakDb_) maxPeakDb_ = cachedPeakDb_;
+        if (cachedRmsDb_ > maxRmsDb_)   maxRmsDb_  = cachedRmsDb_;
+    }
     
     // Convert for rendering
     cachedPeakNorm_ = dbToNorm (cachedPeakDb_);
     cachedRmsNorm_  = dbToNorm (cachedRmsDb_);
+    maxPeakNorm_    = dbToNorm (maxPeakDb_);  // Track max for hold marker
+    
+    // Update numeric text display (same logic as updateFromAtomics)
+    auto formatDb = [] (float val) -> juce::String
+    {
+        if (!std::isfinite (val) || val <= -100.0f) return "-inf";
+        return juce::String (val, 1) + " dB";
+    };
+    
+    numericTextPeak_ = formatDb (maxPeakDb_);
+    numericTextRms_  = formatDb (maxRmsDb_);
     
     repaint();
 }
@@ -131,12 +151,32 @@ void MeterComponent::updateFromAtomics()
 
 void MeterComponent::resetPeakHold()
 {
-    if (peakDb_ && rmsDb_)
+    // Reset max hold to current instantaneous values
+    maxPeakDb_ = cachedPeakDb_;
+    maxRmsDb_  = cachedRmsDb_;
+    maxPeakNorm_ = cachedPeakNorm_;
+    
+    // Update numeric text
+    auto formatDb = [] (float val) -> juce::String
     {
-        maxPeakDb_ = peakDb_->load (std::memory_order_relaxed);
-        maxRmsDb_  = rmsDb_->load (std::memory_order_relaxed);
-        updateFromAtomics(); // Force update
-        repaint();
+        if (!std::isfinite (val) || val <= -100.0f) return "-inf";
+        return juce::String (val, 1) + " dB";
+    };
+    
+    numericTextPeak_ = formatDb (maxPeakDb_);
+    numericTextRms_  = formatDb (maxRmsDb_);
+    
+    repaint();
+}
+
+void MeterComponent::setHoldEnabled (bool hold)
+{
+    holdEnabled_ = hold;
+    
+    // When hold is disabled, reset to current live values
+    if (!holdEnabled_)
+    {
+        resetPeakHold();
     }
 }
 
@@ -300,6 +340,18 @@ void MeterComponent::paint (juce::Graphics& g)
                     xRight - m.strokeThick,
                     mainTop,
                     m.strokeMed);
+    }
+
+    // Max Peak Hold Marker (session maximum - resets on click)
+    if (maxPeakNorm_ > 0.001f)
+    {
+        const float maxPeakY = yMax - (maxPeakNorm_ * h);
+        g.setColour (theme.warning.withAlpha (0.9f));  // Yellow/orange for max hold
+        g.drawLine (xLeft + 1.0f,
+                    maxPeakY,
+                    xRight - 1.0f,
+                    maxPeakY,
+                    1.5f);
     }
 
     // Channel label

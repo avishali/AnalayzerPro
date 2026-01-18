@@ -26,6 +26,9 @@ public:
     
     enum class ChannelMode { Stereo, MidSide }; // 0=Stereo, 1=MidSide
     void setChannelMode (ChannelMode mode);
+    
+    // Enable/disable peak hold for both meters
+    void setHoldEnabled (bool hold);
 
     void paint (juce::Graphics&) override;
     void resized() override;

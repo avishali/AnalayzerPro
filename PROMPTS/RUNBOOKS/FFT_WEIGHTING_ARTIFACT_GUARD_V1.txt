@@ -1,0 +1,62 @@
+MISSION_ID: FFT_WEIGHTING_ARTIFACT_GUARD_V1
+
+GOAL
+Turning Weighting on/off must never draw a giant square/rectangle artifact.
+Renderer must:
+- clip strictly to plot rect
+- skip drawing any path containing non-finite points
+- invalidate/rebuild paths on weighting change
+
+NON-NEGOTIABLES
+- Render-only + guardrails. Do not change weighting math.
+- No allocations in paint().
+
+FILES ALLOWED
+- Source/ui/analyzer/RTADisplay.cpp
+- Source/ui/analyzer/AnalyzerDisplayView.cpp (only for invalidation on param change)
+
+IMPLEMENTER
+
+STEP 1 — Clip enforcement
+In paint(), before drawing traces:
+- g.saveState()
+- g.reduceClipRegion(plotRect)
+Draw traces
+- g.restoreState()
+
+Ensure glow pass is also clipped (glow often causes the “square”).
+
+STEP 2 — Invalidate paths on weighting change
+Where weighting param change is detected:
+- call invalidatePaths() (or bump pathGen as per Atomic Rebuild mission)
+So you never stroke old paths under new scaling.
+
+STEP 3 — Finite + bounds guards during path build
+When converting db->y and freq->x:
+- if (!std::isfinite(x) || !std::isfinite(y)) skip point
+- clamp db to [minDb, maxDb]
+After building the path:
+- if (!path.getBounds().isFinite() OR bounds width/height > 10x plotRect) then:
+  - discard path (clear) and mark pathsValid=false
+
+STEP 4 — Prevent -inf from log
+If any trace db array can contain -inf:
+- sanitize at ingest time: replace with minDb
+
+STOP and write IMPLEMENTER_RESULT.md with:
+- clip added
+- finite guards added
+- bounds sanity rule
+- invalidate-on-weighting-change path
+
+VERIFIER
+
+CHECK A
+Toggle Weighting None/A/BS.468 repeatedly:
+- PASS if no square artifact appears.
+
+CHECK B
+FFT 8192 + glow enabled:
+- PASS if glow stays inside plot and no artifacts.
+
+Write VERIFIER_RESULT.md and STOP.

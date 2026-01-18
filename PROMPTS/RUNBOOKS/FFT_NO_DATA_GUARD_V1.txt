@@ -1,0 +1,67 @@
+MISSION_ID: FFT_NO_DATA_GUARD_V1
+
+GOAL
+When opening the app with no audio yet:
+- Do NOT draw any FFT traces (Peak/RMS/L/R/Mid/Side/Mono).
+- No “slow drop to bottom”.
+- Once first valid spectrum frame arrives, rendering begins normally.
+
+NON-NEGOTIABLES
+- UI-only (no AnalyzerEngine changes unless absolutely required).
+- No allocations in paint().
+- Minimal diffs.
+
+FILES ALLOWED
+- Source/ui/analyzer/AnalyzerDisplayView.cpp
+- Source/ui/analyzer/RTADisplay.cpp
+- Source/ui/analyzer/RTADisplay.h (only if adding a boolean state)
+
+IMPLEMENTER
+
+STEP 1 — Add a valid-frame gate (single source of truth)
+Add in RTADisplay State (or equivalent):
+- bool hasValidSpectrumFrame = false;
+
+Set TRUE only when:
+- bins > 0
+- AND incoming trace buffer maxDb is finite AND > (minDb + 6 dB)  (simple “signal present” threshold)
+  (use Peak or RMS maxDb; whichever is already available at ingest time)
+
+Set FALSE when:
+- FFT meta invalid (bins=0, SR=0, etc)
+- Reset called (optional)
+
+STEP 2 — Apply gate at paint entry
+In RTADisplay::paint():
+- If !hasValidSpectrumFrame:
+  - Draw only the grid/background (whatever you already do)
+  - Do NOT draw any trace paths
+  - Return
+
+Do not show any debug overlay unless JUCE_DEBUG.
+
+STEP 3 — Ensure peak decay cannot be visible before first valid frame
+If any code path updates peak decay visualization without data:
+- Guard it behind hasValidSpectrumFrame
+
+STOP and write IMPLEMENTER_RESULT.md with:
+- Where gate is set true/false
+- Threshold used
+- Confirm startup shows no traces until audio
+
+VERIFIER
+
+CHECK A
+Launch standalone with no audio:
+- PASS if no traces are drawn and no “dropping line” occurs.
+
+CHECK B
+Start audio:
+- PASS if traces appear within 1–2 update ticks.
+
+CHECK C
+Stop audio:
+- PASS if traces either remain last valid (if your design) OR hide after threshold time (if implemented).
+No slow drift line.
+
+Write VERIFIER_RESULT.md and STOP.

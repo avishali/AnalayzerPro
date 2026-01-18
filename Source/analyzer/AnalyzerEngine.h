@@ -99,7 +99,7 @@ private:
     
     // Smoothing buffers (Power domain) - Legacy single-channel
     std::vector<float> smoothedMagnitude; // RMS State
-    std::vector<float> smoothedPeak;      // Peak State
+    // std::vector<float> smoothedPeak;      // Peak State (Removed in V2)
 
     // Multi-trace complex bin storage (for L/R channels)
     std::vector<float> fftOutputL;  // Complex FFT output for Left channel
@@ -140,8 +140,6 @@ private:
     // Ballistics Parameters (ms)
     float rmsAttackMs_ = 80.0f;
     float rmsReleaseMs_ = 250.0f;
-    float peakAttackMs_ = 10.0f;
-    float peakReleaseMs_ = 80.0f;
     float smoothingOctaves_ = 1.0f; // 0 = Off
     float peakDecayDbPerSec = 1.0f;
     bool peakHoldEnabled_ = true;  // Always enabled now (toggled by Hold logic)

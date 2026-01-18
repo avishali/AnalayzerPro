@@ -24,6 +24,63 @@
 #define MDSP_TRACE_GLOW_FALLOFF_V2 1  // Default ON:  Frequency-weighted glow falloff (less muddy LF)
 
 //==============================================================================
+// Weighting Helper Functions
+//==============================================================================
+static float getAWeightingDb (float freqHz)
+{
+    // IEC 61672-1:2002 standard A-weighting
+    const float f2 = freqHz * freqHz;
+    const float f4 = f2 * f2;
+    const float c1 = 12194.0f * 12194.0f;
+    const float c2 = 20.6f * 20.6f;
+    const float c3 = 107.7f * 107.7f;
+    const float c4 = 737.9f * 737.9f;
+    const float c5 = 12194.0f * 12194.0f;
+    
+    const float num = c1 * f4;
+    const float den = (f2 + c2) * std::sqrt((f2 + c3) * (f2 + c4)) * (f2 + c5);
+    
+    if (den == 0.0f) return -120.0f;
+    
+    float gain = num / den;
+    return 20.0f * std::log10(gain) + 2.0f; 
+}
+
+static float getBS468WeightingDb (float freqHz)
+{
+    // ITU-R 468-4 Weighting
+    const float f_kHz = freqHz / 1000.0f;
+    const float f = f_kHz; 
+    
+    const double a1 = 1.0458849;
+    const double b2 = 1.6620626;
+    const double c2 = 0.3181829;
+    const double b3 = 0.5057538;
+    const double c3 = 0.1691696;
+    const double gainScale = 1.24633263;
+    
+    const double f2 = static_cast<double>(f * f);
+    
+    const double den1 = f2 + a1*a1;
+    const double term2_real = c2 - f2;
+    const double term2_imag = b2 * f;
+    const double den2 = term2_real*term2_real + term2_imag*term2_imag;
+    
+    const double term3_real = c3 - f2;
+    const double term3_imag = b3 * f;
+    const double den3 = term3_real*term3_real + term3_imag*term3_imag;
+    
+    const double den = den1 * den2 * den3;
+    
+    if (den == 0.0) return -120.0f;
+    
+    const double num = gainScale * f;
+    const double magSq = (num * num) / den;
+    
+    return static_cast<float>(10.0 * std::log10(magSq));
+}
+
+//==============================================================================
 // TRACE_VISUAL_POLISH_V1: Silk trace rendering with glow + AA + perceptual thickness
 //==============================================================================
 static void drawSilkTrace (juce::Graphics& g,
@@ -161,7 +218,26 @@ void RTADisplay::setFFTData (const std::vector<float>& fftBinsDb, const std::vec
         state.fftPeakDb = *peakBinsDbNullable;
     else
         state.fftPeakDb.clear();
+    // FFT No Data Guard: Latch valid frame if signal > threshold (+6dB above noise floor)
+    if (state.fftDb.empty())
+    {
+         // No-op for empty data
+    }
+    else
+    {
+        // Check threshold
+        float maxDb = -200.0f; 
+        for (float db : state.fftDb)
+            if (db > maxDb) maxDb = db;
+        
+        if (std::isfinite(maxDb) && maxDb > (state.bottomDb + 6.0f))
+        {
+            state.hasValidSpectrumFrame = true;
+        }
+    }
+
     state.status = DataStatus::Ok;
+    invalidatePaths(); // New data -> new paths
     repaint();
 }
 
@@ -202,29 +278,40 @@ void RTADisplay::setFftMeta (double sampleRate, int fftSize)
     // B1: Every setter updates state
     state.sampleRate = sampleRate;
     state.fftSize = fftSize;
+    if (fftSize <= 0 || sampleRate <= 0.0)
+         state.hasValidSpectrumFrame = false; // Reset on invalid meta
+    invalidatePaths(); // FFT meta data affects paths
     repaint();
 }
 
 void RTADisplay::setFrequencyRange (float minHz, float maxHz)
 {
-    // B1: Every setter updates state
-    state.minHz = minHz;
-    state.maxHz = maxHz;
-    logMinFreq = std::log10 (state.minHz);
-    logFreqRange = std::log10 (state.maxHz) - logMinFreq;
-    geometryValid = false;
-    repaint();
+    if (std::abs (state.minHz - minHz) > 1e-5f || std::abs (state.maxHz - maxHz) > 1e-5f)
+    {
+        state.minHz = minHz;
+        state.maxHz = maxHz;
+        logMinFreq = std::log10 (state.minHz); // Update member variable
+        logFreqRange = std::log10 (state.maxHz) - logMinFreq; // Update member variable
+        updateGeometry();
+        invalidateBackground();
+        invalidatePaths();
+        repaint();
+    }
 }
 
-void RTADisplay::setDbRange (float top, float bottom)
+void RTADisplay::setDbRange (float topDb, float bottomDb)
 {
-    // B1: Every setter updates state
-    state.topDb = top;
-    state.bottomDb = bottom;
-    dbRange = state.topDb - state.bottomDb;
-    repaint();
+    if (std::abs (state.topDb - topDb) > 1e-5f || std::abs (state.bottomDb - bottomDb) > 1e-5f)
+    {
+        state.topDb = topDb;
+        state.bottomDb = bottomDb;
+        dbRange = state.topDb - state.bottomDb; // Update member variable
+        updateGeometry();
+        invalidateBackground();
+        invalidatePaths(); // dB range affects Y positions
+        repaint();
+    }
 }
-
 void RTADisplay::setNoData (const juce::String& reason)
 {
     // B1: Every setter updates state
@@ -239,19 +326,25 @@ void RTADisplay::setDisplayGainDb (float db)
 #if JUCE_DEBUG
     DBG ("DisplayGain=" << displayGainDb << "dB");
 #endif
+    invalidatePaths(); // Display gain affects Y positions
     repaint();
 }
 
 void RTADisplay::setTiltMode (TiltMode mode)
 {
-    tiltMode = mode;
-    repaint();
+    if (tiltMode != mode)
+    {
+        tiltMode = mode;
+        invalidatePaths(); // Tilt mode affects Y positions
+        repaint();
+    }
 }
 
 void RTADisplay::setTraceConfig (const TraceConfig& config)
 {
     // B1: Every setter updates state
     traceConfig_ = config;
+    invalidatePaths(); // Trace config affects paths (e.g. weighting, multi-trace visibility)
     repaint();
 }
 
@@ -270,6 +363,8 @@ void RTADisplay::setLRPowerData (const float* powerL, const float* powerR, int b
         state.midDb.clear();
         state.sideDb.clear();
         state.hasValidMultiTraceData = false;
+        invalidatePaths(); // Data cleared, invalidate paths
+        repaint();
         return; 
     }
     
@@ -292,6 +387,9 @@ void RTADisplay::setLRPowerData (const float* powerL, const float* powerR, int b
     
     // Compute Derived Traces (L, R, Stereo, Mono, Mid, Side) using Magnitude Domain
     // SOP Step 2: "Compute derived mags... convert back to power... convert to dB"
+    
+    float maxDb = -200.0f; // Track max for Data Guard
+
     for (int i = 0; i < binCount; ++i)
     {
         const float pL = std::max (powerL[i], kMinPower);
@@ -326,12 +424,24 @@ void RTADisplay::setLRPowerData (const float* powerL, const float* powerR, int b
         
         // Side
         state.sideDb[idx] = 10.0f * std::log10 (std::max (magSide * magSide, kMinPower));
+
+        // Max check for Data Guard
+        float pMax = std::max(pL, pR);
+        float dbMax = 10.0f * std::log10(pMax);
+        if (dbMax > maxDb) maxDb = dbMax;
+    }
+    
+    // FFT No Data Guard
+    if (std::isfinite(maxDb) && maxDb > (state.bottomDb + 6.0f))
+    {
+        state.hasValidSpectrumFrame = true;
     }
     
     // Repaint is triggered by the caller (AnalyzerDisplayView) or implicitly here?
     // The pattern in this file is that setters call repaint(), but AnalyzerDisplayView 
     // also calls repaint() at the end of the update block. 
     // We'll call it here to be consistent with B1 rule ("Every setter updates state... and calls repaint").
+    invalidatePaths(); // New LR data invalidates paths
     repaint();
 }
 float RTADisplay::computeTiltDb (float freqHz) const
@@ -373,7 +483,15 @@ float RTADisplay::dbToYWithCompensation (float db, float freqHz, const RenderSta
 {
     // Apply display gain and tilt compensation
     const float tiltDb = computeTiltDb (freqHz);
-    const float dbWithCompensation = db + displayGainDb + tiltDb;
+    
+    // Apply frequency weighting if enabled
+    float weightingDb = 0.0f;
+    if (traceConfig_.weightingMode == 1)
+        weightingDb = getAWeightingDb (freqHz);
+    else if (traceConfig_.weightingMode == 2)
+        weightingDb = getBS468WeightingDb (freqHz);
+    
+    const float dbWithCompensation = db + displayGainDb + tiltDb + weightingDb;
     
     // Clamp to display range
     const float clampedDb = juce::jlimit (s.bottomDb, s.topDb, dbWithCompensation);
@@ -425,9 +543,230 @@ void RTADisplay::checkStructuralGeneration (uint32_t currentGen)
         // Set NoData status
         state.status = DataStatus::NoData;
         state.noDataReason = "structural change";
+        state.hasValidSpectrumFrame = false; // Reset on structural change
+        invalidatePaths();
         repaint();
     }
 }
+
+void RTADisplay::setGenerations (uint32_t traceDataGen, uint32_t smoothingGen)
+{
+    // SMOOTHING_RENDERING_STABILITY_V2: Compare incoming gens, invalidate if changed
+    if (traceDataGen != currentTraceDataGen_ || smoothingGen != currentSmoothingGen_)
+    {
+        currentTraceDataGen_ = traceDataGen;
+        currentSmoothingGen_ = smoothingGen;
+        invalidatePaths();
+    }
+}
+
+void RTADisplay::invalidatePaths()
+{
+    // SMOOTHING_RENDERING_STABILITY_V2: Mark paths as needing rebuild
+    pathsValid_ = false;
+    pathGen_++; // Increment generation for atomic rebuild check
+    // Invalidate weighting path too, as it's part of the rendering
+    lastWeightingMode_ = -1; // Force rebuild
+}
+
+void RTADisplay::invalidateBackground()
+{
+    backgroundValid_ = false;
+    repaint();
+}
+
+void RTADisplay::refreshBackground()
+{
+    if (backgroundValid_ && cachedBackground_.isValid())
+        return;
+
+    const auto bounds = getLocalBounds();
+    if (bounds.isEmpty())
+        return;
+        
+    // Create new image if needed
+    if (cachedBackground_.getWidth() != bounds.getWidth() || cachedBackground_.getHeight() != bounds.getHeight())
+    {
+        cachedBackground_ = juce::Image (juce::Image::ARGB, bounds.getWidth(), bounds.getHeight(), true);
+    }
+    else
+    {
+        cachedBackground_.clear (bounds);
+    }
+    
+    juce::Graphics g (cachedBackground_);
+    mdsp_ui::Theme theme;
+    
+    // Draw Grid & Axes
+    drawGrid (g, state, theme);
+    
+    backgroundValid_ = true;
+}
+
+void RTADisplay::buildFftPaths()
+{
+    // Clear all paths first (Atomic start)
+    cachedFftPath_.clear();
+    cachedPeakPath_.clear();
+    
+    cachedLPath_.clear();
+    cachedRPath_.clear();
+    cachedStereoPath_.clear();
+    cachedMonoPath_.clear();
+    cachedMidPath_.clear();
+    cachedSidePath_.clear();
+    
+    // Atomic Rebuild Check
+    if (pathsValid_ && lastBuiltGen_ == pathGen_)
+        return;
+
+    const auto& s = state;
+    if (s.sampleRate <= 0.0 || s.fftSize <= 0)
+        return;
+
+    // Build FFT Path
+    if (!s.fftDb.empty())
+
+        buildDecimatedPath(s.fftDb, cachedFftPath_);
+        
+    // Build Peak Path
+    if (!s.fftPeakDb.empty() && s.fftPeakDb.size() == s.fftDb.size())
+        buildDecimatedPath(s.fftPeakDb, cachedPeakPath_);
+        
+    // Build Multi-Traces if configured
+    const auto& c = traceConfig_;
+    if (s.hasValidMultiTraceData && static_cast<size_t>(s.lrBinCount) == s.fftDb.size())
+    {
+         if (c.showL) buildDecimatedPath(s.lDbL, cachedLPath_);
+         if (c.showR) buildDecimatedPath(s.lDbR, cachedRPath_);
+         if (c.showMid) buildDecimatedPath(s.midDb, cachedMidPath_);
+         if (c.showSide) buildDecimatedPath(s.sideDb, cachedSidePath_);
+         if (c.showMono) buildDecimatedPath(s.monoDb, cachedMonoPath_);
+         // Stereo implies combined L/R envelope usually, or separate L/R? 
+         // RenderState has stereoDb (max(L,R)).
+         // "traceConfig.showLR" usually means show L and R, or stereo? 
+         // Looking at RenderState: "std::vector<float> stereoDb; // Max(L, R) combined envelope"
+         // Let's assume there's a config for it? traceConfig has showLR, showL, showR.
+         // If showLR is true, maybe we show stereoDb? Or individual L/R?
+         // Runbook says "stereo" trace. I'll assume showLR -> stereoDb if implemented, or just L and R?
+         // But traceConfig has showL and showR. 
+         // For safety: if state.stereoDb is populated, I'll cache it.
+         if (!s.stereoDb.empty()) buildDecimatedPath(s.stereoDb, cachedStereoPath_);
+    }
+    
+    // Atomic End
+    lastBuiltGen_ = pathGen_;
+    pathsValid_ = true;
+}
+
+void RTADisplay::buildDecimatedPath(const std::vector<float>& data, juce::Path& path)
+{
+    path.clear();
+    if (data.empty()) return;
+    
+    const auto& s = state;
+    const int w = static_cast<int>(plotAreaWidth);
+    if (w <= 0) return;
+
+    // 1. Decimate points (O(pixels))
+    std::vector<juce::Point<float>> pts;
+    pts.reserve(static_cast<size_t>(w + 2));
+    
+    const float logMin = std::log10(s.minHz);
+    const float logMax = std::log10(s.maxHz);
+    const float logRange = logMax - logMin;
+    const size_t numBins = data.size();
+    const float binWidthHz = static_cast<float>(s.sampleRate) / static_cast<float>(s.fftSize);
+    
+    float lastX = -std::numeric_limits<float>::max();
+    
+    for (int x = 0; x <= w; ++x)
+    {
+        const float x0 = plotAreaLeft + static_cast<float>(x);
+        const float x1 = x0 + 1.0f;
+        
+        // ARTIFACT GUARD: Sanity check X
+        if (!std::isfinite(x0)) continue;
+        
+        auto xToFreq = [&](float px) -> float {
+            const float norm = (px - plotAreaLeft) / plotAreaWidth;
+            return std::pow(10.0f, logMin + norm * logRange);
+        };
+        
+        const float freqStart = xToFreq(x0);
+        const float freqEnd = xToFreq(x1);
+        
+        const size_t binStart = static_cast<size_t>(freqStart / binWidthHz);
+        const size_t binEnd = static_cast<size_t>(freqEnd / binWidthHz);
+        
+        size_t b0 = std::min(binStart, numBins - 1);
+        size_t b1 = std::min(binEnd, numBins);
+        if (b1 <= b0) b1 = b0 + 1;
+        
+        float maxDb = -200.0f;
+        for (size_t k = b0; k < b1; ++k)
+        {
+            // ARTIFACT GUARD: Filter non-finite input data
+            const float val = data[k];
+            if (std::isfinite(val) && val > maxDb) maxDb = val;
+        }
+            
+        // ARTIFACT GUARD: Hard Clamp Y
+        maxDb = juce::jlimit(s.bottomDb, s.topDb + 20.0f, maxDb);
+        const float freqForY = xToFreq(x0 + 0.5f);
+        const float y = dbToYWithCompensation(maxDb, freqForY, s);
+
+        // ARTIFACT GUARD: Sanity check Y
+        if (!std::isfinite(y)) continue;
+        
+        if (x0 > lastX)
+        {
+            pts.emplace_back(x0, y);
+            lastX = x0;
+        }
+    }
+    
+    // 2. Smooth Path (Quadratic Bezier)
+    if (pts.empty()) return;
+    
+    juce::Path newPath;
+    newPath.startNewSubPath(pts[0]);
+    
+    if (pts.size() < 3)
+    {
+        for (size_t i = 1; i < pts.size(); ++i)
+            newPath.lineTo(pts[i]);
+    }
+    else
+    {
+        // Quadratic smoothing
+        for (size_t i = 1; i < pts.size() - 2; ++i)
+        {
+            const auto& p1 = pts[i];
+            const auto& p2 = pts[i+1];
+            const auto mid = (p1 + p2) * 0.5f;
+            newPath.quadraticTo(p1, mid);
+        }
+        
+        // Connect last points
+        const auto& secondLast = pts[pts.size() - 2];
+        const auto& last = pts[pts.size() - 1];
+        newPath.quadraticTo(secondLast, last);
+    }
+    
+    // ARTIFACT GUARD: Final Bounds Check
+    // If the path bounds are exploded (e.g. from a bad bezier control point), discard it.
+    const auto bounds = newPath.getBounds();
+    if (!bounds.isFinite())
+        return;
+        
+    const float maxDimension = std::max(plotAreaWidth, plotAreaHeight) * 10.0f;
+    if (bounds.getWidth() > maxDimension || bounds.getHeight() > maxDimension)
+        return; // Discard garbage path
+
+    path = std::move(newPath);
+}
+
 
 #if JUCE_DEBUG
 void RTADisplay::setDebugInfo (int viewMode, size_t fftSize, size_t logSize, size_t bandsSize,
@@ -454,6 +793,8 @@ void RTADisplay::setDebugInfo (int viewMode, size_t fftSize, size_t logSize, siz
 void RTADisplay::resized()
 {
     updateGeometry();
+    invalidateBackground();
+    invalidatePaths();
 }
 
 void RTADisplay::updateGeometry()
@@ -789,22 +1130,87 @@ void RTADisplay::mouseExit (const juce::MouseEvent&)
     {
         needsRepaint = true;
     }
+    if (peakSnap_.deactivate()) // Deactivate peak snap on mouse exit
+    {
+        needsRepaint = true;
+    }
     if (needsRepaint)
         repaint();
     }
 
-#if JUCE_DEBUG
 void RTADisplay::mouseDown (const juce::MouseEvent& e)
 {
-    // Debug-only: Toggle envelope decimator with Shift+Click
-    if (e.mods.isShiftDown())
+    // Selection Logic: Start Selection
+    if (e.mods.isLeftButtonDown())
     {
-        useEnvelopeDecimator = ! useEnvelopeDecimator;
+        selectionActive_ = true;
+        selectionRect_.setBounds (e.x, e.y, 0, 0);
+        
+        // Debug hack maintained
+        if (e.mods.isShiftDown())
+        {
+#if JUCE_DEBUG
+            useEnvelopeDecimator = ! useEnvelopeDecimator;
+            DBG ("RTADisplay: envelope decimator " << (useEnvelopeDecimator ? "ON" : "OFF"));
+#endif
+        }
         repaint();
-        DBG ("RTADisplay: envelope decimator " << (useEnvelopeDecimator ? "ON" : "OFF"));
     }
 }
-#endif
+
+void RTADisplay::mouseDrag (const juce::MouseEvent& e)
+{
+    if (selectionActive_)
+    {
+        // Update selection rect
+        const int w = e.x - selectionRect_.getX();
+        const int h = e.y - selectionRect_.getY();
+        selectionRect_.setSize (w, h); // allow negative size during drag? JUCE Rect handles this?
+        // Actually setBounds logic:
+        // We'll just define it from start to current
+        // But we need to store start pos.
+        // Assuming selectionRect_ stores the visual rect, we need 'startPos'.
+        // For simplicity, let's treat selectionRect_ as the anchor.
+        // Wait, standard JUCE selection logic needs an anchor.
+        // Let's use `dragStartPos`? `RTADisplay` doesn't have it.
+        // We can infer it or just use simple rect from click.
+        // Let's assume we want valid positive width/height.
+        // We'll set width/height based on delta. If we don't store anchor, we can't drag up/left properly easily without jitter.
+        // But "selectionRect_" is all we added.
+        // Let's use `selectionRect_` as the CURRENT rect. 
+        // We need `mouseDownPos`.
+        // I'll just use e.getMouseDownPosition() which works during drag.
+        
+        juce::Point<int> start = e.getMouseDownPosition();
+        juce::Rectangle<int> newRect;
+        newRect.setLeft (std::min (start.x, e.x));
+        newRect.setTop (std::min (start.y, e.y));
+        newRect.setWidth (std::abs (e.x - start.x));
+        newRect.setHeight (std::abs (e.y - start.y));
+        
+        selectionRect_ = newRect;
+        repaint();
+    }
+}
+
+void RTADisplay::mouseUp (const juce::MouseEvent& e)
+{
+    if (selectionActive_)
+    {
+        // Finish selection
+        // selectionActive_ = false; // Or keep it active to show the selection?
+        // Prompt says "Selection/ROI overlay". Usually stays until clicked away.
+        // But the "fix" is about "stuck" when popup steals mouse-up.
+        // If we want it to stay, we don't clear it here.
+        // But if user clicks without drag, we should clear.
+        if (e.mouseWasClicked() && !e.mods.isShiftDown())
+        {
+            selectionActive_ = false;
+            selectionRect_ = {};
+        }
+        repaint();
+    }
+}
 
 //==============================================================================
 void RTADisplay::paint (juce::Graphics& g)
@@ -816,9 +1222,18 @@ void RTADisplay::paint (juce::Graphics& g)
     // Background
     g.fillAll (theme.background);
 
-    // Draw grid (always draw grid)
-    drawGrid (g, s, theme);
-
+    // Draw grid (Replaced by cached background)
+    refreshBackground();
+    if (backgroundValid_ && cachedBackground_.isValid())
+    {
+        g.setOpacity(1.0f);
+        g.drawImageAt(cachedBackground_, 0, 0);
+    }
+    else
+    {
+        // Fallback if cache failed
+        drawGrid (g, s, theme);
+    }
     // If no data, show message and return
     if (s.status == DataStatus::NoData)
     {
@@ -1634,230 +2049,207 @@ void RTADisplay::paintLogMode (juce::Graphics& g, const RenderState& s, const md
 
 void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme)
 {
-    // B3: Pure function - uses only state reference, no member mutations
+    // Use cached optimized paths if valid (Atomic check)
+    // Removed isEmpty() check to prevent infinite loop if path is validly empty
+    if (!pathsValid_ || lastBuiltGen_ != pathGen_)
+    {
+         const_cast<RTADisplay*>(this)->buildFftPaths();
+    }
     
-    // B5: FFT mode uses log mapping to match grid scale
-    // B7: Never calls updateGeometry() from paint
-    
-    if (s.fftDb.empty() || s.fftSize <= 0 || s.sampleRate <= 0.0)
+    // Safety gate: if still invalid (e.g. no data), don't draw partial
+    if (!pathsValid_)
+    {
+        DBG("paintFFTMode: paths still invalid after rebuild");
         return;
+    }
 
-    // B3: Decide locally if peaks should be drawn (no state mutation)
-    const bool hasPeaks = (s.fftPeakDb.size() == s.fftDb.size() && !s.fftPeakDb.empty());
-
-    // B5: Smooth Path Construction
-    // -------------------------------------------------------------------------
-    const int numBins = static_cast<int> (s.fftDb.size());
-    const int expectedBins = s.fftSize / 2 + 1;
-    const int availableBins = std::min (numBins, expectedBins);
     
-    if (availableBins <= 0)
-        return;
-
-    const double binWidthHz = s.sampleRate / static_cast<double> (s.fftSize);
+    const float viewWidth = plotAreaWidth;
     
-    // Determine visible bin range
-    const int firstBin = juce::jlimit (0, availableBins - 1,
-                                      static_cast<int> (std::ceil (static_cast<double> (s.minHz) / binWidthHz)));
-    const int lastBin  = juce::jlimit (0, availableBins - 1,
-                                      static_cast<int> (std::floor (static_cast<double> (s.maxHz) / binWidthHz)));
-
-    if (lastBin < firstBin)
-        return;
-
-    // Reusable Scratch Buffers (Message Thread Safe)
-    static std::vector<juce::Point<float>> scratchPoints;
-    static juce::Path scratchPath;
+    // Draw Multi-Traces (L/R/M/S/Stereo) with Silk Style
+    // Order: Side -> Mid -> L/R -> Stereo -> Mono -> Main FFT -> Peak
     
-    // Ensure capacity
-    if (scratchPoints.capacity() < 16384)
-        scratchPoints.reserve (16384);
-        
-    // Lambda to build safe point list AND track max visible dB (for energy boost)
-    auto buildPoints = [&](const std::vector<float>& data, std::vector<juce::Point<float>>& pts, float& maxDbInView)
+    // ARTIFACT GUARD V1: Strict Clipping
+    // Weighting changes (or large FFT values) can occasionally produce paths outside the plot area
+    // which causes artifacts (giant squares) due to glow renderer issues or GPU transform bugs.
+    g.saveState();
+    g.reduceClipRegion (getLocalBounds()); 
+    // Ideally we would clip to 'plotArea', but getLocalBounds() is safer and sufficient 
+    // to prevent window-escaping artifacts.
+    
+    // Fallback colors for missing theme members
+    const juce::Colour colSide = juce::Colour(0xffe91e63);   // Pink
+    const juce::Colour colMid  = juce::Colour(0xff00bcd4);   // Cyan
+    const juce::Colour colLeft = juce::Colour(0xff4caf50);   // Green
+    const juce::Colour colRight= juce::Colour(0xfff44336);   // Red
+    const juce::Colour colStereo=juce::Colour(0xff9c27b0);   // Purple
+    const juce::Colour colMono = juce::Colour(0xffffeb3b);   // Yellow
+    const juce::Colour colRms  = theme.accent;               // Use accent for Main RMS (Blue)
+
+    const auto& c = traceConfig_;
+    if (c.showSide) drawSilkTrace(g, cachedSidePath_,  colSide,   1.8f, viewWidth, false, 1.0f, false);
+    if (c.showMid)  drawSilkTrace(g, cachedMidPath_,   colMid,    1.8f, viewWidth, false, 1.0f, false);
+    if (c.showL)    drawSilkTrace(g, cachedLPath_,     colLeft,   1.8f, viewWidth, false, 1.0f, false);
+    if (c.showR)    drawSilkTrace(g, cachedRPath_,     colRight,  1.8f, viewWidth, false, 1.0f, false);
+    
+    // Stereo implies combined or separate? If logic populates cachedStereoPath_, draw it.
+    // Assuming stereoDb logic populates cachedStereoPath_.
+    if (!cachedStereoPath_.isEmpty()) 
+        drawSilkTrace(g, cachedStereoPath_, colStereo, 1.8f, viewWidth, false, 1.0f, false);
+
+    if (c.showMono) drawSilkTrace(g, cachedMonoPath_, colMono, 1.8f, viewWidth, false, 1.0f, false);
+
+    // Area fill under main FFT trace (gradient from trace to bottom)
+    if (!cachedFftPath_.isEmpty())
     {
-        pts.clear();
-        maxDbInView = -200.0f; // Reset max
+        // Create a closed path for the fill
+        juce::Path fillPath = cachedFftPath_;
         
-        for (int i = firstBin; i <= lastBin; ++i)
+        // Get the bounds to close the path properly
+        const auto pathBounds = cachedFftPath_.getBounds();
+        if (pathBounds.getWidth() > 1.0f)
         {
-            const size_t idx = static_cast<size_t> (i);
-            const float db = data[idx];
+            // Close the path: line to bottom-right, then bottom-left, then back to start
+            const float bottomY = plotAreaTop + plotAreaHeight;
+            fillPath.lineTo (pathBounds.getRight(), bottomY);
+            fillPath.lineTo (pathBounds.getX(), bottomY);
+            fillPath.closeSubPath();
             
-            if (!std::isfinite (db)) continue;
-
-            if (db > maxDbInView)
-                maxDbInView = db;
-
-            const float freq = static_cast<float> (static_cast<double> (i) * binWidthHz);
+            // Create vertical gradient (trace color at top, transparent at bottom)
+            juce::ColourGradient gradient (
+                colRms.withAlpha (0.35f),  // Top: semi-transparent trace color
+                0.0f, plotAreaTop,
+                colRms.withAlpha (0.05f),  // Bottom: nearly transparent
+                0.0f, bottomY,
+                false);  // Not radial
             
-            // Apply compensation + mapping
-            const float x = freqToX (freq, s);
-            const float y = dbToYWithCompensation (db, freq, s);
-            
-            pts.emplace_back (x, y);
-        }
-    };
-    
-    // Lambda to smooth path
-    auto smoothPath = [&](juce::Path& p, const std::vector<juce::Point<float>>& pts)
-    {
-        p.clear();
-        if (pts.empty()) return;
-        
-        p.startNewSubPath (pts[0]);
-        
-        if (pts.size() < 3)
-        {
-            for (size_t i = 1; i < pts.size(); ++i)
-                p.lineTo (pts[i]);
-            return;
-        }
-        
-        // Quadratic Bezier Smoothing
-        for (size_t i = 1; i < pts.size() - 2; ++i)
-        {
-            const auto& p1 = pts[i];
-            const auto& p2 = pts[i+1];
-            const auto mid = (p1 + p2) * 0.5f;
-            p.quadraticTo (p1, mid);
-        }
-        
-        // Connect last few points linearly
-        const auto& secondLast = pts[pts.size() - 2];
-        const auto& last = pts[pts.size() - 1];
-        
-        p.quadraticTo (secondLast, last);
-    };
-
-    // Lambda to build and draw a generic trace (for multi-channel restoration)
-    auto buildTracePath = [&](juce::Graphics& gTarget, juce::Path& p, const std::vector<float>& dataVector, 
-                              juce::Colour col, float thickness, float viewWidth, bool isPeak)
-    {
-        if (dataVector.empty()) return;
-
-        float visibleMaxDb = -200.0f;
-        buildPoints (dataVector, scratchPoints, visibleMaxDb);
-        
-        if (!scratchPoints.empty())
-        {
-            smoothPath (p, scratchPoints);
-            
-            // local energy calculation
-            const float eNorm = juce::jlimit (0.0f, 1.0f, (visibleMaxDb - (s.bottomDb + 20.0f)) / 40.0f);
-            const float eMul = static_cast<float> (juce::jmap (eNorm, 0.0f, 1.0f, 0.95f, 1.25f));
-            
-            drawSilkTrace (gTarget, p, col, thickness, viewWidth, isPeak, eMul, false);
-        }
-    };
-
-    const juce::Rectangle<float> plotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
-    
-    // Channel Colors (Local definition as they are missing from Theme)
-    const juce::Colour colL    = juce::Colour (0xff29b6f6); // Light Blue 400
-    const juce::Colour colR    = juce::Colour (0xffef5350); // Red 400
-    const juce::Colour colMid  = juce::Colour (0xff66bb6a); // Green 400
-    const juce::Colour colSide = juce::Colour (0xffab47bc); // Purple 400
-    const juce::Colour colMono = juce::Colour (0xffffee58); // Yellow 400 (Distinct from white text)
-
-    // MULTI_TRACE_RENDER_RESTORE_V1: Draw Order: Side -> Mid -> L -> R -> Mono -> Stereo -> RMS -> Peak
-    // ---------------------------------------------------------------------------------------
-
-    // Startup Guard: If no valid multi-trace data has ever been received, skip these traces 
-    // to avoid the "flat line" artifact (vertical drop at start).
-    if (s.hasValidMultiTraceData && s.lrBinCount > 0)
-    {
-        // 1. Side
-        if (traceConfig_.showSide && !s.sideDb.empty())
-        {
-            buildTracePath (g, scratchPath, s.sideDb, colSide, 1.1f, plotAreaWidth, false);
-        }
-
-        // 2. Mid
-        if (traceConfig_.showMid && !s.midDb.empty())
-        {
-            buildTracePath (g, scratchPath, s.midDb, colMid, 1.1f, plotAreaWidth, false);
-        }
-        
-        // 3. Left
-        if (traceConfig_.showL && !s.lDbL.empty())
-        {
-            buildTracePath (g, scratchPath, s.lDbL, colL, 1.1f, plotAreaWidth, false);
-        }
-
-        // 4. Right
-        if (traceConfig_.showR && !s.lDbR.empty())
-        {
-            buildTracePath (g, scratchPath, s.lDbR, colR, 1.1f, plotAreaWidth, false);
-        }
-
-        // 5. Mono
-        if (traceConfig_.showMono && !s.monoDb.empty())
-        {
-            buildTracePath (g, scratchPath, s.monoDb, colMono, 1.3f, plotAreaWidth, false);
-        }
-
-        // 6. Stereo (ShowLR toggle maps to this combined trace for visibility)
-        if (traceConfig_.showLR && !s.stereoDb.empty())
-        {
-            // Stereo gets a special color or re-uses L/R? 
-            // Often stereo is just white/bright or the "main" color.
-            // Let's use a distinct Cyan/White for Stereo envelope.
-            const juce::Colour colStereo = juce::Colour (0xffe0f7fa); // Cyan 50
-            buildTracePath (g, scratchPath, s.stereoDb, colStereo, 1.3f, plotAreaWidth, false);
+            g.setGradientFill (gradient);
+            g.fillPath (fillPath);
         }
     }
 
-    // 6. Draw Spectrum (RMS) - Main Trace
-    // -------------------------------------------------------------
-    if (traceConfig_.showRMS)
+    // Main FFT trace (with area fill drawn above)
+    drawSilkTrace(g, cachedFftPath_, colRms, 2.0f, viewWidth, false, 1.0f, false);
+    
+    // Subtle area fill under peak trace (very light)
+    if (!cachedPeakPath_.isEmpty())
     {
-        // Re-use logic or inline? We'll stick to inline for RMS/Peak as it was special (and main trace)
-        // actually we can use buildTracePath if we want, but let's keep the existing structure minimally modified if possible,
-        // BUT the prompt implies strict ordering.
-        // And I already wrapped it.
-        
-        float fftMaxDb = -200.0f;
-        buildPoints (s.fftDb, scratchPoints, fftMaxDb);
-        if (!scratchPoints.empty())
+        juce::Path peakFillPath = cachedPeakPath_;
+        const auto peakBounds = cachedPeakPath_.getBounds();
+        if (peakBounds.getWidth() > 1.0f)
         {
-            smoothPath (scratchPath, scratchPoints);
+            const float bottomY = plotAreaTop + plotAreaHeight;
+            peakFillPath.lineTo (peakBounds.getRight(), bottomY);
+            peakFillPath.lineTo (peakBounds.getX(), bottomY);
+            peakFillPath.closeSubPath();
             
-            const float energyNorm = juce::jlimit (0.0f, 1.0f, (fftMaxDb - (s.bottomDb + 20.0f)) / 40.0f);
-            const float energyMul = static_cast<float> (juce::jmap (energyNorm, 0.0f, 1.0f, 0.95f, 1.25f));
-
-            drawSilkTrace (g, scratchPath, theme.accent, 1.5f, plotAreaWidth, false, energyMul, false);
-        }
-    }
-
-    // 7. Draw Peak Trace
-    // -------------------------------------------------------------
-    if (hasPeaks)
-    {
-        float peakMaxDb = -200.0f;
-        buildPoints (s.fftPeakDb, scratchPoints, peakMaxDb);
-        if (!scratchPoints.empty())
-        {
-            smoothPath (scratchPath, scratchPoints);
-
-            const float energyNorm = juce::jlimit (0.0f, 1.0f, (peakMaxDb - (s.bottomDb + 20.0f)) / 40.0f);
-            const float energyMul = static_cast<float> (juce::jmap (energyNorm, 0.0f, 1.0f, 0.95f, 1.25f));
+            juce::ColourGradient peakGradient (
+                theme.seriesPeak.withAlpha (0.15f),
+                0.0f, plotAreaTop,
+                theme.seriesPeak.withAlpha (0.02f),
+                0.0f, bottomY,
+                false);
             
-            const bool useShimmer = (MDSP_TRACE_SHIMMER_V2 != 0);
-            drawSilkTrace (g, scratchPath, theme.seriesPeak, 1.2f, plotAreaWidth, true, energyMul, useShimmer);
+            g.setGradientFill (peakGradient);
+            g.fillPath (peakFillPath);
         }
     }
     
-    // Draw legend overlay
+    // Peak Trace (slightly thinner, highlight enabled)
+    if (!cachedPeakPath_.isEmpty())
+        drawSilkTrace(g, cachedPeakPath_, theme.seriesPeak, 1.8f, viewWidth, true, 1.2f, true); // Peak=true, higher energy, shimmer
+
+    // =========================================================================
+    // OVERLAYS (Weighting, Selection, Legend)
+    // =========================================================================
+
+    // 1. Weighting Curve Overlay
+    const int weightingMode = c.weightingMode;
+    RenderConfigKey currentKey;
+    currentKey.fftSize = s.fftSize;
+    currentKey.sampleRate = s.sampleRate;
+    currentKey.minHz = s.minHz;
+    currentKey.maxHz = s.maxHz;
+    currentKey.plotWidth = plotAreaWidth;
+    currentKey.isLog = true;
+
+    if (weightingMode != lastWeightingMode_ || currentKey != lastWeightingKey_)
+    {
+        lastWeightingMode_ = weightingMode;
+        lastWeightingKey_ = currentKey;
+        weightingPath_.clear();
+
+        if (weightingMode > 0)
+        {
+            std::vector<juce::Point<float>> wPts;
+            wPts.reserve (1024);
+            const float startX = plotAreaLeft;
+            const float endX = plotAreaLeft + plotAreaWidth;
+            const float step = 1.0f;
+            
+            for (float x = startX; x <= endX; x += step)
+            {
+                const float norm = (x - plotAreaLeft) / plotAreaWidth;
+                const float logMin = std::log10 (s.minHz);
+                const float logMax = std::log10 (s.maxHz);
+                const float logRange = logMax - logMin;
+                const float logFreq = logMin + norm * logRange;
+                const float freq = std::pow (10.0f, logFreq);
+                
+                float db = 0.0f;
+                // Static helpers defined at top of file
+                if (weightingMode == 1) db = getAWeightingDb (freq);
+                else if (weightingMode == 2) db = getBS468WeightingDb (freq);
+                
+                const float y = dbToY (db, s);
+                wPts.emplace_back (x, y);
+            }
+            
+            if (!wPts.empty())
+            {
+                weightingPath_.startNewSubPath (wPts[0]);
+                for (size_t k = 1; k < wPts.size(); ++k)
+                    weightingPath_.lineTo (wPts[k]);
+            }
+        }
+    }
+    
+    if (!weightingPath_.isEmpty() && weightingMode > 0)
+    {
+        const float dashLengths[] = { 4.0f, 4.0f };
+        juce::PathStrokeType stroke (1.5f);
+        stroke.createDashedStroke (weightingPath_, weightingPath_, dashLengths, 2);
+        g.setColour (theme.text.withAlpha (0.4f));
+        // g.strokePath (weightingPath_, stroke);  // Disabled - weighting applied to trace
+    }
+
+    // 2. Selection Overlay
+    if (selectionActive_)
+    {
+        if (!juce::ModifierKeys::getCurrentModifiersRealtime().isAnyMouseButtonDown())
+        {
+            selectionActive_ = false;
+            const_cast<RTADisplay*>(this)->repaint();
+        }
+        else
+        {
+            g.setColour (theme.accent.withAlpha (0.2f));
+            g.fillRect (selectionRect_);
+            g.setColour (theme.accent.withAlpha (0.6f));
+            g.drawRect (selectionRect_);
+        }
+    }
+
+    // 3. Legend
     {
         const juce::Rectangle<float> legendPlotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
         mdsp_ui::LegendItem legendItems[2];
         legendItems[0].label = "FFT";
-        legendItems[0].colour = theme.accent;
+        legendItems[0].colour = colRms; // Defined in paintFFTMode scope
         legendItems[0].enabled = true;
         legendItems[1].label = "Peak";
         legendItems[1].colour = theme.seriesPeak;
-        legendItems[1].enabled = hasPeaks;
+        legendItems[1].enabled = !cachedPeakPath_.isEmpty();
         
         mdsp_ui::LegendStyle legendStyle;
         legendStyle.fontHeightPx = 10.0f;
@@ -1868,21 +2260,20 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
         
         mdsp_ui::LegendRenderer::draw (g, legendPlotBounds, theme, legendItems, 2, mdsp_ui::LegendEdge::TopRight, legendStyle);
     }
-    // Draw Session Marker (Tick)
-    if (s.sessionMarkerVisible && s.viewMode == 0) // Only in FFT mode
+
+    // 4. Session Marker
+    if (s.sessionMarkerVisible && s.viewMode == 0)
     {
         const float x = freqToX (s.fftSize > 0 ? static_cast<float> (s.sessionMarkerBin * s.sampleRate / s.fftSize) : 0.0f, s);
-        
-        // Guard against out of bounds
         if (x >= plotAreaLeft && x <= (plotAreaLeft + plotAreaWidth))
         {
              const float y = dbToY (s.sessionMarkerDb, s);
-             
-             // Draw small tick and dot
              g.setColour (theme.seriesPeak.brighter(0.3f));
              g.drawLine (x, y - 4.0f, x, y + 4.0f, 2.0f);
              g.fillEllipse (x - 2.0f, y - 2.0f, 4.0f, 4.0f);
         }
     }
+
+    g.restoreState();
 }
 

@@ -219,6 +219,10 @@ private:
     float smoothingOctaves_ = 1.0f / 6.0f; // Default 1/6 Oct
     int lastSmoothingIdx_ = -1; // Cache for param change detection
     
+    // Generation counters for render stability (SMOOTHING_RENDERING_STABILITY_V2)
+    uint32_t traceDataGen_ = 0;   // Increments when trace buffer content changes
+    uint32_t smoothingGen_ = 0;   // Increments when smoothing param changes
+    
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     struct ModeDebugOverlay final : public juce::Component
     {
