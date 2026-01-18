@@ -14,9 +14,11 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
       scopeModeRow (ui, "Scope Mode", scopeModeCombo),
       scopeShapeRow (ui, "Scope Shape", scopeShapeCombo),
       scopeInputRow (ui, "Scope Input", scopeInputCombo), // New
+      scopePeakHoldRow (ui, "Scope Hold", scopePeakHoldButton),
       
       // Meter
       meterInputRow (ui, "Meter Input", meterInputCombo), // New
+      meterPeakHoldRow (ui, "Meter Hold", meterPeakHoldButton),
       
       // Trace Toggles
       showLrRow (ui, "Show Stereo", showLrButton),
@@ -46,8 +48,10 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     scopeModeRow.attachToParent (*this);
     scopeShapeRow.attachToParent (*this);
     scopeInputRow.attachToParent (*this);
+    scopePeakHoldRow.attachToParent (*this);
     
     meterInputRow.attachToParent (*this);
+    meterPeakHoldRow.attachToParent (*this);
     
     showLrRow.attachToParent (*this);
     showMonoRow.attachToParent (*this);
@@ -154,6 +158,8 @@ void ControlRail::setControlBinder (AnalyzerPro::ControlBinder& binder)
         
         controlBinder->bindCombo (AnalyzerPro::ControlId::ScopeChannelMode, scopeInputCombo);
         controlBinder->bindCombo (AnalyzerPro::ControlId::MeterChannelMode, meterInputCombo);
+        controlBinder->bindToggle (AnalyzerPro::ControlId::MeterPeakHold, meterPeakHoldButton);
+        controlBinder->bindToggle (AnalyzerPro::ControlId::ScopePeakHold, scopePeakHoldButton);
         
         controlBinder->bindToggle (AnalyzerPro::ControlId::TraceShowLR, showLrButton);
         controlBinder->bindToggle (AnalyzerPro::ControlId::TraceShowMono, showMonoButton);
@@ -231,8 +237,16 @@ void ControlRail::resized()
     // Smoothing
     smoothingRow.layout (bounds, y);
     y += m.sectionSpacing;
+    
+    // Weighting
+    weightingRow.layout (bounds, y);
+    y += m.sectionSpacing;
 
     // Section 4: Meters
     metersHeader.layout (bounds, y);
+    scopeInputRow.layout (bounds, y);
+    scopePeakHoldRow.layout (bounds, y);
+    meterInputRow.layout (bounds, y);
+    meterPeakHoldRow.layout (bounds, y);
     placeholderLabel4.setBounds (bounds.getX(), y, bounds.getWidth(), m.secondaryHeight);
 }

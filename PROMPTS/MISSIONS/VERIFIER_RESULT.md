@@ -1,53 +1,67 @@
 # VERIFIER_RESULT.md
 
-## Mission ID
-SIDE_TRACE_SMOOTHING_AND_SMOOTHING_SWITCH_FIX_V1
-
-## Role
-VERIFIER
-
-## Status
-**PASS**
+## Mission: FFT_VISUAL_POLISH_V1
+**Date:** 2026-01-18  
+**Role:** VERIFIER
 
 ---
 
-## Code Verification
+## Build Verification
 
-### Gate 1: SIDE Smoothing Wired
-| Check | Status | Notes |
-|-------|--------|-------|
-| `smoother_.process` applied | ✅ PASS | Lines 1069-1070 of `AnalyzerDisplayView.cpp` apply `smoother_.process` to `scratchPowerL_` and `scratchPowerR_` *before* data is sent to `setLRPowerData`. |
-| SIDE derived from smoothed data | ✅ PASS | `RTADisplay::setLRPowerData` (line 258) computes `sideDb` from input L/R, which is already smoothed. |
+**Command:** `cmake --build build-debug --config Debug`  
+**Result:** ✅ SUCCESS
 
-**Result**: SIDE is smoothed when smoothing is enabled.
-
-### Gate 2: Smoothing Change Resets State
-| Check | Status | Notes |
-|-------|--------|-------|
-| State cleared on change | ✅ PASS | Lines 638-641: `powerLState_.clear()`, `powerRState_.clear()`, `rmsState_.clear()` are called when `lastSmoothingIdx_` changes. |
-
-**Result**: Ballistics state is reset on smoothing param change.
-
-### Gate 3: Render Guards
-| Check | Status | Notes |
-|-------|--------|-------|
-| `hasValidMultiTraceData` | ✅ PASS | Line 1768 guards against uninitialized data. |
-| `lrBinCount > 0` | ✅ PASS | Line 1768. |
-| Per-trace `.empty()` checks | ✅ PASS | Lines 1771, 1777, etc. ensure each trace buffer is non-empty. |
-
-**Result**: Render guards prevent drawing mismatched or empty buffers.
+**Errors:** 0  
+**Warnings:** 0 (from modified file)
 
 ---
 
-## Runtime Verification (Pending Manual Test)
-The code audit passes all gates. Manual tests A, B, C should be performed by the user:
-- **A**: Enable Side only, cycle smoothing rapidly. Expect no artifacts.
-- **B**: Multi-trace + smoothing change. Expect coherent updates.
-- **C**: FFT size change with smoothing. Expect correct Side.
+## Scope Audit
+
+| Check | Status |
+|-------|--------|
+| Only `RTADisplay.cpp` modified | ✅ PASS |
+| No header changes | ✅ PASS |
 
 ---
 
-## Final Verdict
-**PASS** — Code correctly wires SIDE through the smoothing pipeline and provides reset + guards.
+## Code Review
 
-STOP.
+### CHANGE 1: Area fill under FFT trace
+- Creates closed path from trace to bottom ✅
+- Vertical gradient (35%→5% alpha) ✅
+- Proper bounds check before drawing ✅
+
+### CHANGE 2: Increased stroke thickness
+- Multi-traces: 1.5f → 1.8f ✅
+- Main FFT: 1.5f → 2.0f ✅
+- Peak: 1.5f → 1.8f ✅
+
+### CHANGE 3: Area fill under Peak trace
+- Similar gradient approach (15%→2% alpha) ✅
+- Proper bounds check ✅
+
+---
+
+## Acceptance Criteria
+
+| Criterion | Status |
+|-----------|--------|
+| Build succeeds with zero errors | ✅ PASS |
+| Gradient fill under main FFT trace | ✅ PASS |
+| Gradient fill under peak trace | ✅ PASS |
+| Thicker traces | ✅ PASS |
+| Scope compliance | ✅ PASS |
+
+---
+
+## STOP Confirmations
+
+- **IMPLEMENTER STOP:** ✅ Confirmed
+- **VERIFIER STOP:** ✅ Confirmed
+
+---
+
+## Verdict
+
+**MISSION: ✅ SUCCESS**

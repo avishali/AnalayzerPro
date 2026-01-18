@@ -129,6 +129,12 @@ void MeterGroupComponent::setChannelMode (ChannelMode mode)
 
 }
 
+void MeterGroupComponent::setHoldEnabled (bool hold)
+{
+    if (meter0_) meter0_->setHoldEnabled (hold);
+    if (meter1_) meter1_->setHoldEnabled (hold);
+}
+
 void MeterGroupComponent::timerCallback()
 {
     // Poll channel count

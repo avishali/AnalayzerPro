@@ -32,13 +32,13 @@ This SOP is **mandatory** for all non-trivial changes.
 ## Tooling Model
 
 ### Primary Tools
-- **ChatGPT** — Architecture, intent, review, governance
-- **Antigravity** — Execution engine (code edits + verification)
+- **Claude/Gemini/ChatGPT** — Architecture, intent, review, governance
+- **Antigravity/Cursor/VSCode** — Execution engine (code edits + verification)
 - **GitHub Actions** — Enforcement and audit
 
 ### Environment
 - **Local repository environment (macOS)**
-- Native JUCE, Xcode, CMake toolchain
+- Native JUCE, Xcode, CMake toolchain, 
 - Submodules required and trusted
 
 ---

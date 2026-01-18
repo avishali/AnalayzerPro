@@ -30,7 +30,7 @@ public:
     std::function<void (int)> onModeChanged;
     void setMode (int modeIndex); // 1=FFT, 2=Bands, 3=Log
 
-    std::function<void()> onResetPeaks;
+
 
     // State Managment
     void setManagers (AnalyzerPro::presets::PresetManager* pm, AnalyzerPro::presets::ABStateManager* sm);
@@ -51,10 +51,8 @@ private:
     juce::TextButton logButton_;
 
     juce::ComboBox fftSizeCombo_;
-    juce::ComboBox averagingCombo_;
     // juce::ComboBox dbRangeBox_; // Removed
     juce::ComboBox peakRangeBox_;
-    juce::TextButton resetPeaksButton_;
     
     // Presets & State
     juce::TextButton presetButton; // Opens menu

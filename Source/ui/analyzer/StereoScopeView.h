@@ -47,6 +47,10 @@ public:
     void setScopeMode (ScopeMode mode) { scopeMode_ = mode; }
     void setScopeShape (ScopeShape shape) { scopeShape_ = shape; }
     void setChannelMode (ChannelMode mode) { channelMode_ = mode; }
+    
+    // Peak hold toggle (independent from analyzer hold)
+    void setHoldEnabled (bool hold);
+    void resetHold();
 
 private:
     ScopeMode scopeMode_ = ScopeMode::Peak;
@@ -56,6 +60,10 @@ private:
     // Smoothing state for RMS mode
     std::vector<float> lSmoothed_;
     std::vector<float> rSmoothed_;
+    
+    // Peak Hold
+    bool holdEnabled_ = false;
+    juce::Image heldImage_;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StereoScopeView)
 };

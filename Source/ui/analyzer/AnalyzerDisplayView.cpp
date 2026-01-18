@@ -634,6 +634,7 @@ void AnalyzerDisplayView::timerCallback()
         {
             lastSmoothingIdx_ = index;
             smoothingOctaves_ = kSmoothingOctaves[index];
+            ++smoothingGen_; // SMOOTHING_RENDERING_STABILITY_V2
             
             // Reset ballistics state to prevent glitches during smoothing transitions
             powerLState_.clear();
@@ -1129,6 +1130,9 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             {
                  rtaDisplay.setLRPowerData (scratchPowerL_.data(), scratchPowerR_.data(), validBins);
             }
+            
+            ++traceDataGen_; // SMOOTHING_RENDERING_STABILITY_V2: data changed
+            rtaDisplay.setGenerations (traceDataGen_, smoothingGen_);
             
             // Force repaint after data update
             rtaDisplay.repaint();

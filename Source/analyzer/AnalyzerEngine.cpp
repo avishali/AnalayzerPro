@@ -50,7 +50,6 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     fifoBuffer.resize (fftSizeSz, 0.0f);
     const int numBins = fftSize / 2 + 1;
     smoothedMagnitude.resize (static_cast<size_t> (numBins), 0.0f);
-    smoothedPeak.resize (static_cast<size_t> (numBins), 0.0f);
     
     // Resize smoothing buffers
     smoothLowBounds.resize (static_cast<size_t> (numBins), 0);
@@ -318,8 +317,8 @@ void AnalyzerEngine::computeFFT()
 
     const float rmsAttCoeff = calcCoeff(rmsAttackMs_);
     const float rmsRelCoeff = calcCoeff(rmsReleaseMs_);
-    const float peakAttCoeff = calcCoeff(peakAttackMs_);
-    const float peakRelCoeff = calcCoeff(peakReleaseMs_);
+    // const float peakAttCoeff = calcCoeff(peakAttackMs_);
+    // const float peakRelCoeff = calcCoeff(peakReleaseMs_);
 
     for (int i = 0; i < numBins; ++i)
     {
@@ -332,9 +331,10 @@ void AnalyzerEngine::computeFFT()
         rmsState = rmsCoeff * rmsState + (1.0f - rmsCoeff) * inputPower;
 
         // Peak Ballistics
-        float& peakState = smoothedPeak[idx];
-        const float peakCoeff = (inputPower > peakState) ? peakAttCoeff : peakRelCoeff;
-        peakState = peakCoeff * peakState + (1.0f - peakCoeff) * inputPower;
+        // Peak Ballistics (REMOVED in V2 Separation - Peak is now Instant)
+        // float& peakState = smoothedPeak[idx];
+        // const float peakCoeff = (inputPower > peakState) ? peakAttCoeff : peakRelCoeff;
+        // peakState = peakCoeff * peakState + (1.0f - peakCoeff) * inputPower;
     }
     
 #if JUCE_DEBUG
@@ -351,11 +351,16 @@ void AnalyzerEngine::computeFFT()
     
     // Convert Fast-Peak Smoothed POWER to dB (Ballistic/Live Trace)
     // Feeds into the Peak Hold logic for decay tracking
-    convertToDb (smoothedPeak.data(), dbRaw_.data(), numBins);
+    // Convert Fast-Peak Smoothed POWER to dB (Ballistic/Live Trace)
+    // Feeds into the Peak Hold logic for decay tracking
+    // convertToDb (smoothedPeak.data(), dbRaw_.data(), numBins);
+    // V2 CHANGE: dbRaw_ now mimics dbInstant_ for decay floor to avoid double-ballistics 
+    // or use dbInstant_ directly. For now, just duplicate instant to raw to keep updatePeakHold compatible.
+    std::copy(dbInstant_.begin(), dbInstant_.end(), dbRaw_.begin());
     
-    // Strict Latch V1: Calculate Instantaneous dB from freqSmoothed (Power, pre-ballistics)
-    // This ensures we latch the TRUE session max.
-    convertToDb (freqSmoothed, dbInstant_.data(), numBins);
+    // Peak Pipeline: Calculate Instantaneous dB from RAW magnitudes (no octave smoothing)
+    // This ensures Peak latches the TRUE session max, independent from RMS smoothing.
+    convertToDb (magnitudes_.data(), dbInstant_.data(), numBins);
     
     // Update peak hold
     // Pass dbInstant_ for Latching, dbRaw_ for Release tracking
@@ -696,6 +701,9 @@ void AnalyzerEngine::resetPeaks()
 {
     std::fill (peakHold.begin(), peakHold.end(), kDbFloor);
     std::fill (peakHoldFramesRemaining_.begin(), peakHoldFramesRemaining_.end(), 0);
+    
+    // Also clear ballistic peak smoother to prevent "memory" effect after reset
+    // std::fill (smoothedPeak.begin(), smoothedPeak.end(), 0.0f);
 }
 
 void AnalyzerEngine::setPeakHoldMode (PeakHoldMode mode)

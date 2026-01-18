@@ -40,6 +40,10 @@ enum class ControlId
     
     // Meters
     MeterChannelMode, // 0=Stereo, 1=MidSide
+    MeterPeakHold,
+    
+    // Scope
+    ScopePeakHold,
     
     // Add control IDs as needed
     Count

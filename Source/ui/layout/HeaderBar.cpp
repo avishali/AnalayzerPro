@@ -41,23 +41,7 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     fftSizeCombo_.setTooltip ("FFT Size");
     addAndMakeVisible (fftSizeCombo_);
 
-    // Averaging control
-    averagingCombo_.addItem ("Off", 1);
-    averagingCombo_.addItem ("50 ms", 2);
-    averagingCombo_.addItem ("100 ms", 3);
-    averagingCombo_.addItem ("250 ms", 4);
-    averagingCombo_.addItem ("500 ms", 5);
-    averagingCombo_.addItem ("1 s", 6);
-    averagingCombo_.setSelectedId (3, juce::dontSendNotification);
-    averagingCombo_.setTooltip ("Averaging");
-    addAndMakeVisible (averagingCombo_);
 
-    resetPeaksButton_.onClick = [this]
-    {
-        if (onResetPeaks)
-            onResetPeaks();
-    };
-    addAndMakeVisible (resetPeaksButton_);
     
     // Preset & State Buttons
     presetButton.setButtonText ("Preset");
@@ -169,7 +153,6 @@ void HeaderBar::resized()
     // Right zone: Peak Range + Reset + Preset/Save + A/B + Bypass
     const int rightZoneWidth = comboW        // Peak Range
                               + headerGap
-                              + smallBtnW    // Reset
                               + headerGap
                               + m.headerButtonW * 2  // Preset/Save
                               + headerGap
@@ -199,15 +182,13 @@ void HeaderBar::resized()
     rightZone.removeFromRight (headerGap);
     
     // Reset / PeakRange
-    resetPeaksButton_.setBounds (rightZone.removeFromRight (smallBtnW).getX(), controlTop, smallBtnW, smallBtnW);
-    rightZone.removeFromRight (headerGap);
-    
+    // PeakRange
     peakRangeBox_.setBounds (rightZone.removeFromRight (comboW).getX(), controlTop, comboW, controlH);
 
     // Left zone: Mode Buttons (x3) + FFT Size + Averaging
     const int leftZoneWidth = (modeBtnW * 3 + headerGap) // Mode Group
                               + headerGap
-                              + comboW * 2               // FFT + Avg
+                              + comboW               // FFT
                               + headerGap * 2;
     auto leftZone = area.removeFromLeft (leftZoneWidth);
     
@@ -218,9 +199,6 @@ void HeaderBar::resized()
     leftZone.removeFromLeft (headerGap);
     
     fftSizeCombo_.setBounds (leftZone.removeFromLeft (comboW).getX(), controlTop, comboW, controlH);
-    leftZone.removeFromLeft (headerGap);
-    
-    averagingCombo_.setBounds (leftZone.removeFromLeft (comboW).getX(), controlTop, comboW, controlH);
 
     // Center zone: Title (centered, fills remaining space)
     const int titleTop = centerY - static_cast<int> (ui_.type().titleH / 2.0f);
@@ -239,7 +217,6 @@ void HeaderBar::setControlBinder (AnalyzerPro::ControlBinder& binder)
         // controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerMode, modeCombo_);
         
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerFftSize, fftSizeCombo_);
-        controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerAveraging, averagingCombo_);
         
         controlBinder->bindToggle (AnalyzerPro::ControlId::MasterBypass, bypassButton);
     }

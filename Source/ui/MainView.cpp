@@ -73,6 +73,8 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         apvts->addParameterListener ("Tilt", this);
         apvts->addParameterListener ("scopeChannelMode", this); // New
         apvts->addParameterListener ("meterChannelMode", this); // New
+        apvts->addParameterListener ("meterPeakHold", this); // Peak Hold
+        apvts->addParameterListener ("scopePeakHold", this); // Peak Hold
     }
 
     // HeaderBar is authoritative for Mode/FFT/Averaging controls
@@ -122,10 +124,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         }
     };
 
-    header_.onResetPeaks = [this]
-    {
-        triggerResetPeaks();
-    };
+
 
     // Apply initial Mode from APVTS (startup/session restore)
     if (apvts_ != nullptr)
@@ -158,6 +157,21 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
             const auto mode = (val == 0 ? MeterGroupComponent::ChannelMode::Stereo : MeterGroupComponent::ChannelMode::MidSide);
             outputMeters_.setChannelMode (mode);
             inputMeters_.setChannelMode (mode);
+        }
+        
+        // Apply Meter Peak Hold
+        if (auto* raw = apvts_->getRawParameterValue ("meterPeakHold"))
+        {
+            const bool hold = raw->load() > 0.5f;
+            outputMeters_.setHoldEnabled (hold);
+            inputMeters_.setHoldEnabled (hold);
+        }
+        
+        // Apply Scope Peak Hold
+        if (auto* raw = apvts_->getRawParameterValue ("scopePeakHold"))
+        {
+            const bool hold = raw->load() > 0.5f;
+            stereoScopeView_.setHoldEnabled (hold);
         }
     }
 
@@ -283,6 +297,23 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
             inputMeters_.setChannelMode (mode);
         });
     }
+    else if (parameterID == "meterPeakHold")
+    {
+        const bool hold = newValue > 0.5f;
+        juce::MessageManager::callAsync ([this, hold]
+        {
+            outputMeters_.setHoldEnabled (hold);
+            inputMeters_.setHoldEnabled (hold);
+        });
+    }
+    else if (parameterID == "scopePeakHold")
+    {
+        const bool hold = newValue > 0.5f;
+        juce::MessageManager::callAsync ([this, hold]
+        {
+            stereoScopeView_.setHoldEnabled (hold);
+        });
+    }
     else if (parameterID == "HoldPeaks")
     {
         audioProcessor.getAnalyzerEngine().setHold (newValue > 0.5f);
@@ -375,7 +406,8 @@ void MainView::triggerResetPeaks()
 {
     audioProcessor.getAnalyzerEngine().resetPeaks();
     audioProcessor.resetMeterClipLatches();
-    analyzerView_.triggerPeakFlash();
+    audioProcessor.resetMeterClipLatches();
+    analyzerView_.resetViewPeaks();
     analyzerView_.repaint();
 }
 

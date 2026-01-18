@@ -25,11 +25,12 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
     void mouseMove (const juce::MouseEvent& e) override;
+    void mouseDrag (const juce::MouseEvent& e) override;
+    void mouseUp (const juce::MouseEvent& e) override;
     void mouseExit (const juce::MouseEvent& e) override;
-    
-#if JUCE_DEBUG
     void mouseDown (const juce::MouseEvent& e) override;
-#endif
+    
+
 
     /** Set current band data in dBFS */
     void setBandData (const std::vector<float>& currentDb, const std::vector<float>* peakDbNullable = nullptr);
@@ -105,6 +106,16 @@ public:
     /** Check structural generation and clear cache if changed (call before pulling data) */
     void checkStructuralGeneration (uint32_t currentGen);
 
+    /** SMOOTHING_RENDERING_STABILITY_V2: Set generation counters for path validity gating */
+    void setGenerations (uint32_t traceDataGen, uint32_t smoothingGen);
+    
+    /** SMOOTHING_RENDERING_STABILITY_V2: Invalidate cached paths (force rebuild on next paint) */
+    /** SMOOTHING_RENDERING_STABILITY_V2: Invalidate cached paths (force rebuild on next paint) */
+    void invalidatePaths();
+    
+    /** Invalidate background cache (call on resize or range change) */
+    void invalidateBackground();
+
 #if JUCE_DEBUG
     /** Set debug info with structural generation - DEBUG only */
     void setDebugInfo (int viewMode, size_t fftSize, size_t logSize, size_t bandsSize,
@@ -117,6 +128,27 @@ private:
     {
         Ok,
         NoData
+    };
+
+    // Step 3: Strict cache invalidation key (Moved here for dependency reasons)
+    struct RenderConfigKey
+    {
+        int fftSize = 0;
+        double sampleRate = 0.0;
+        float minHz = 0.0f;
+        float maxHz = 0.0f;
+        float plotWidth = 0.0f;
+        bool isLog = true; // FFT mode is always log x-axis here
+
+        bool operator!= (const RenderConfigKey& other) const
+        {
+            return fftSize != other.fftSize ||
+                   std::abs (sampleRate - other.sampleRate) > 1e-5 ||
+                   std::abs (minHz - other.minHz) > 1e-5f ||
+                   std::abs (maxHz - other.maxHz) > 1e-5f ||
+                   std::abs (plotWidth - other.plotWidth) > 0.5f ||
+                   isLog != other.isLog;
+        }
     };
     
     // Cached geometry
@@ -177,6 +209,10 @@ private:
         bool sessionMarkerVisible = false;
         int sessionMarkerBin = -1;
         float sessionMarkerDb = 0.0f;
+
+        // FFT No Data Guard (Mission FFT_NO_DATA_GUARD_V1)
+        // Latches true once first valid frame arrives (signal > threshold)
+        bool hasValidSpectrumFrame = false;
 
         // Unified source of truth for rendering limit
         float getEffectiveMaxHz() const
@@ -274,6 +310,46 @@ private:
     // Structural generation tracking (to detect structural changes)
     uint32_t lastStructuralGen = 0;
 
+    // SMOOTHING_RENDERING_STABILITY_V2: Path validity gating
+    uint32_t currentTraceDataGen_ = 0;
+    uint32_t currentSmoothingGen_ = 0;
+    uint32_t lastPathTraceDataGen_ = 0;
+    uint32_t lastPathSmoothingGen_ = 0;
+
+    bool pathsValid_ = false;
+    // Mission FFT_TRACE_TOGGLE_ATOMIC_REBUILD_V1: Atomic rebuild counters
+    uint32_t pathGen_ = 0;
+    uint32_t lastBuiltGen_ = 0;
+
+    // Weighting Overlay
+    juce::Path weightingPath_;
+    int lastWeightingMode_ = 0;
+    RenderConfigKey lastWeightingKey_;
+    
+    // Selection/ROI Overlay
+    juce::Rectangle<int> selectionRect_;
+    bool selectionActive_ = false;
+
+    // Optimization: Cached Background (Grid, Axes, Labels)
+    juce::Image cachedBackground_;
+    bool backgroundValid_ = false;
+    void refreshBackground(); // Helper to draw static elements to cache
+
+    // Optimization: Cached Trace Paths
+    juce::Path cachedFftPath_;
+    juce::Path cachedPeakPath_;
+    // Mission FFT_TRACE_STYLE_UNIFY_V1: Cached paths for other traces
+    juce::Path cachedLPath_;
+    juce::Path cachedRPath_;
+    juce::Path cachedStereoPath_;
+    juce::Path cachedMonoPath_;
+    juce::Path cachedMidPath_;
+    juce::Path cachedSidePath_;
+    void buildFftPaths(); // Helper to build decimated paths from data
+    
+    // Helper to build a single decimated path with quadratic smoothing
+    void buildDecimatedPath(const std::vector<float>& data, juce::Path& path);
+
     // Data status
 
     juce::String noDataReason;
@@ -299,26 +375,7 @@ private:
     juce::Font labelFont { juce::FontOptions().withHeight (12.0f) };
     juce::Font smallFont { juce::FontOptions().withHeight (10.0f) };
 
-    // Step 3: Strict cache invalidation key
-    struct RenderConfigKey
-    {
-        int fftSize = 0;
-        double sampleRate = 0.0;
-        float minHz = 0.0f;
-        float maxHz = 0.0f;
-        float plotWidth = 0.0f;
-        bool isLog = true; // FFT mode is always log x-axis here
 
-        bool operator!= (const RenderConfigKey& other) const
-        {
-            return fftSize != other.fftSize ||
-                   std::abs (sampleRate - other.sampleRate) > 1e-5 ||
-                   std::abs (minHz - other.minHz) > 1e-5f ||
-                   std::abs (maxHz - other.maxHz) > 1e-5f ||
-                   std::abs (plotWidth - other.plotWidth) > 0.5f ||
-                   isLog != other.isLog;
-        }
-    };
 
     RenderConfigKey lastRenderKey_;
 

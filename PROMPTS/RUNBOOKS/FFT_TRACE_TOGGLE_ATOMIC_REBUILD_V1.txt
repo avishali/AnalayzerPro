@@ -1,0 +1,61 @@
+MISSION_ID: FFT_TRACE_TOGGLE_ATOMIC_REBUILD_V1
+
+GOAL
+When toggling any trace ON/OFF:
+- The curve appears fully formed immediately (no “left-to-right drawing”).
+- No partial paths or one-frame garbage.
+- No flicker.
+
+NON-NEGOTIABLES
+- Render stability only. No FFT math changes.
+- No allocations in paint().
+- Minimal diffs.
+
+FILES ALLOWED
+- Source/ui/analyzer/RTADisplay.cpp
+- Source/ui/analyzer/RTADisplay.h (if adding small state)
+
+IMPLEMENTER
+
+STEP 1 — Add path-cache validity
+Add:
+- bool pathsValid = false;
+- uint32 pathGen = 0;
+- uint32 lastBuiltGen = 0;
+
+Increment pathGen when:
+- any trace toggle changes
+- smoothing changes
+- bins change
+- new data arrives that changes displayed traces
+
+STEP 2 — Rebuild paths only when dirty
+In update tick (preferred) or just before drawing (still ok), do:
+if (!pathsValid || lastBuiltGen != pathGen) rebuildAllPaths();
+
+rebuildAllPaths must:
+- clear each trace path fully
+- build complete path for all enabled traces in one call
+- set lastBuiltGen = pathGen
+- set pathsValid = true
+
+STEP 3 — Paint must never draw partial
+In paint():
+- if (!pathsValid) return (draw grid only)
+
+STOP and write IMPLEMENTER_RESULT.md with:
+- what increments pathGen
+- where rebuildAllPaths runs
+- proof that paint does not draw partial
+
+VERIFIER
+
+CHECK A
+Toggle Side ON/OFF repeatedly while audio plays:
+- PASS if it appears/disappears instantly (no left-to-right buildup).
+
+CHECK B
+Toggle 5 traces ON at once:
+- PASS if all appear instantly and stable.
+
+Write VERIFIER_RESULT.md and STOP.
