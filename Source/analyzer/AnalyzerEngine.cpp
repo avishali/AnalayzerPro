@@ -355,10 +355,19 @@ void AnalyzerEngine::computeFFT()
         const float rmsCoeff = (inputPower > rmsState) ? rmsAttCoeff : rmsRelCoeff;
         rmsState = rmsCoeff * rmsState + (1.0f - rmsCoeff) * inputPower;
 
-        // Peak Ballistics (Restored for "Silky" consistency)
+        // Peak Ballistics (M_2026_01_19_PEAK_MAXIMUM_ENVELOPE)
+        // Calculate Envelope Max: including Raw L/R prevents any channel from exceeding Peak
+        float maxPower = inputPower;
+        
+        if (enableMultiTrace_ && !powerL_.empty() && !powerR_.empty())
+        {
+            maxPower = std::max(maxPower, powerL_[idx]);
+            maxPower = std::max(maxPower, powerR_[idx]);
+        }
+        
         float& peakState = smoothedPeak[idx];
-        const float peakCoeff = (inputPower > peakState) ? peakAttCoeff : peakRelCoeff;
-        peakState = peakCoeff * peakState + (1.0f - peakCoeff) * inputPower;
+        const float peakCoeff = (maxPower > peakState) ? peakAttCoeff : peakRelCoeff;
+        peakState = peakCoeff * peakState + (1.0f - peakCoeff) * maxPower;
     }
     
 #if JUCE_DEBUG

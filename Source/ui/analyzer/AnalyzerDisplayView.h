@@ -143,6 +143,16 @@ private:
     std::vector<float> rmsState_;    // Ballistics state for Main RMS
     std::vector<float> powerLState_; // Ballistics state for Left Trace
     std::vector<float> powerRState_; // Ballistics state for Right Trace
+    std::vector<float> midState_;    // Ballistics state for Mid Trace
+    std::vector<float> sideState_;   // Ballistics state for Side Trace
+    std::vector<float> monoState_;   // Ballistics state for Mono Trace
+    
+    // Scratch buffers for derived trace processing
+    std::vector<float> scratchPowerMid_;
+    std::vector<float> scratchPowerSide_;
+    std::vector<float> scratchPowerMono_;
+
+    float releaseMs_ = 300.0f; // Parameter cache
     
     bool uiHoldActive_ = false;     // Track hold state transitions
     std::vector<float> bandCentersHz_;  // Cached 1/3-octave band centers
@@ -168,7 +178,8 @@ private:
     static constexpr float kRmsReleaseMs = 300.0f;
     
     // Helper to apply time-domain ballistics to a buffer
-    void applyBallistics (float* data, std::vector<float>& state, size_t numBins);
+    // releaseMs allows parameter-driven release time (attack is fixed at 60ms for now)
+    void applyBallistics (float* data, std::vector<float>& state, size_t numBins, float releaseMs);
     
     // Peak Hold Session Marker
     bool sessionMarkerValid_ = false;

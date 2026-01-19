@@ -1,45 +1,36 @@
-# IMPLEMENTER RESULT
-**Mission ID:** M_2026_01_19_PEAK_TRACE_UNIFIED_BEHAVIOR
-**Role:** Implementer
-**Agent:** Antigravity
+# IMPLEMENTER_RESULT
 
-## Changes Implemented
+## 1. Overview
+Modified `AnalyzerEngine::computeFFT` to ensure the Peak trace represents the true maximum envelope across all channels. Previously, it only tracked the main (often smoothed mono) signal, allowing individual L/R transients to exceed the Peak trace.
 
-### 1. AnalyzerEngine.h / .cpp
-- **Action:** Re-enabled Peak Ballistics.
-- **Details:** 
-    - Restored `smoothedPeak` vector.
-    - Added `peakAttackMs_` (10ms) and `peakReleaseMs_` (80ms default).
-    - Updated `setReleaseTimeMs()` to synchronize `peakReleaseMs_` with the global Release Time parameter.
-    - Restored the smoothing loop in `computeFFT` to calculate `smoothedPeak`.
-    - Updated `convertToDb` to feed `dbRaw_` from `smoothedPeak` (Ballistic) instead of `dbInstant_` (Instant).
-- **Outcome:** The Peak trace data now follows the Release Time physics, falling slowly when Release Time is long, synchronized with RMS.
+## 2. Changes Implemented
 
-### 2. RTADisplay.cpp
-- **Action:** Restored and Tuned Peak Trace Rendering.
-- **Details:**
-    - Uncommented the Peak Trace and Peak Hold Trace rendering blocks in `paintFFTMode`.
-    - Tuned Peak Trace: Thickness `1.2f`, `isPeak=true` (Glows appropriately).
-    - Tuned Peak Hold Trace: Thickness `1.5f`, `isPeak=false`, White color.
-    - Verified `buildDecimatedPath` uses quadratic smoothing, ensuring "Silky" appearance.
-- **Outcome:** Peak trace is now visible, looks consistent with other traces ("Silky"), and shares the same design language.
+### A. AnalyzerEngine (Audio Thread)
+- **Modified Peak Ballistics Logic**:
+  - In `computeFFT` (lines ~355), changed the input to the Peak Ballistics filter.
+  - **New Logic**: `maxPower = max(inputPower, powerL_[idx], powerR_[idx])`
+  - **Why Raw Power?**: Used `powerL_` and `powerR_` (raw FFT power) instead of smoothed versions. This guarantees that the Peak trace will **strictly envelope** all derived traces, even if those traces are smoothed. If we used smoothed L/R, a sharp transient might still poke through in the raw display data.
+  - **Safety**: Added checks for `enableMultiTrace_` and buffer emptiness to prevent crashes in single-channel or uninitialized states.
 
-### 3. Verification Instructions for Verifier
-1. **Build** the project.
-2. **Launch** the plugin.
-3. Test **Release Time**:
-   - Play audio.
-   - Set Release Time to **Max (5000ms)**.
+## 3. Verification Instructions for Verifier
+
+### Build
+1. Run `cmake -B build` (or your build command).
+2. Compile the plugin.
+
+### Manual Verification
+1. **Load Plugin**: Load AnalyzerPro.
+2. **Enable All Traces**: Turn on L, R, Mid, Side, Mono, Peak.
+3. **Hard Panning Test**:
+   - Send signal strictly to Left.
+   - Verify Peak trace (Gold) exactly overlays or is above the Left trace.
+   - Verify Peak trace does NOT drop to the Mono level (which would be -6dB lower implies L+R/2).
+4. **Transient Test**:
+   - Play distinct transient material (snare, etc).
+   - Ensure Gold Peak line is always the "Ceiling". No blue/red/green lines should ever cross above it.
+5. **Decay Test**:
    - Stop audio.
-   - Verify **Peak trace** (faint line) decays *slowly* alongside the RMS trace.
-   - Set Release Time to **Fast (100ms)**.
-   - Verify Peak trace decays *quickly*.
-4. Test **Visuals**:
-   - Verify Peak trace is visible (thin, glowing line above RMS).
-   - Verify Peak Hold trace is visible (white ceiling).
-   - Verify lines are smooth (bezier curves), not jagged steps (unless low frequency).
+   - Verify Peak decays smoothly according to Release Time parameter (it should not jump down).
 
-## Constraints Checklist
-- [x] Peak Ballistics re-enabled and linked.
-- [x] Visual consistency applied.
-- [x] STOP rule followed.
+## 4. Notes
+- The Peak trace is now "Instantaneous Max w/ Ballistics". It will be slightly higher/faster than the RMS trace because it responds to raw FFT energy before fractional octave smoothing (which averages energy down). This is correct for a "True Peak" analyzer.
