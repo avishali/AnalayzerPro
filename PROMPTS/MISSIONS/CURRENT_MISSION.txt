@@ -1,323 +1,291 @@
 ================================================================================
-MISSION: FIX_PEAK_TRACE_RELEASE_AND_LOOK
+MISSION: PHASE_1_BETA_STABILITY_AND_AAX
 ================================================================================
 
-MISSION ID
-----------
-M_2026_01_19_PEAK_TRACE_UNIFIED_BEHAVIOR
+MISSION ID: M_2026_01_19_PHASE1_BETA_STABILITY_AAX
 
-PRIORITY
---------
-HIGH - Peak trace not following Release Time + visual inconsistency
+ROLE SPLIT: Multi-Agent Mode ENABLED
 
-MULTI-AGENT MODE
-----------------
-ENABLED
+TARGET: AnalyzerPro Beta Release - Phase 1: Critical Stability + AAX
+
+PRIORITY: CRITICAL (Beta Release Blocker)
 
 ================================================================================
-PROBLEM STATEMENT
+CONTEXT
 ================================================================================
 
-TWO ISSUES with the Peak trace:
+AnalyzerPro is being prepared for its first beta release. This mission addresses
+Phase 1: Critical bug fixes, stability improvements, and AAX format support.
 
-ISSUE 1: Peak Trace Ignores Release Time Parameter
-- Peak trace has HARDCODED release time: `peakReleaseMs_ = 80.0f`
-- Release Time parameter (100-5000 ms) does NOT affect Peak trace
-- Only affects RMS trace
-- Expected: Release Time should control ALL traces including Peak
+Current State:
+- Build works: VST3, Standalone (dev mode), or AU, VST3, Standalone (release)
+- Last mission completed: Peak envelope maximum tracking
+- AAX format NOT currently enabled
+- No known critical bugs, but comprehensive validation needed
 
-ISSUE 2: Peak Trace Has Different Visual Appearance
-- Peak trace doesn't look the same as other traces
-- May be missing smoothing, glow, or other visual polish
-- Should have consistent "silk" appearance with other traces
+Beta Release Requirements:
+- Must support AAX format (Pro Tools compatibility)
+- Must be RT-safe and stable under all conditions
+- Must handle edge cases gracefully (silence, clipping, extreme values)
+- Must build successfully on release configuration
 
-**Root Cause Issue 1:**
-```cpp
-// In AnalyzerEngine.h:
-float peakReleaseMs_ = 80.0f;  // HARDCODED! Not using Release Time parameter
+================================================================================
+OBJECTIVE
+================================================================================
 
-// When setReleaseTimeMs() is called:
-void setReleaseTimeMs(float ms) {
-    rmsReleaseMs_ = ms;          // ✅ Updates RMS
-    peakDecayDbPerSec_ = ...;    // ✅ Updates Peak Hold
-    // ❌ NEVER updates peakReleaseMs_!
-}
-```
+Add AAX support and perform comprehensive stability validation for beta release.
 
-**Root Cause Issue 2:**
-Peak trace rendering may use different path/stroke settings than RMS trace.
+Deliverables:
+1. AAX plugin format enabled in CMakeLists.txt
+2. All RT-safety guarantees verified
+3. Edge case handling validated
+4. Release build configuration tested
+5. No regressions in existing functionality
+
+================================================================================
+SCOPE
+================================================================================
+
+FILES TO MODIFY:
+1. CMakeLists.txt
+   - Add AAX to PLUGIN_FORMATS for both dev and release modes
+   - Ensure AAX SDK path configuration is present (if needed)
+
+FILES TO AUDIT (NO MODIFICATIONS UNLESS BUG FOUND):
+2. Source/analyzer/AnalyzerEngine.cpp/.h
+   - Verify RT-safety (no malloc/new/resize in processBlock)
+   - Verify thread-safe atomic operations
+   - Verify proper buffer handling
+
+3. Source/ui/analyzer/rta1_import/RTADisplay.cpp
+   - Verify trace rendering stability
+   - Verify no crashes on extreme values
+
+4. Source/audio/DeviceRoutingHelper.cpp/.h
+   - Verify safe device switching
+   - Verify channel count edge cases
+
+5. Source/PluginProcessor.cpp
+   - Verify processBlock RT-safety
+   - Verify state save/load robustness
+
+FILES EXPLICITLY FORBIDDEN:
+- Do NOT touch any file not listed above
+- Do NOT refactor working code
+- Do NOT add new features
+- Do NOT change existing architecture
 
 ================================================================================
 ACCEPTANCE CRITERIA
 ================================================================================
 
-[ ] AC1: Peak Trace Uses Release Time
-    - Set Release Time to 1000ms
-    - Stop audio
-    - Peak trace decays over ~1000ms
-    - Same decay speed as RMS trace
+AC1: AAX Format Added
+- CMakeLists.txt contains AAX in PLUGIN_FORMATS
+- AAX added to both dev mode and release mode format lists
+- Build configuration preserves existing formats (AU, VST3, Standalone)
 
-[ ] AC2: All Traces Decay Together
-    - Set Release Time to 500ms
-    - Stop audio  
-    - RMS, Peak, and all multi-channel traces decay together
-    - Unified, synchronized behavior
+AC2: RT-Safety Verified
+- AnalyzerEngine::processBlock contains no heap allocations
+- No vector::resize() calls in audio thread
+- All atomic operations are properly ordered
+- FFT objects pre-allocated in constructor
 
-[ ] AC3: Peak Trace Visual Consistency
-    - Peak trace has same smooth, polished appearance
-    - Same glow, thickness, and smoothing as other traces
-    - Professional, consistent look
+AC3: Edge Cases Handled
+- Plugin handles zero samples gracefully (no divide by zero)
+- Plugin handles silence without crashes
+- Plugin handles clipping/extreme values without artifacts
+- Plugin handles rapid channel count changes safely
 
-[ ] AC4: Attack Time Remains Fast
-    - Peak trace still has fast attack (~10ms)
-    - Responds instantly to transients
-    - Only release time follows Release Time parameter
+AC4: Release Build Success
+- Project builds with PLUGIN_DEV_MODE=OFF
+- All formats build successfully: AU, VST3, AAX, Standalone
+- No new compiler warnings introduced
+- Build artifacts generated correctly
 
-[ ] AC5: Build Success
-    - Zero errors
-    - Zero warnings
+AC5: No Regressions
+- Peak envelope still tracks maximum correctly
+- All traces render properly
+- UI remains responsive
+- State save/restore works correctly
+
+AC6: AAX-Specific Requirements (if applicable)
+- Verify plugin meets AAX technical requirements
+- Verify AAX wrapping/signing configuration (if present)
+- Note: AAX signing/authorization deferred to deployment phase
 
 ================================================================================
-IMPLEMENTATION SCOPE
+IMPLEMENTATION PLAN
 ================================================================================
 
-FILES TO MODIFY:
-----------------
+IMPLEMENTER TASKS:
 
-TASK 1 - Connect Peak Release to Release Time Parameter:
-
-1. Source/analyzer/AnalyzerEngine.h
-   - Verify setReleaseTimeMs() method exists
-   - May need to add it if missing
-
-2. Source/analyzer/AnalyzerEngine.cpp
-   - Update setReleaseTimeMs() to also set peakReleaseMs_:
-   ```cpp
-   void AnalyzerEngine::setReleaseTimeMs(float ms) {
-       const float clampedMs = juce::jlimit(100.0f, 5000.0f, ms);
-       
-       // Apply to RMS
-       rmsReleaseMs_ = clampedMs;
-       
-       // Apply to Peak ballistics (NEW!)
-       peakReleaseMs_ = clampedMs;
-       
-       // Apply to Peak Hold decay
-       peakDecayDbPerSec_ = 60.0f / (clampedMs / 1000.0f);
-   }
+1. ADD AAX FORMAT
+   Location: CMakeLists.txt
+   
+   Current (line ~58-62):
+   ```cmake
+   if(PLUGIN_DEV_MODE)
+       set(PLUGIN_FORMATS "VST3;Standalone" ...)
+   else()
+       set(PLUGIN_FORMATS "AU;VST3;Standalone" ...)
+   endif()
    ```
+   
+   Change to:
+   ```cmake
+   if(PLUGIN_DEV_MODE)
+       set(PLUGIN_FORMATS "VST3;Standalone" ...)
+   else()
+       set(PLUGIN_FORMATS "AU;VST3;AAX;Standalone" ...)
+   endif()
+   ```
+   
+   Rationale: AAX only needed for release builds (pro tools users)
 
-3. Source/PluginProcessor.cpp
-   - Ensure Release Time parameter calls setReleaseTimeMs()
-   - Verify connection in parameter change handler
+2. VERIFY RT-SAFETY AUDIT
+   Read and audit (DO NOT MODIFY unless bug found):
+   - AnalyzerEngine.cpp: processBlock method
+   - PluginProcessor.cpp: processBlock method
+   
+   Check for:
+   - Any malloc/new/delete calls
+   - Any vector::resize()/push_back() calls
+   - Any FFT creation/destruction
+   - Any mutex locks (should be try_lock or atomic only)
+   
+   Document findings in IMPLEMENTER_RESULT.md
 
-TASK 2 - Ensure Peak Trace Has Same Visual Treatment:
+3. TEST EDGE CASES
+   If you can run tests, verify:
+   - Zero sample buffer handling
+   - Null pointer checks
+   - Division by zero guards
+   - Extreme value clamping
+   
+   Document findings in IMPLEMENTER_RESULT.md
 
-4. Source/ui/analyzer/rta1_import/RTADisplay.cpp
-   - Check paintFFTMode() peak rendering
-   - Ensure Peak trace uses same smoothPath() as RMS
-   - Ensure Peak trace uses drawSilkTrace() with proper settings
-   - Match thickness, glow, and smoothing parameters
+4. STOP
+   Write IMPLEMENTER_RESULT.md
+   Do NOT build
+   Do NOT verify
+   STOP
 
-================================================================================
-IMPLEMENTATION DETAILS
-================================================================================
+VERIFIER TASKS:
 
-TASK 1 DETAILS - Connect Peak to Release Time:
------------------------------------------------
+1. VERIFY AAX ADDITION
+   - Confirm AAX in release mode PLUGIN_FORMATS
+   - Confirm dev mode unchanged (VST3;Standalone)
+   - Confirm no other CMake changes made
 
-**Step 1: Add/Update setReleaseTimeMs() Method**
+2. BUILD RELEASE CONFIGURATION
+   Command: 
+   ```bash
+   ./clean_build.sh
+   cmake --preset release
+   cmake --build build-release --config Release
+   ```
+   
+   Expected artifacts:
+   - build-release/AnalyzerPro_artefacts/Release/AU/AnalyzerPro.component
+   - build-release/AnalyzerPro_artefacts/Release/VST3/AnalyzerPro.vst3
+   - build-release/AnalyzerPro_artefacts/Release/AAX/AnalyzerPro.aaxplugin
+   - build-release/AnalyzerPro_artefacts/Release/Standalone/AnalyzerPro.app
+   
+   Note: AAX artifact may require AAX SDK. If SDK missing, document this
+   as expected limitation and verify other formats build.
 
-In AnalyzerEngine.cpp:
-```cpp
-void AnalyzerEngine::setReleaseTimeMs(float ms) {
-    const float clampedMs = juce::jlimit(100.0f, 5000.0f, ms);
-    
-    // RMS ballistics
-    rmsReleaseMs_ = clampedMs;
-    
-    // Peak ballistics (NEW - was hardcoded at 80ms)
-    peakReleaseMs_ = clampedMs;
-    
-    // Peak Hold decay (convert ms to dB/sec)
-    peakDecayDbPerSec_ = 60.0f / (clampedMs / 1000.0f);
-    
-    // Note: Attack times remain fast and separate
-    // rmsAttackMs_ stays at 60ms
-    // peakAttackMs_ stays at 10ms
-}
-```
+3. CODE AUDIT VERIFICATION
+   Review IMPLEMENTER findings on RT-safety
+   If issues found, document them
+   If no issues found, confirm clean audit
 
-**Step 2: Verify PluginProcessor Calls It**
+4. ACCEPTANCE CRITERIA CHECK
+   Verify each AC 1-6 line by line
 
-In PluginProcessor.cpp, parameter change handler:
-```cpp
-void PluginProcessor::parameterChanged(const String& paramID, float newValue) {
-    if (paramID == "AnalyzerReleaseTime") {  // Or whatever the ID is
-        const float ms = newValue;  // Should already be in ms
-        analyzerEngine.setReleaseTimeMs(ms);
-    }
-}
-```
-
-Or in prepareToPlay/processBlock where Release Time is read:
-```cpp
-if (releaseTimeParam != nullptr) {
-    const float ms = releaseTimeParam->load();
-    if (ms != lastReleaseTimeMs) {
-        lastReleaseTimeMs = ms;
-        analyzerEngine.setReleaseTimeMs(ms);
-    }
-}
-```
-
-TASK 2 DETAILS - Visual Consistency:
--------------------------------------
-
-**Check Peak Trace Rendering**
-
-In RTADisplay.cpp, paintFFTMode():
-```cpp
-// Peak trace rendering (should look like this):
-if (hasPeaks && !s.fftPeakDb.empty()) {
-    float peakMaxDb = -200.0f;
-    buildPoints(s.fftPeakDb, scratchPoints, peakMaxDb);  // ✅
-    
-    if (!scratchPoints.empty()) {
-        smoothPath(scratchPath, scratchPoints);  // ✅ Must have smoothing
-        
-        const float energyNorm = juce::jlimit(0.0f, 1.0f, 
-            (peakMaxDb - (s.bottomDb + 20.0f)) / 40.0f);
-        const float energyMul = static_cast<float>(
-            juce::jmap(energyNorm, 0.0f, 1.0f, 0.95f, 1.25f));
-        
-        // ✅ Must use drawSilkTrace with proper parameters
-        const bool useShimmer = (MDSP_TRACE_SHIMMER_V2 != 0);
-        drawSilkTrace(g, scratchPath, theme.seriesPeak, 
-                     1.2f,          // thickness (similar to RMS 1.5f)
-                     plotAreaWidth, 
-                     true,          // isPeak = true (for visual treatment)
-                     energyMul,     // energy boost
-                     useShimmer);   // shimmer effect
-    }
-}
-```
-
-**Verify All Traces Use Same Pattern:**
-- RMS: thickness 1.5f, isPeak=false, glow, smooth
-- Peak: thickness 1.2f, isPeak=true, glow, smooth  
-- Peak Hold: thickness 1.4f, isPeak=false, glow, smooth
-
-All should use:
-1. `buildPoints()` - converts dB to screen coords
-2. `smoothPath()` - creates smooth Bezier curves
-3. `drawSilkTrace()` - renders with glow and AA
-
-CRITICAL CHECKS:
-----------------
-
-1. **Verify peakReleaseMs_ is used in ballistics:**
-```cpp
-// In computeFFT(), ballistics section:
-const float peakRelCoeff = calcCoeff(peakReleaseMs_);  // ✅ Uses variable
-
-// NOT:
-const float peakRelCoeff = calcCoeff(80.0f);  // ❌ Hardcoded
-```
-
-2. **Verify smoothPath() is called for Peak:**
-```cpp
-// Must have this for Peak trace:
-smoothPath(scratchPath, scratchPoints);
-
-// Not just:
-buildPoints(...);  // Missing smoothPath!
-```
-
-3. **Verify energy calculation for Peak:**
-Peak should have energy-based glow boost just like RMS.
+5. WRITE RESULTS
+   - Write VERIFIER_RESULT.md
+   - Write merged LAST_RESULT.md
+   - STOP
 
 ================================================================================
-EXPECTED BEHAVIOR AFTER FIX
+STOP RULES
 ================================================================================
 
-**Unified Release Time:**
-- Set Release Time to 500ms
-- Stop audio
-- ALL traces (RMS, Peak, multi-channel) decay together over 500ms
-- Smooth, synchronized falloff
+IMPLEMENTER STOPS AFTER:
+- AAX format added to CMakeLists.txt
+- Code audit completed
+- IMPLEMENTER_RESULT.md written
+- NO BUILD PERFORMED
+- NO VERIFICATION PERFORMED
 
-**Visual Consistency:**
-- Peak trace has smooth curves (no steps)
-- Peak trace has subtle glow
-- Professional appearance matching other traces
-- Only color/thickness differ, not rendering quality
+VERIFIER STOPS AFTER:
+- Release build attempted
+- Audit findings reviewed
+- All acceptance criteria evaluated
+- VERIFIER_RESULT.md written
+- LAST_RESULT.md written
+- NO CODE MODIFICATIONS
+
+If either role continues beyond their STOP point: MISSION FAILS
 
 ================================================================================
 FORBIDDEN ACTIONS
 ================================================================================
 
-DO NOT:
-- Change attack times (should remain fast)
-- Modify Peak Hold decay (separate from Peak ballistics)
-- Change rendering for other traces
-- Touch smoothing octaves
-- Modify color schemes
+IMPLEMENTER MUST NOT:
+- Build the project
+- Run any tests
+- Verify build artifacts
+- Modify files outside listed scope
+- Add AAX SDK configuration beyond format list
+- Refactor existing code
+- Add new features
+
+VERIFIER MUST NOT:
+- Modify any code
+- Add any features
+- Fix any bugs found (document only)
+- Continue after writing LAST_RESULT.md
+- Install or configure AAX SDK (document if missing)
 
 ================================================================================
-VERIFICATION COMMANDS
+KNOWN RISKS
 ================================================================================
 
-BUILD:
-cd /Users/avishaylidani/DEV/GitHubRepo/AnalyzerPro
-cmake --build build-debug --config Debug
+Risk 1: AAX SDK Not Installed
+- JUCE requires AAX SDK for AAX builds
+- If SDK missing, build will fail for AAX format
+- This is EXPECTED and ACCEPTABLE for this mission
+- Document in VERIFIER_RESULT.md
+- Other formats (AU, VST3, Standalone) must still build
 
-RUNTIME TEST:
+Risk 2: AAX Signing Required
+- AAX plugins must be signed for release
+- Signing is deferred to deployment phase
+- Unsigned AAX builds are acceptable for beta
 
-Test 1: Release Time Affects Peak
-1. Set Release Time to 1000ms
-2. Play audio with transients
-3. Stop audio
-4. **Time the decay** - should take ~1000ms to fall
-5. Peak and RMS should decay together
-
-Test 2: Different Release Times
-1. Set to 200ms - fast decay
-2. Set to 2000ms - slow decay
-3. Verify Peak responds to changes
-
-Test 3: Visual Quality
-1. Play pink noise or music
-2. Observe Peak trace appearance
-3. Should be smooth, polished, professional
-4. Same "silk" quality as other traces
+Risk 3: Potential Compiler Warnings
+- New format may expose warnings
+- Document warnings, don't fix unless critical
 
 ================================================================================
-EXPECTED OUTCOME
+SUCCESS CRITERIA
 ================================================================================
 
-After this mission:
-- Release Time controls ALL traces (RMS, Peak, multi-channel)
-- Peak trace has same smooth, polished appearance
-- Unified decay behavior
-- Professional visual consistency
-- No hardcoded release times
+Mission succeeds if:
+- AAX added to CMakeLists.txt release mode
+- Release build succeeds for AU, VST3, Standalone (minimum)
+- AAX builds if SDK present, documented if SDK missing
+- No RT-safety violations found
+- No critical bugs found
+- All acceptance criteria marked PASS or PASS (with notes)
+- Both roles STOPPED correctly
 
-================================================================================
-STOP RULE
-================================================================================
-
-IMPLEMENTER MUST STOP after:
-1. Modifying 2-4 files
-2. Writing IMPLEMENTER_RESULT.md
-3. NO verification, NO build, NO test
-
-VERIFIER MUST STOP after:
-1. Building the project
-2. Testing Release Time affects Peak
-3. Verifying visual consistency
-4. Writing VERIFIER_RESULT.md
-5. Writing LAST_RESULT.md
+Mission fails if:
+- Any acceptance criterion marked FAIL
+- Release build fails for existing formats
+- RT-safety violations found
+- Either role violated STOP rules
 
 ================================================================================
 END OF MISSION

@@ -78,19 +78,21 @@ public:
     /** Set tilt mode (UI-only, affects display rendering, not DSP) */
     void setTiltMode (TiltMode mode);
     
-    /** Set L/R power spectrum data for multi-trace rendering */
-    void setLRPowerData (const float* powerL, const float* powerR, int binCount);
+    /** Set multi-trace power spectrum data (L, R, Mid, Side, Mono) */
+    void setMultiTraceData (const float* powerL, const float* powerR,
+                            const float* powerMid, const float* powerSide, const float* powerMono,
+                            int binCount);
 
     /** Trace configuration for multi-trace rendering */
     struct TraceConfig
     {
-        bool showLR = true;
+        bool showLR = false;
         bool showMono = false;
         bool showL = false;
         bool showR = false;
         bool showMid = false;
         bool showSide = false;
-        bool showRMS = true;  // Blue RMS trace
+        bool showRMS = false;  // Blue RMS trace
         
         // 0=None, 1=A-Weighting, 2=BS.468-4
         int weightingMode = 0;

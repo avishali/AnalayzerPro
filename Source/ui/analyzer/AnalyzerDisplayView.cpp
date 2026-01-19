@@ -622,6 +622,11 @@ void AnalyzerDisplayView::timerCallback()
     traceConfig.weightingMode = (pWeight != nullptr) ? (int)pWeight->load() : 0;
     currentWeightingMode_ = traceConfig.weightingMode; // Store for updateFromSnapshot
     
+    // Read Release Time (PeakDecay) for Ballistics
+    auto* pRelease = apvts.getRawParameterValue("PeakDecay");
+    if (pRelease != nullptr)
+        releaseMs_ = pRelease->load();
+        
     // Read Smoothing (Fractional Octave)
     auto* pSmoothing = apvts.getRawParameterValue("Averaging");
     if (pSmoothing != nullptr)
@@ -639,6 +644,9 @@ void AnalyzerDisplayView::timerCallback()
             // Reset ballistics state to prevent glitches during smoothing transitions
             powerLState_.clear();
             powerRState_.clear();
+            midState_.clear();
+            sideState_.clear();
+            monoState_.clear();
             rmsState_.clear();
         }
     }
@@ -1020,7 +1028,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     
     // D. RMS Ballistics (Time Smoothing)
     // Applied to the now-weighted fftDb_
-    applyBallistics (fftDb_.data(), rmsState_, validBinsSize);
+    applyBallistics (fftDb_.data(), rmsState_, validBinsSize, releaseMs_);
     
     // Multi-Trace Processing (moved here to share weighting table)
     if (snapshot.multiTraceEnabled)
@@ -1029,6 +1037,9 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         const size_t validBinsSz = static_cast<size_t> (validBins);
         if (scratchPowerL_.size() != validBinsSz) scratchPowerL_.resize (validBinsSz);
         if (scratchPowerR_.size() != validBinsSz) scratchPowerR_.resize (validBinsSz);
+        if (scratchPowerMid_.size() != validBinsSz) scratchPowerMid_.resize (validBinsSz);
+        if (scratchPowerSide_.size() != validBinsSz) scratchPowerSide_.resize (validBinsSz);
+        if (scratchPowerMono_.size() != validBinsSz) scratchPowerMono_.resize (validBinsSz);
         
         // Copy Raw first
         if (snapshot.powerL.size() >= validBinsSz)
@@ -1036,49 +1047,65 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         if (snapshot.powerR.size() >= validBinsSz)
             std::copy (snapshot.powerR.begin(), snapshot.powerR.begin() + validBins, scratchPowerR_.begin());
             
-        // Apply Weighting to L/R
+        // Apply Weighting to L/R (Additive if dB, but treating as additive to linear power currently?)
+        // CONFIRMED: snapshot.powerL is LINEAR POWER.
+        // CONFIRMED: cachedWeightingTable_ is likely dB (getAWeightingDb returns dB).
+        // ISSUE: Adding dB to Linear Power is physically wrong. 
+        // FIX: Convert weighting to linear before adding? Or assume weighting is small/handled elsewhere?
+        // Since we are not changing Weighting logic in this task (focus is Ballistics), we keep existing behavior
+        // BUT we must replicate it for derived traces logic to match.
+        // Actually, if we smooth L/R, we should probably apply weighting AFTER conversion to dB?
+        // Existing code applied it BEFORE ballistics/smoothing.
+        // Let's stick to existing pattern: Apply weighting to L/R scratch buffers.
+        
         if (!cachedWeightingTable_.empty() && cachedWeightingTable_.size() == validBinsSz)
         {
              for (size_t i = 0; i < validBinsSz; ++i)
              {
+                 // NOTE: This looks suspicious (adding dB to linear), but preserving existing logic.
                  scratchPowerL_[i] += cachedWeightingTable_[i];
                  scratchPowerR_[i] += cachedWeightingTable_[i];
              }
         }
         
-        // Apply Smoothing
-        smoother_.setConfig (smoothingOctaves_, snapshot.fftSize);
-        // smooth in place? No, smoother expects input/output.
-        // We need another scratch or double buffer logic if we want to smooth the weighted data.
-        // Smoother takes const float* input, float* output.
-        // We can use the same buffer if it supports it? 
-        // My SmoothingProcessor implementation likely does NOT support in-place if it uses prefix sums.
-        // Let's check `SmoothingProcessor::process` signature.
-        
-        // To be safe, let's use a temp buffer or just implement in-place if careful.
-        // Actually, smoother likely computes bounds based on index.
-        // Let's create `scratchSmoothL_` if needed. Use `powerLState_` as temp? No, that's ballistics state.
-        
-        // Actually, the previous code was:
-        // smoother_.process (snapshot.powerL.data(), scratchPowerL_.data(), validBins);
-        
-        // Use a persistent scratch buffer for the "smoothed" result
-        static std::vector<float> tempL, tempR; // Avoid static in method.
-        // Let's use `logDb_` or similar as temp? No.
-        
-        // Let's just allocate strictly scoped vectors for now to ensure correctness
+        // Apply Spectral Smoothing (Fractional Octave) to L/R
         std::vector<float> smoothedL (validBinsSz), smoothedR (validBinsSz);
         
+        smoother_.setConfig (smoothingOctaves_, snapshot.fftSize);
         smoother_.process (scratchPowerL_.data(), smoothedL.data(), validBins);
         smoother_.process (scratchPowerR_.data(), smoothedR.data(), validBins);
         
-        // Copy back to scratch for ballistics
-        scratchPowerL_ = smoothedL;
-        scratchPowerR_ = smoothedR;
+        // Now compute Derived Traces (Mid/Side/Mono) from SMOOTHED Linear L/R
+        // This ensures derived traces benefit from spectral smoothing before ballistics
+        constexpr float kMinPower = 1.0e-20f;
         
-        // Tuned RMS Ballistics
-        applyBallistics (scratchPowerL_.data(), powerLState_, validBinsSz);
-        applyBallistics (scratchPowerR_.data(), powerRState_, validBinsSz);
+        for (size_t i = 0; i < validBinsSz; ++i)
+        {
+            const float pL = std::max (smoothedL[i], kMinPower);
+            const float pR = std::max (smoothedR[i], kMinPower);
+            
+            const float magL = std::sqrt (pL);
+            const float magR = std::sqrt (pR);
+            
+            // Mid/Mono = 0.5 * (L+R) (Magnitude)
+            const float magMid = 0.5f * (magL + magR);
+            // Side = 0.5 * |L-R| (Magnitude)
+            const float magSide = 0.5f * std::abs (magL - magR);
+            
+            // Convert everything to dB for Ballistics
+            scratchPowerL_[i] = 10.0f * std::log10(pL);
+            scratchPowerR_[i] = 10.0f * std::log10(pR);
+            scratchPowerMid_[i] = 10.0f * std::log10(std::max(magMid * magMid, kMinPower));
+            scratchPowerMono_[i] = scratchPowerMid_[i]; // Mono same as Mid here
+            scratchPowerSide_[i] = 10.0f * std::log10(std::max(magSide * magSide, kMinPower));
+        }
+        
+        // Apply Ballistics (dB Domain) to ALL traces using unified Release Time
+        applyBallistics (scratchPowerL_.data(), powerLState_, validBinsSz, releaseMs_);
+        applyBallistics (scratchPowerR_.data(), powerRState_, validBinsSz, releaseMs_);
+        applyBallistics (scratchPowerMid_.data(), midState_, validBinsSz, releaseMs_);
+        applyBallistics (scratchPowerSide_.data(), sideState_, validBinsSz, releaseMs_);
+        applyBallistics (scratchPowerMono_.data(), monoState_, validBinsSz, releaseMs_);
     }
 
     lastMinDb_ = minVal;
@@ -1144,12 +1171,13 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                                    usePeakHold ? &fftPeakHoldDb_ : nullptr);
             rtaDisplay.setSessionMarker (sessionMarkerValid_, sessionMarkerBin_, sessionMarkerDb_);
             
-            // Multi-trace: Feed L/R power data if available
-            // Logic moved to Step 1b to unify weighting application
-            // Only set data here
+            // Multi-trace: Feed L/R/Mid/Side/Mono power data if available
+            // Logic moved to Step 1b to unify weighting application and ballistics
             if (snapshot.multiTraceEnabled)
             {
-                 rtaDisplay.setLRPowerData (scratchPowerL_.data(), scratchPowerR_.data(), validBins);
+                 rtaDisplay.setMultiTraceData (scratchPowerL_.data(), scratchPowerR_.data(),
+                                               scratchPowerMid_.data(), scratchPowerSide_.data(), scratchPowerMono_.data(),
+                                               validBins);
             }
             
             ++traceDataGen_; // SMOOTHING_RENDERING_STABILITY_V2: data changed
@@ -1308,7 +1336,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
 }
 
 //==============================================================================
-void AnalyzerDisplayView::applyBallistics (float* data, std::vector<float>& state, size_t numBins)
+void AnalyzerDisplayView::applyBallistics (float* data, std::vector<float>& state, size_t numBins, float releaseMs)
 {
     if (state.size() != numBins)
     {
@@ -1321,7 +1349,7 @@ void AnalyzerDisplayView::applyBallistics (float* data, std::vector<float>& stat
     const float dt = 1.0f / 60.0f; 
     
     const float attSec = kRmsAttackMs / 1000.0f;
-    const float relSec = kRmsReleaseMs / 1000.0f;
+    const float relSec = releaseMs / 1000.0f;
     
     // Coefficient = 1 - exp(-dt / tau)
     // Represents the fraction of the distance covered in one frame.

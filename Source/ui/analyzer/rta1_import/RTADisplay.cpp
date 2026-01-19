@@ -358,11 +358,13 @@ void RTADisplay::setTraceConfig (const TraceConfig& config)
     repaint();
 }
 
-void RTADisplay::setLRPowerData (const float* powerL, const float* powerR, int binCount)
+void RTADisplay::setMultiTraceData (const float* powerL, const float* powerR,
+                                    const float* powerMid, const float* powerSide, const float* powerMono,
+                                    int binCount)
 {
     // B1: Every setter updates state fields and calls repaint()
     
-    // Guard: invalid inputs
+    // Guard: invalid inputs (only L/R required, others optional but expected)
     if (powerL == nullptr || powerR == nullptr || binCount <= 0)
     {
         state.lrBinCount = 0;
@@ -375,7 +377,7 @@ void RTADisplay::setLRPowerData (const float* powerL, const float* powerR, int b
         state.hasValidMultiTraceData = false;
         invalidatePaths(); // Data cleared, invalidate paths
         repaint();
-        return; 
+        return;
     }
     
     // Update bin count and storage
@@ -392,53 +394,48 @@ void RTADisplay::setLRPowerData (const float* powerL, const float* powerR, int b
         state.sideDb.resize (sz);
     }
     
-    constexpr float kMinPower = 1.0e-20f; // Stable floor
     state.hasValidMultiTraceData = true;
     
-    // Compute Derived Traces (L, R, Stereo, Mono, Mid, Side) using Magnitude Domain
-    // SOP Step 2: "Compute derived mags... convert back to power... convert to dB"
+    // Compute Stereo (Max Envelope) locally if not passed? 
+    // The previous implementation derived it. 
+    // But since we are doing ballistics upstream, we should compute Stereo upstream too.
+    // However, the signature I added to .h does NOT include stereo.
+    // Let's check the .h change.
+    
+    // Re-check .h change:
+    // void setMultiTraceData (const float* powerL, const float* powerR,
+    //                         const float* powerMid, const float* powerSide, const float* powerMono,
+    //                         int binCount);
+    
+    // So "Stereo" (Max L/R) is NOT passed.
+    // Should I compute derived Stereo here?
+    // If L and R are BALLISTICALLY SMOOTHED, then max(L, R) is also smooth-ish.
+    // So computing Stereo here from L and R is fine.
+    
+    // Also, inputs are now expected to be in dB. 
+    // PREVIOUSLY: input was Linear Power.
+    // NOW: input is dB (post-ballistics).
     
     float maxDb = -200.0f; // Track max for Data Guard
 
     for (int i = 0; i < binCount; ++i)
     {
-        const float pL = std::max (powerL[i], kMinPower);
-        const float pR = std::max (powerR[i], kMinPower);
+        const size_t idx = static_cast<size_t> (i);
+        // Copy dB directly
+        state.lDbL[idx] = powerL[idx];
+        state.lDbR[idx] = powerR[idx];
         
-        // 1. Magnitude
-        const float magL = std::sqrt (pL);
-        const float magR = std::sqrt (pR);
+        // Optional traces
+        if (powerMid) state.midDb[idx] = powerMid[idx];
+        if (powerSide) state.sideDb[idx] = powerSide[idx];
+        if (powerMono) state.monoDb[idx] = powerMono[idx];
         
-        // 2. Derive Mags
-        // Stereo: max(L, R) envelope for visibility
-        const float magStereo = std::max (magL, magR);
-        const float magMono   = 0.5f * (magL + magR); 
-        const float magMid    = 0.5f * (magL + magR); 
-        const float magSide   = 0.5f * std::abs (magL - magR); // Abs for magnitude
-        
-        // 3. Power + dB
-        size_t idx = static_cast<size_t>(i);
-        
-        // L / R
-        state.lDbL[idx] = 10.0f * std::log10 (pL);
-        state.lDbR[idx] = 10.0f * std::log10 (pR);
-        
-        // Stereo
-        state.stereoDb[idx] = 10.0f * std::log10 (std::max (magStereo * magStereo, kMinPower));
-        
-        // Mono
-        state.monoDb[idx] = 10.0f * std::log10 (std::max (magMono * magMono, kMinPower));
-        
-        // Mid
-        state.midDb[idx] = 10.0f * std::log10 (std::max (magMid * magMid, kMinPower));
-        
-        // Side
-        state.sideDb[idx] = 10.0f * std::log10 (std::max (magSide * magSide, kMinPower));
+        // Derive Stereo (Max Envelope) from smoothed L/R
+        state.stereoDb[idx] = std::max(state.lDbL[idx], state.lDbR[idx]);
 
-        // Max check for Data Guard
-        float pMax = std::max(pL, pR);
-        float dbMax = 10.0f * std::log10(pMax);
-        if (dbMax > maxDb) maxDb = dbMax;
+        // Max check for Data Guard (Stereo covers L/R max)
+        float pMax = state.stereoDb[idx]; 
+        if (pMax > maxDb) maxDb = pMax;
     }
     
     // FFT No Data Guard
@@ -447,11 +444,7 @@ void RTADisplay::setLRPowerData (const float* powerL, const float* powerR, int b
         state.hasValidSpectrumFrame = true;
     }
     
-    // Repaint is triggered by the caller (AnalyzerDisplayView) or implicitly here?
-    // The pattern in this file is that setters call repaint(), but AnalyzerDisplayView 
-    // also calls repaint() at the end of the update block. 
-    // We'll call it here to be consistent with B1 rule ("Every setter updates state... and calls repaint").
-    invalidatePaths(); // New LR data invalidates paths
+    invalidatePaths(); // New trace data invalidates paths
     repaint();
 }
 float RTADisplay::computeTiltDb (float freqHz) const
@@ -2166,42 +2159,45 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
     
     // Stereo implies combined or separate? If logic populates cachedStereoPath_, draw it.
     // Assuming stereoDb logic populates cachedStereoPath_.
-    if (!cachedStereoPath_.isEmpty()) 
+    if (c.showLR && !cachedStereoPath_.isEmpty()) 
         drawSilkTrace(g, cachedStereoPath_, colStereo, 1.8f, viewWidth, false, 1.0f, false);
 
     if (c.showMono) drawSilkTrace(g, cachedMonoPath_, colMono, 1.8f, viewWidth, false, 1.0f, false);
 
-    // Area fill under main FFT trace (gradient from trace to bottom)
-    if (!cachedFftPath_.isEmpty())
+    if (c.showRMS)
     {
-        // Create a closed path for the fill
-        juce::Path fillPath = cachedFftPath_;
-        
-        // Get the bounds to close the path properly
-        const auto pathBounds = cachedFftPath_.getBounds();
-        if (pathBounds.getWidth() > 1.0f)
+        // Area fill under main FFT trace (gradient from trace to bottom)
+        if (!cachedFftPath_.isEmpty())
         {
-            // Close the path: line to bottom-right, then bottom-left, then back to start
-            const float bottomY = plotAreaTop + plotAreaHeight;
-            fillPath.lineTo (pathBounds.getRight(), bottomY);
-            fillPath.lineTo (pathBounds.getX(), bottomY);
-            fillPath.closeSubPath();
+            // Create a closed path for the fill
+            juce::Path fillPath = cachedFftPath_;
             
-            // Create vertical gradient (trace color at top, transparent at bottom)
-            juce::ColourGradient gradient (
-                colRms.withAlpha (0.35f),  // Top: semi-transparent trace color
-                0.0f, plotAreaTop,
-                colRms.withAlpha (0.05f),  // Bottom: nearly transparent
-                0.0f, bottomY,
-                false);  // Not radial
-            
-            g.setGradientFill (gradient);
-            g.fillPath (fillPath);
+            // Get the bounds to close the path properly
+            const auto pathBounds = cachedFftPath_.getBounds();
+            if (pathBounds.getWidth() > 1.0f)
+            {
+                // Close the path: line to bottom-right, then bottom-left, then back to start
+                const float bottomY = plotAreaTop + plotAreaHeight;
+                fillPath.lineTo (pathBounds.getRight(), bottomY);
+                fillPath.lineTo (pathBounds.getX(), bottomY);
+                fillPath.closeSubPath();
+                
+                // Create vertical gradient (trace color at top, transparent at bottom)
+                juce::ColourGradient gradient (
+                    colRms.withAlpha (0.35f),  // Top: semi-transparent trace color
+                    0.0f, plotAreaTop,
+                    colRms.withAlpha (0.05f),  // Bottom: nearly transparent
+                    0.0f, bottomY,
+                    false);  // Not radial
+                
+                g.setGradientFill (gradient);
+                g.fillPath (fillPath);
+            }
         }
-    }
 
-    // Main FFT trace (with area fill drawn above)
-    drawSilkTrace(g, cachedFftPath_, colRms, 2.0f, viewWidth, false, 1.0f, false);
+        // Main FFT trace (with area fill drawn above)
+        drawSilkTrace(g, cachedFftPath_, colRms, 2.0f, viewWidth, false, 1.0f, false);
+    }
     
     // Subtle area fill under peak trace (very light)
     if (!cachedPeakPath_.isEmpty())
@@ -2231,14 +2227,7 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
     if (!cachedPeakPath_.isEmpty())
         drawSilkTrace(g, cachedPeakPath_, theme.seriesPeak, 1.2f, viewWidth, true, 1.2f, true); // Peak=true, higher energy, shimmer
 
-    // Peak Hold Trace (Ceiling) - M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR
-    // Drawn separate from Peak, usually brighter/white
-    if (!cachedPeakHoldPath_.isEmpty())
-    {
-        // Draw white/bright trace, slightly thicker, on top of everything
-         drawSilkTrace(g, cachedPeakHoldPath_, juce::Colours::white.withAlpha(0.9f), 
-                       1.5f, viewWidth, false, 1.0f, false);
-    }
+    // Peak Hold Trace REMOVED (Mission M_2026_01_19_TRACE_VISIBILITY_FIX)
 
 
     // =========================================================================
@@ -2325,22 +2314,57 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
     // 3. Legend
     {
         const juce::Rectangle<float> legendPlotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
-        mdsp_ui::LegendItem legendItems[2];
-        legendItems[0].label = "FFT";
-        legendItems[0].colour = colRms; // Defined in paintFFTMode scope
-        legendItems[0].enabled = true;
-        legendItems[1].label = "Peak";
-        legendItems[1].colour = theme.seriesPeak;
-        legendItems[1].enabled = !cachedPeakPath_.isEmpty();
         
-        mdsp_ui::LegendStyle legendStyle;
-        legendStyle.fontHeightPx = 10.0f;
-        legendStyle.drawFrame = true;
-        legendStyle.frameCornerRadiusPx = 4.0f;
-        legendStyle.frameFillAlpha = 0.80f;
-        legendStyle.frameBorderAlpha = 0.90f;
+        std::vector<mdsp_ui::LegendItem> legendItems;
+        legendItems.reserve(9); // Max possible items
+
+        // 1. RMS (Main FFT)
+        if (c.showRMS)
+            legendItems.push_back({ "RMS", colRms, true });
+
+        // 2. Peak
+        if (!cachedPeakPath_.isEmpty())
+            legendItems.push_back({ "Peak", theme.seriesPeak, true });
+
+        // 3. Peak Hold REMOVED
         
-        mdsp_ui::LegendRenderer::draw (g, legendPlotBounds, theme, legendItems, 2, mdsp_ui::LegendEdge::TopRight, legendStyle);
+        // 4. L
+        if (c.showL && !state.lDbL.empty())
+            legendItems.push_back({ "L", colLeft, true });
+
+        // 5. R
+        if (c.showR && !state.lDbR.empty())
+            legendItems.push_back({ "R", colRight, true });
+
+        // 6. Mid
+        if (c.showMid && !state.midDb.empty())
+            legendItems.push_back({ "Mid", colMid, true });
+
+        // 7. Side
+        if (c.showSide && !state.sideDb.empty())
+            legendItems.push_back({ "Side", colSide, true });
+
+        // 8. Mono
+        if (c.showMono && !state.monoDb.empty())
+            legendItems.push_back({ "Mono", colMono, true });
+            
+        // 9. Stereo
+        if (c.showLR && !cachedStereoPath_.isEmpty())
+             legendItems.push_back({ "Stereo", colStereo, true });
+        
+        if (!legendItems.empty())
+        {
+            mdsp_ui::LegendStyle legendStyle;
+            legendStyle.fontHeightPx = 10.0f;
+            legendStyle.drawFrame = true;
+            legendStyle.frameCornerRadiusPx = 4.0f;
+            legendStyle.frameFillAlpha = 0.80f;
+            legendStyle.frameBorderAlpha = 0.90f;
+            
+            mdsp_ui::LegendRenderer::draw (g, legendPlotBounds, theme, legendItems.data(), 
+                                          static_cast<int>(legendItems.size()), 
+                                          mdsp_ui::LegendEdge::TopRight, legendStyle);
+        }
     }
 
     // 4. Session Marker
