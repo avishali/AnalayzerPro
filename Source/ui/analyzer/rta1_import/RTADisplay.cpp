@@ -210,14 +210,24 @@ void RTADisplay::setViewMode (int mode)
     }
 }
 
-void RTADisplay::setFFTData (const std::vector<float>& fftBinsDb, const std::vector<float>* peakBinsDbNullable)
+void RTADisplay::setFFTData (const std::vector<float>& fftBinsDb, 
+                             const std::vector<float>* peakBinsDbNullable,
+                             const std::vector<float>* peakHoldBinsDbNullable)
 {
     // B1: Every setter updates state fields and calls repaint()
     state.fftDb = fftBinsDb;
+    
     if (peakBinsDbNullable != nullptr)
         state.fftPeakDb = *peakBinsDbNullable;
     else
         state.fftPeakDb.clear();
+
+    // M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR: Store Peak Hold trace
+    if (peakHoldBinsDbNullable != nullptr)
+        state.fftPeakHoldDb = *peakHoldBinsDbNullable;
+    else
+        state.fftPeakHoldDb.clear();
+
     // FFT No Data Guard: Latch valid frame if signal > threshold (+6dB above noise floor)
     if (state.fftDb.empty())
     {
@@ -563,7 +573,7 @@ void RTADisplay::setGenerations (uint32_t traceDataGen, uint32_t smoothingGen)
 void RTADisplay::invalidatePaths()
 {
     // SMOOTHING_RENDERING_STABILITY_V2: Mark paths as needing rebuild
-    pathsValid_ = false;
+    pathsValid_ = true;
     pathGen_++; // Increment generation for atomic rebuild check
     // Invalidate weighting path too, as it's part of the rendering
     lastWeightingMode_ = -1; // Force rebuild
@@ -608,6 +618,7 @@ void RTADisplay::buildFftPaths()
     // Clear all paths first (Atomic start)
     cachedFftPath_.clear();
     cachedPeakPath_.clear();
+    cachedPeakHoldPath_.clear(); // M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR
     
     cachedLPath_.clear();
     cachedRPath_.clear();
@@ -632,6 +643,30 @@ void RTADisplay::buildFftPaths()
     // Build Peak Path
     if (!s.fftPeakDb.empty() && s.fftPeakDb.size() == s.fftDb.size())
         buildDecimatedPath(s.fftPeakDb, cachedPeakPath_);
+
+    // Build Peak Hold Path (M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR)
+    if (!s.fftPeakHoldDb.empty() && s.fftPeakHoldDb.size() == s.fftDb.size())
+    {
+        // Fix 1: Toggle visibility based on data content
+        // Only build path if at least one bin is above "noise floor" (-100dB)
+        bool hasPeakData = false;
+        constexpr float kVisibleThresholdDb = -100.0f;
+        
+        // Fast scan (vectorized by compiler hopefully)
+        for (float db : s.fftPeakHoldDb)
+        {
+            if (db > kVisibleThresholdDb)
+            {
+                hasPeakData = true;
+                break;
+            }
+        }
+        
+        if (hasPeakData)
+        {
+            buildDecimatedPath(s.fftPeakHoldDb, cachedPeakHoldPath_);
+        }
+    }
         
     // Build Multi-Traces if configured
     const auto& c = traceConfig_;
@@ -696,25 +731,62 @@ void RTADisplay::buildDecimatedPath(const std::vector<float>& data, juce::Path& 
         const float freqStart = xToFreq(x0);
         const float freqEnd = xToFreq(x1);
         
-        const size_t binStart = static_cast<size_t>(freqStart / binWidthHz);
-        const size_t binEnd = static_cast<size_t>(freqEnd / binWidthHz);
+        // Convert Hz range to Bin range (float)
+        const float binStartF = freqStart / binWidthHz;
+        const float binEndF = freqEnd / binWidthHz;
         
-        size_t b0 = std::min(binStart, numBins - 1);
-        size_t b1 = std::min(binEnd, numBins);
-        if (b1 <= b0) b1 = b0 + 1;
+        const size_t b0 = juce::jlimit((size_t)0, numBins - 1, static_cast<size_t>(binStartF));
+        const size_t b1 = juce::jlimit((size_t)0, numBins, static_cast<size_t>(std::ceil(binEndF)));
         
-        float maxDb = -200.0f;
-        for (size_t k = b0; k < b1; ++k)
+        float finalDb = -200.0f;
+        
+        // Fix 3: Smoothness vs Accuracy Hybrid
+        // If the pixel covers < 1 bin (Low Freq / Zoomed), use Interpolation to avoid steps.
+        // If the pixel covers >= 1 bin (High Freq), use Peak Detection to avoid missing energy.
+        if ((binEndF - binStartF) < 1.0f)
         {
-            // ARTIFACT GUARD: Filter non-finite input data
-            const float val = data[k];
-            if (std::isfinite(val) && val > maxDb) maxDb = val;
+            // Sub-bin resolution: Interpolate at pixel center
+            const float freqCenter = xToFreq(x0 + 0.5f);
+            const float exactBin = freqCenter / binWidthHz;
+            const size_t idx = static_cast<size_t>(exactBin);
+            const float frac = exactBin - static_cast<float>(idx);
+            
+            if (idx < numBins - 1)
+            {
+                 // Linear Interpolation
+                 float v1 = data[idx];
+                 float v2 = data[idx+1];
+                 // Sanitize inputs
+                 if (!std::isfinite(v1)) v1 = -120.0f;
+                 if (!std::isfinite(v2)) v2 = -120.0f;
+                 finalDb = v1 * (1.0f - frac) + v2 * frac;
+            }
+            else if (idx < numBins)
+            {
+                 finalDb = data[idx];
+            }
+        }
+        else
+        {
+            // Multi-bin resolution: Peak Detect
+            // Ensure we scan at least one bin
+            size_t validB0 = b0;
+            size_t validB1 = std::max(b1, validB0 + 1);
+            validB1 = std::min(validB1, numBins);
+            
+            float maxVal = -200.0f;
+            for (size_t k = validB0; k < validB1; ++k)
+            {
+                const float val = data[k];
+                if (std::isfinite(val) && val > maxVal) maxVal = val;
+            }
+            finalDb = maxVal;
         }
             
         // ARTIFACT GUARD: Hard Clamp Y
-        maxDb = juce::jlimit(s.bottomDb, s.topDb + 20.0f, maxDb);
+        finalDb = juce::jlimit(s.bottomDb, s.topDb + 20.0f, finalDb);
         const float freqForY = xToFreq(x0 + 0.5f);
-        const float y = dbToYWithCompensation(maxDb, freqForY, s);
+        const float y = dbToYWithCompensation(finalDb, freqForY, s);
 
         // ARTIFACT GUARD: Sanity check Y
         if (!std::isfinite(y)) continue;
@@ -2157,7 +2229,17 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
     
     // Peak Trace (slightly thinner, highlight enabled)
     if (!cachedPeakPath_.isEmpty())
-        drawSilkTrace(g, cachedPeakPath_, theme.seriesPeak, 1.8f, viewWidth, true, 1.2f, true); // Peak=true, higher energy, shimmer
+        drawSilkTrace(g, cachedPeakPath_, theme.seriesPeak, 1.2f, viewWidth, true, 1.2f, true); // Peak=true, higher energy, shimmer
+
+    // Peak Hold Trace (Ceiling) - M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR
+    // Drawn separate from Peak, usually brighter/white
+    if (!cachedPeakHoldPath_.isEmpty())
+    {
+        // Draw white/bright trace, slightly thicker, on top of everything
+         drawSilkTrace(g, cachedPeakHoldPath_, juce::Colours::white.withAlpha(0.9f), 
+                       1.5f, viewWidth, false, 1.0f, false);
+    }
+
 
     // =========================================================================
     // OVERLAYS (Weighting, Selection, Legend)

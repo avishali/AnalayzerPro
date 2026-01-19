@@ -702,7 +702,9 @@ void AnalyzerDisplayView::timerCallback()
                             result = juce::jmin (0.0f, result + 2.0f);
                         fftPeakDbDisplay_[i] = result;
                     }
-                    rtaDisplay.setFFTData (fftDb_, &fftPeakDbDisplay_);
+                    rtaDisplay.setFFTData (fftDb_, 
+                                           &fftPeakDbDisplay_,
+                                           !peakHoldDbDisplay_.empty() ? &peakHoldDbDisplay_ : nullptr);
                 }
                 break;
             }
@@ -1116,11 +1118,30 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                         
                     fftPeakDbDisplay_[i] = peakDb;
                 }
+
+                // Peak Hold logic moved outside to be independent
+            }
+            
+            // Extract Peak Hold from snapshot (Independent of Peak Trace)
+            bool usePeakHold = false;
+            fftPeakHoldDb_.resize (validBinsSize);
+            
+            if (snapshot.fftPeakHoldDb.size() >= static_cast<size_t> (validBins))
+            {
+                std::copy (snapshot.fftPeakHoldDb.begin(), snapshot.fftPeakHoldDb.begin() + validBins, fftPeakHoldDb_.begin());
+                usePeakHold = true;
+            }
+            else
+            {
+                fftPeakHoldDb_.clear();
+                fftPeakHoldDb_.resize (validBinsSize, -120.0f);
             }
 
             // Feed RTADisplay with FFT data (ONLY in FFT mode)
             // Send data to Display (including session marker)
-            rtaDisplay.setFFTData (fftDb_, usePeaks ? &fftPeakDbDisplay_ : nullptr);
+            rtaDisplay.setFFTData (fftDb_, 
+                                   usePeaks ? &fftPeakDbDisplay_ : nullptr,
+                                   usePeakHold ? &fftPeakHoldDb_ : nullptr);
             rtaDisplay.setSessionMarker (sessionMarkerValid_, sessionMarkerBin_, sessionMarkerDb_);
             
             // Multi-trace: Feed L/R power data if available

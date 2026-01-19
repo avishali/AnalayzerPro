@@ -30,6 +30,16 @@ struct AnalyzerSnapshot
     std::array<float, kMaxFFTBins> fftPeakDbMid{};
     std::array<float, kMaxFFTBins> fftPeakDbSide{};
     
+    // Peak Hold versions (Maximum envelope, slow/no decay)
+    std::array<float, kMaxFFTBins> fftPeakHoldDbL{};
+    std::array<float, kMaxFFTBins> fftPeakHoldDbR{};
+    std::array<float, kMaxFFTBins> fftPeakHoldDbMono{};
+    std::array<float, kMaxFFTBins> fftPeakHoldDbMid{};
+    std::array<float, kMaxFFTBins> fftPeakHoldDbSide{};
+    
+    // Legacy/Main Peak Hold (corresponding to fftDb)
+    std::array<float, kMaxFFTBins> fftPeakHoldDb{};
+    
     // Power domain arrays for UI-side derivation of Mono/Mid/Side
     // These are in linear power (NOT dB), enabling proper spectral math
     std::array<float, kMaxFFTBins> powerL{};

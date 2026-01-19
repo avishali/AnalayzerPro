@@ -122,6 +122,7 @@ private:
     std::vector<float> fftPeakDbDisplay_;
     std::vector<float> bandsPeakDbDisplay_;
     std::vector<float> logPeakDbDisplay_;
+    std::vector<float> peakHoldDbDisplay_; // M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR
 
     bool peakFlashActive_ = false;
     double peakFlashUntilMs_ = 0.0;
@@ -133,6 +134,7 @@ private:
     bool isHoldOn_ = false;
     std::vector<float> fftDb_;
     std::vector<float> fftPeakDb_;
+    std::vector<float> fftPeakHoldDb_; // NEW: Stores Peak Hold from snapshot for data flow
     std::vector<float> bandsDb_;
     std::vector<float> bandsPeakDb_;
     std::vector<float> logDb_;

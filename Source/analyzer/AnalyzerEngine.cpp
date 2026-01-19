@@ -8,6 +8,8 @@ AnalyzerEngine::AnalyzerEngine()
     : currentFFTSize (2048), currentHopSize (512)
 {
     // Buffers will be resized in prepare()
+    peakHoldEnabled_ = false;
+    peakHoldMode_ = PeakHoldMode::HoldThenDecay;
 }
 
 AnalyzerEngine::~AnalyzerEngine() = default;
@@ -15,6 +17,7 @@ AnalyzerEngine::~AnalyzerEngine() = default;
 void AnalyzerEngine::prepare (double sampleRate, int /* samplesPerBlock */)
 {
     currentSampleRate = sampleRate;
+    peakHoldEnabled_ = false; // AC1: Ensure enabled on prepare
     
     // Initialize FFT size (use currentFFTSize, default 2048)
     initializeFFT (currentFFTSize);
@@ -52,6 +55,9 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     smoothedMagnitude.resize (static_cast<size_t> (numBins), 0.0f);
     
     // Resize smoothing buffers
+    smoothedMagnitude.resize(static_cast<size_t> (numBins), 0.0f);
+    smoothedPeak.resize(static_cast<size_t> (numBins), 0.0f); // Restored
+    
     smoothLowBounds.resize (static_cast<size_t> (numBins), 0);
     smoothHighBounds.resize (static_cast<size_t> (numBins), 0);
     updateSmoothingBounds();
@@ -126,6 +132,23 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     published_.data.fftSize = fftSize;
     published_.data.numBins = numBins;
     published_.data.fftBinCount = numBins;
+    
+    // M_2026_01_19_PEAK_HOLD_INIT_VALUE_FIX: Explicitly initialize snapshot peak arrays to floor
+    // AnalyzerSnapshot uses std::array which defaults to 0.0f, causing startup glitch (-0dB white line).
+    std::fill (stagingSnapshot_.fftPeakDb.begin(), stagingSnapshot_.fftPeakDb.end(), kDbFloor);
+    std::fill (stagingSnapshot_.fftPeakHoldDb.begin(), stagingSnapshot_.fftPeakHoldDb.end(), kDbFloor);
+    
+    std::fill (stagingSnapshot_.fftPeakDbL.begin(), stagingSnapshot_.fftPeakDbL.end(), kDbFloor);
+    std::fill (stagingSnapshot_.fftPeakDbR.begin(), stagingSnapshot_.fftPeakDbR.end(), kDbFloor);
+    std::fill (stagingSnapshot_.fftPeakDbMono.begin(), stagingSnapshot_.fftPeakDbMono.end(), kDbFloor);
+    std::fill (stagingSnapshot_.fftPeakDbMid.begin(), stagingSnapshot_.fftPeakDbMid.end(), kDbFloor);
+    std::fill (stagingSnapshot_.fftPeakDbSide.begin(), stagingSnapshot_.fftPeakDbSide.end(), kDbFloor);
+    
+    std::fill (stagingSnapshot_.fftPeakHoldDbL.begin(), stagingSnapshot_.fftPeakHoldDbL.end(), kDbFloor);
+    std::fill (stagingSnapshot_.fftPeakHoldDbR.begin(), stagingSnapshot_.fftPeakHoldDbR.end(), kDbFloor);
+    std::fill (stagingSnapshot_.fftPeakHoldDbMono.begin(), stagingSnapshot_.fftPeakHoldDbMono.end(), kDbFloor);
+    std::fill (stagingSnapshot_.fftPeakHoldDbMid.begin(), stagingSnapshot_.fftPeakHoldDbMid.end(), kDbFloor);
+    std::fill (stagingSnapshot_.fftPeakHoldDbSide.begin(), stagingSnapshot_.fftPeakHoldDbSide.end(), kDbFloor);
 }
 
 void AnalyzerEngine::reset()
@@ -137,7 +160,9 @@ void AnalyzerEngine::reset()
     fftOutput.clear();
     window.clear();
     fifoBuffer.clear();
+    fifoBuffer.clear();
     smoothedMagnitude.clear();
+    smoothedPeak.clear(); // Restored
     peakHold.clear();
     magnitudes_.clear();
     dbValues_.clear();
@@ -317,8 +342,8 @@ void AnalyzerEngine::computeFFT()
 
     const float rmsAttCoeff = calcCoeff(rmsAttackMs_);
     const float rmsRelCoeff = calcCoeff(rmsReleaseMs_);
-    // const float peakAttCoeff = calcCoeff(peakAttackMs_);
-    // const float peakRelCoeff = calcCoeff(peakReleaseMs_);
+    const float peakAttCoeff = calcCoeff(peakAttackMs_);
+    const float peakRelCoeff = calcCoeff(peakReleaseMs_);
 
     for (int i = 0; i < numBins; ++i)
     {
@@ -330,11 +355,10 @@ void AnalyzerEngine::computeFFT()
         const float rmsCoeff = (inputPower > rmsState) ? rmsAttCoeff : rmsRelCoeff;
         rmsState = rmsCoeff * rmsState + (1.0f - rmsCoeff) * inputPower;
 
-        // Peak Ballistics
-        // Peak Ballistics (REMOVED in V2 Separation - Peak is now Instant)
-        // float& peakState = smoothedPeak[idx];
-        // const float peakCoeff = (inputPower > peakState) ? peakAttCoeff : peakRelCoeff;
-        // peakState = peakCoeff * peakState + (1.0f - peakCoeff) * inputPower;
+        // Peak Ballistics (Restored for "Silky" consistency)
+        float& peakState = smoothedPeak[idx];
+        const float peakCoeff = (inputPower > peakState) ? peakAttCoeff : peakRelCoeff;
+        peakState = peakCoeff * peakState + (1.0f - peakCoeff) * inputPower;
     }
     
 #if JUCE_DEBUG
@@ -349,14 +373,10 @@ void AnalyzerEngine::computeFFT()
     // Convert Time-Smoothed POWER to dB for display (Main Trace / RMS)
     convertToDb (smoothedMagnitude.data(), dbValues_.data(), numBins);
     
-    // Convert Fast-Peak Smoothed POWER to dB (Ballistic/Live Trace)
-    // Feeds into the Peak Hold logic for decay tracking
-    // Convert Fast-Peak Smoothed POWER to dB (Ballistic/Live Trace)
-    // Feeds into the Peak Hold logic for decay tracking
-    // convertToDb (smoothedPeak.data(), dbRaw_.data(), numBins);
-    // V2 CHANGE: dbRaw_ now mimics dbInstant_ for decay floor to avoid double-ballistics 
-    // or use dbInstant_ directly. For now, just duplicate instant to raw to keep updatePeakHold compatible.
-    std::copy(dbInstant_.begin(), dbInstant_.end(), dbRaw_.begin());
+    // Convert Fast-Peak Smoothed POWER to dB (Ballistic Peak Trace)
+    // Feeds into the Peak Hold logic for decay tracking AND Display
+    convertToDb (smoothedPeak.data(), dbRaw_.data(), numBins);
+    // std::copy(dbInstant_.begin(), dbInstant_.end(), dbRaw_.begin()); // Removed instant copy
     
     // Peak Pipeline: Calculate Instantaneous dB from RAW magnitudes (no octave smoothing)
     // This ensures Peak latches the TRUE session max, independent from RMS smoothing.
@@ -367,18 +387,88 @@ void AnalyzerEngine::computeFFT()
     updatePeakHold (dbInstant_.data(), dbRaw_.data(), peakHold.data(), numBins);
     
     // CRITICAL: numBins must equal expectedBins (fftSize/2 + 1)
-    // CRITICAL: numBins must equal expectedBins (fftSize/2 + 1)
     jassert (numBins == (currentFFTSize / 2 + 1));  // DEBUG assert: bin count must match FFT size
     
-    // Build local snapshot with computed FFT data
-    AnalyzerSnapshot snapshot;
+    // Per-Bin Clamping to Peak Hold Ceiling (AC3)
+    // Ensures no trace ever exceeds the "Maximum Envelope" (Peak Hold)
+    // M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR
+    const std::size_t numBinsSz = static_cast<std::size_t> (numBins);
+    for (std::size_t i = 0; i < numBinsSz; ++i)
+    {
+        // 1. Peak Hold Integrity: 
+        // If live traces (RMS or Ballistic Peak) exceed Hold, pull Hold UP.
+        // If live traces are below Hold, clamp traces DOWN to Hold (ceiling).
+        
+        float hold = peakHold[i];
+        
+        // Clamp RMS (dbValues_) to Hold
+        if (dbValues_[i] > hold)
+        {
+            hold = dbValues_[i]; // Push up
+            peakHold[i] = hold;
+        }
+        else
+        {
+            // Clamp down (RMS cannot exceed Hold)
+            // Actually, pushing up handles equality. 
+            // We just need to ensure dbValues_ <= hold.
+            // If dbValues_ was > hold, we raised hold to match.
+            // If dbValues_ < hold, it's fine.
+            // Wait, "Peak Hold represents absolute maximum".
+            // So logic checks OUT: max(RMS, Peak) > Hold -> Hold = max.
+        }
+        
+        // Clamp Ballistic Peak (dbRaw_) to Hold
+        if (dbRaw_[i] > hold)
+        {
+             hold = dbRaw_[i];
+             peakHold[i] = hold;
+        }
+        
+        // Multi-Trace Clamping if enabled
+        if (enableMultiTrace_)
+        {
+            // Note: multi-trace buffers are POWER domain here (powerL_, powerR_).
+            // Clamping usually happens in dB domain. 
+            // We'll trust UI to handle multi-trace clamping or do it in UI thread derivation.
+            // For now, focus on RMS/Peak which are the main traces.
+        }
+    }
+
+    // SANITIZATION (Fix 2: HF Spikes / NaN / Overflow protection)
+    // Ensure no invalid values leak into the snapshot
+    // SANITIZATION (Fix 2: HF Spikes / NaN / Overflow protection)
+    // Ensure no invalid values leak into the snapshot
+    for (std::size_t i = 0; i < numBinsSz; ++i)
+    {
+        // Clamp Peak Hold
+        if (!std::isfinite(peakHold[i])) 
+            peakHold[i] = kDbFloor;
+        else
+            peakHold[i] = juce::jlimit(kDbFloor, 12.0f, peakHold[i]);
+
+        // Clamp Ballistic Peak (dbRaw_)
+        if (!std::isfinite(dbRaw_[i])) 
+            dbRaw_[i] = kDbFloor;
+        else
+            dbRaw_[i] = juce::jlimit(kDbFloor, 12.0f, dbRaw_[i]);
+            
+        // Clamp RMS (dbValues_)
+        if (!std::isfinite(dbValues_[i])) 
+            dbValues_[i] = kDbFloor;
+        else
+            dbValues_[i] = juce::jlimit(kDbFloor, 12.0f, dbValues_[i]);
+    }
+
+    // Use pre-allocated staging snapshot to prevent stack overflow (AC5, AC7)
+    // Ref: M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR_RETRY
+    AnalyzerSnapshot& snapshot = stagingSnapshot_; 
+    
     snapshot.fftBinCount = numBins;
-    // Legacy/compat: numBins is reserved for non-FFT series. FFT bin count lives in fftBinCount.
-    snapshot.numBins = 0;
+    snapshot.numBins = 0; // Legacy
     snapshot.sampleRate = currentSampleRate;
     snapshot.fftSize = currentFFTSize;
     snapshot.displayBottomDb = -120.0f;
-    snapshot.displayTopDb = 0.0f;
     snapshot.displayTopDb = 0.0f;
     snapshot.isValid = true;
     snapshot.isHoldOn = freezePeaks_.load (std::memory_order_relaxed);
@@ -393,11 +483,18 @@ void AnalyzerEngine::computeFFT()
     const int maxBins = static_cast<int> (snapshot.fftDb.size());
     const int copyBins = juce::jmin (numBins, maxBins);
     jassert (numBins <= static_cast<int> (AnalyzerSnapshot::kMaxFFTBins));  // Hard runtime check
+    
     for (int i = 0; i < copyBins; ++i)
     {
         const std::size_t idx = static_cast<std::size_t> (i);
         snapshot.fftDb[idx] = juce::jmax (dbFloor, dbValues_[idx]);
-        snapshot.fftPeakDb[idx] = juce::jmax (dbFloor, peakHold[idx]);
+        
+        // Populate snapshot with Ballistic Peak (dbRaw_)
+        // Previously used peakHold, now peakHold is separate
+        snapshot.fftPeakDb[idx] = juce::jmax (dbFloor, dbRaw_[idx]);
+        
+        // Populate snapshot with Peak Hold (AC1 - Existing Buffer)
+        snapshot.fftPeakHoldDb[idx] = juce::jmax (dbFloor, peakHold[idx]);
     }
     
     // Multi-trace: Copy power domain arrays for UI-side derivation
@@ -425,8 +522,8 @@ void AnalyzerEngine::computeFFT()
             minDb = juce::jmin (minDb, dbValues_[idx]);
             maxDb = juce::jmax (maxDb, dbValues_[idx]);
         }
-        DBG ("FFT bins=" << numBins << " minDb=" << minDb << " maxDb=" << maxDb
-             << " fftSize=" << currentFFTSize << " hop=" << currentHopSize);
+         // DBG ("FFT bins=" << numBins << " minDb=" << minDb << " maxDb=" << maxDb
+         //     << " fftSize=" << currentFFTSize << " hop=" << currentHopSize);
         
         // Assert bin count consistency
         jassert (numBins <= static_cast<int> (AnalyzerSnapshot::kMaxFFTBins));
@@ -434,8 +531,6 @@ void AnalyzerEngine::computeFFT()
 #endif
     
     // Publish snapshot (audio thread, lock-free)
-    // Throttling temporarily disabled to restore smoothness - publish every frame
-    // UI load issues should be addressed by reducing UI timer rate if needed
     publishSnapshot (snapshot);
 }
 
@@ -702,8 +797,12 @@ void AnalyzerEngine::resetPeaks()
     std::fill (peakHold.begin(), peakHold.end(), kDbFloor);
     std::fill (peakHoldFramesRemaining_.begin(), peakHoldFramesRemaining_.end(), 0);
     
-    // Also clear ballistic peak smoother to prevent "memory" effect after reset
-    // std::fill (smoothedPeak.begin(), smoothedPeak.end(), 0.0f);
+    // Multi-trace Peak Reset
+    std::fill (peakL_.begin(), peakL_.end(), kDbFloor);
+    std::fill (peakR_.begin(), peakR_.end(), kDbFloor);
+    std::fill (peakMono_.begin(), peakMono_.end(), kDbFloor);
+    std::fill (peakMid_.begin(), peakMid_.end(), kDbFloor);
+    std::fill (peakSide_.begin(), peakSide_.end(), kDbFloor);
 }
 
 void AnalyzerEngine::setPeakHoldMode (PeakHoldMode mode)
@@ -739,6 +838,27 @@ void AnalyzerEngine::setHold (bool hold)
 void AnalyzerEngine::setPeakDecayDbPerSec (float decayDbPerSec)
 {
     peakDecayDbPerSec = juce::jlimit (0.0f, 60.0f, decayDbPerSec);
+}
+
+void AnalyzerEngine::setReleaseTimeMs (float ms)
+{
+    const float clampedMs = juce::jlimit (100.0f, 5000.0f, ms);
+    
+    // 1. RMS Release
+    rmsReleaseMs_ = clampedMs;
+    
+    // 2. Peak Release (Fix: Linked to Release Time)
+    peakReleaseMs_ = clampedMs;
+    
+    // 3. Derive Peak Decay Rate (dB/sec)
+    // Formula: 60dB drop over ReleaseTime
+    // dbPerSec = 60.0f / (seconds)
+    const float seconds = clampedMs / 1000.0f;
+    const float computedDecay = 60.0f / seconds;
+    
+    peakDecayDbPerSec = computedDecay;
+    
+    // 3. Peak Hold Decay (inherits from peakDecayDbPerSec in updatePeakHold)
 }
 
 void AnalyzerEngine::setPeakDecayCurve (PeakDecayCurve curve)

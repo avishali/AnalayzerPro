@@ -9,7 +9,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
       displayHeader (ui, "Display"),
       metersHeader (ui, "Meters"),
       holdRow (ui, "Hold", holdButton),
-      peakDecayRow (ui, "Peak Decay", peakDecaySlider, 0.0, 10.0, 0.1, 1.0),
+      peakDecayRow (ui, "Release Time", peakDecaySlider, 100.0, 5000.0, 1.0, 300.0), // M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR: Label + Range
       tiltRow (ui, "Tilt", tiltCombo),
       scopeModeRow (ui, "Scope Mode", scopeModeCombo),
       scopeShapeRow (ui, "Scope Shape", scopeShapeCombo),
@@ -63,6 +63,12 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
 
     smoothingRow.attachToParent (*this);
     weightingRow.attachToParent (*this);
+
+    // M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR: Slider Config
+    peakDecaySlider.setSliderStyle (juce::Slider::IncDecButtons);
+    peakDecaySlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 80, 20);
+    peakDecaySlider.setTextValueSuffix (" ms");
+    peakDecaySlider.setRange (100.0, 5000.0, 10.0);
 
     // Configure combos
     tiltCombo.addItem ("Flat", 1);

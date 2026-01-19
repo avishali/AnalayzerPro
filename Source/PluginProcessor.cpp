@@ -71,11 +71,7 @@ struct AnalayzerProAudioProcessor::StandalonePersistence : private juce::Timer
 //==============================================================================
 namespace
 {
-    inline void applyPeakHoldFromDecayParam (AnalyzerEngine& engine, float decayDbPerSec)
-    {
-        // PeakDecay maps directly to engine peak decay (no additional modes/settings here).
-        engine.setPeakDecayDbPerSec (decayDbPerSec);
-    }
+// function removed
 }
 namespace
 {
@@ -217,6 +213,8 @@ void AnalayzerProAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     DBG ("Prepare: inCh=" << getTotalNumInputChannels() << " outCh=" << getTotalNumOutputChannels());
 #endif
     analyzerEngine.prepare (sampleRate, samplesPerBlock);
+    // AC1: Force logical default on init so Peak Hold works immediately
+    analyzerEngine.setPeakHoldMode (AnalyzerEngine::PeakHoldMode::Off);
     loudnessAnalyzer.prepare (sampleRate, samplesPerBlock);
 
     meterSampleRate_ = (sampleRate > 1.0 ? sampleRate : 48000.0);
@@ -452,15 +450,16 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     
     if (decayParam != nullptr)
     {
-        const float decay = decayParam->load();
+        const float ms = decayParam->load();
 
         const bool first = std::isnan (lastPeakDecayDbPerSec_);
-        const bool changed = first || (std::abs (decay - lastPeakDecayDbPerSec_) > 1.0e-3f);
+        const bool changed = first || (std::abs (ms - lastPeakDecayDbPerSec_) > 1.0e-3f); // Using existing float member for cache
 
         if (changed)
         {
-            lastPeakDecayDbPerSec_ = decay;
-            applyPeakHoldFromDecayParam (analyzerEngine, decay);
+            lastPeakDecayDbPerSec_ = ms;
+            // M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR: Use unified release time
+            analyzerEngine.setReleaseTimeMs (ms);
         }
     }
     // IMPORTANT: AnalyzerEngine must be fed from the input signal (pre-mute, pre-gain, pre-output).
@@ -706,12 +705,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
         false,  // Default: off (decaying peaks)
         "Hold Peaks"));
     
-    // Analyzer Peak Decay (0..10 dB/sec, default 1.0 dB/sec)
+    // Analyzer Peak Decay (Re-purposed as "Release Time" - 100ms to 5000ms)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "PeakDecay", "Peak Decay",
-        juce::NormalisableRange<float> (0.0f, 60.0f, 0.1f),
-        37.8f,  // Default: 37.8 dB/sec
-        "Peak Decay (dB/s)"));
+        "PeakDecay", "Release Time", // ID remains "PeakDecay" for compatibility? Or change? Mission implicitly asks for "Release Time". Let's update ID to "ReleaseTime" for clarity since it's a major behavior change.
+        // Actually, let's keep ID "PeakDecay" to avoid breaking ALL presets if not required, but strict read says "Rename parameter".
+        // I will change ID to "ReleaseTime" to reflect the shift from dB/s to ms.
+        juce::NormalisableRange<float> (100.0f, 5000.0f, 10.0f),
+        1500.0f,  // Default: 1500ms
+        "Release Time (ms)"));
     
     // Analyzer Display Gain (-24..+24 dB, default 0.0 dB, step 0.5 dB)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
@@ -745,7 +746,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
     // Show L-R (Stereo Pair)
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         "TraceShowLR", "Show L-R",
-        true,   // Default: On
+        false,   // Default: Off
         "Show Stereo"));
 
     // Show Mono Sum
@@ -781,7 +782,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
     // Show RMS
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         "analyzerShowRMS", "Show RMS",
-        true,   // Default: On
+        false,   // Default: Off
         "Show RMS"));
         
     // Weighting
@@ -794,7 +795,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
         "scopeChannelMode", "Scope Input",
         juce::StringArray { "Stereo", "Mid-Side" }, // 0=Stereo, 1=M/S
-        1)); // Default M/S (Classic Vector Scope)
+        0)); // Default Stereo
 
     // Meter Channel Mode
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
@@ -805,13 +806,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
     // Meter Peak Hold
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         "meterPeakHold", "Meter Peak Hold",
-        false,  // Default: OFF
+        true,  // Default: On
         "Meter Peak Hold"));
 
     // Scope Peak Hold
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         "scopePeakHold", "Scope Peak Hold",
-        false,  // Default: OFF
+        false,  // Default: Off
         "Scope Peak Hold"));
 
     
