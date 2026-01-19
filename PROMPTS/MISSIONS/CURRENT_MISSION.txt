@@ -1,211 +1,324 @@
 ================================================================================
-MISSION: FFT_VISUAL_POLISH_V1
+MISSION: FIX_PEAK_TRACE_RELEASE_AND_LOOK
 ================================================================================
 
-ROLE: IMPLEMENTER
-DATE: 2026-01-18
+MISSION ID
+----------
+M_2026_01_19_PEAK_TRACE_UNIFIED_BEHAVIOR
+
+PRIORITY
+--------
+HIGH - Peak trace not following Release Time + visual inconsistency
+
+MULTI-AGENT MODE
+----------------
+ENABLED
 
 ================================================================================
-PROBLEM
+PROBLEM STATEMENT
 ================================================================================
 
-The FFT spectrum display looks somewhat "pixelated" or thin compared to 
-professional spectrum analyzers. The current implementation uses:
+TWO ISSUES with the Peak trace:
 
-1. Quadratic bezier smoothing between points (good)
-2. "Silk trace" rendering with glow effect (good)
-3. 1.5px base line thickness (could be thicker)
-4. No area fill under the trace (missing professional look)
+ISSUE 1: Peak Trace Ignores Release Time Parameter
+- Peak trace has HARDCODED release time: `peakReleaseMs_ = 80.0f`
+- Release Time parameter (100-5000 ms) does NOT affect Peak trace
+- Only affects RMS trace
+- Expected: Release Time should control ALL traces including Peak
 
-Professional analyzers typically have:
-- A gradient-filled area under the spectrum trace
-- Thicker, more prominent trace lines
-- A "solid" appearance rather than just a thin line
+ISSUE 2: Peak Trace Has Different Visual Appearance
+- Peak trace doesn't look the same as other traces
+- May be missing smoothing, glow, or other visual polish
+- Should have consistent "silk" appearance with other traces
 
-================================================================================
-SCOPE
-================================================================================
+**Root Cause Issue 1:**
+```cpp
+// In AnalyzerEngine.h:
+float peakReleaseMs_ = 80.0f;  // HARDCODED! Not using Release Time parameter
 
-FILES TO MODIFY:
-- Source/ui/analyzer/rta1_import/RTADisplay.cpp (ONLY this file)
+// When setReleaseTimeMs() is called:
+void setReleaseTimeMs(float ms) {
+    rmsReleaseMs_ = ms;          // ✅ Updates RMS
+    peakDecayDbPerSec_ = ...;    // ✅ Updates Peak Hold
+    // ❌ NEVER updates peakReleaseMs_!
+}
+```
 
-FILES NOT TO TOUCH:
-- RTADisplay.h
-- Any other files
-
-================================================================================
-REQUIRED CHANGES
-================================================================================
-
-### CHANGE 1: Add area fill rendering for FFT mode
-
-In paintFFTMode(), after drawing multi-traces but BEFORE drawing the main FFT 
-trace, add an area fill under the main trace path.
-
-FIND this section in paintFFTMode() (around line 980-1000):
-
-    // Main FFT (Blue/Filled?)
-    drawSilkTrace(g, cachedFftPath_, colRms, 1.5f, viewWidth, false, 1.0f, false);
-
-ADD BEFORE that line (to draw fill UNDER the trace):
-
-    // Area fill under main FFT trace (gradient from trace to bottom)
-    if (!cachedFftPath_.isEmpty())
-    {
-        // Create a closed path for the fill
-        juce::Path fillPath = cachedFftPath_;
-        
-        // Get the bounds to close the path properly
-        const auto pathBounds = cachedFftPath_.getBounds();
-        if (pathBounds.getWidth() > 1.0f)
-        {
-            // Close the path: line to bottom-right, then bottom-left, then back to start
-            const float bottomY = plotAreaTop + plotAreaHeight;
-            fillPath.lineTo (pathBounds.getRight(), bottomY);
-            fillPath.lineTo (pathBounds.getX(), bottomY);
-            fillPath.closeSubPath();
-            
-            // Create vertical gradient (trace color at top, transparent at bottom)
-            juce::ColourGradient gradient (
-                colRms.withAlpha (0.35f),  // Top: semi-transparent trace color
-                0.0f, plotAreaTop,
-                colRms.withAlpha (0.05f),  // Bottom: nearly transparent
-                0.0f, bottomY,
-                false);  // Not radial
-            
-            g.setGradientFill (gradient);
-            g.fillPath (fillPath);
-        }
-    }
-
---------------------------------------------------------------------------------
-
-### CHANGE 2: Increase base stroke thickness for main traces
-
-FIND the drawSilkTrace calls in paintFFTMode() (around line 980-1010):
-
-    if (c.showSide) drawSilkTrace(g, cachedSidePath_,  colSide,   1.5f, viewWidth, false, 1.0f, false);
-    if (c.showMid)  drawSilkTrace(g, cachedMidPath_,   colMid,    1.5f, viewWidth, false, 1.0f, false);
-    if (c.showL)    drawSilkTrace(g, cachedLPath_,     colLeft,   1.5f, viewWidth, false, 1.0f, false);
-    if (c.showR)    drawSilkTrace(g, cachedRPath_,     colRight,  1.5f, viewWidth, false, 1.0f, false);
-    
-    ...
-    
-    if (c.showMono) drawSilkTrace(g, cachedMonoPath_, colMono, 1.5f, viewWidth, false, 1.0f, false);
-
-    // Main FFT (Blue/Filled?)
-    drawSilkTrace(g, cachedFftPath_, colRms, 1.5f, viewWidth, false, 1.0f, false);
-    
-    // Peak Trace (Highlight enabled)
-    if (!cachedPeakPath_.isEmpty())
-        drawSilkTrace(g, cachedPeakPath_, theme.seriesPeak, 1.5f, viewWidth, true, 1.2f, true);
-
-REPLACE WITH (increase thickness from 1.5f to 2.0f for main traces):
-
-    if (c.showSide) drawSilkTrace(g, cachedSidePath_,  colSide,   1.8f, viewWidth, false, 1.0f, false);
-    if (c.showMid)  drawSilkTrace(g, cachedMidPath_,   colMid,    1.8f, viewWidth, false, 1.0f, false);
-    if (c.showL)    drawSilkTrace(g, cachedLPath_,     colLeft,   1.8f, viewWidth, false, 1.0f, false);
-    if (c.showR)    drawSilkTrace(g, cachedRPath_,     colRight,  1.8f, viewWidth, false, 1.0f, false);
-    
-    ...
-    
-    if (c.showMono) drawSilkTrace(g, cachedMonoPath_, colMono, 1.8f, viewWidth, false, 1.0f, false);
-
-    // Main FFT trace (with area fill drawn above)
-    drawSilkTrace(g, cachedFftPath_, colRms, 2.0f, viewWidth, false, 1.0f, false);
-    
-    // Peak Trace (slightly thinner, highlight enabled)
-    if (!cachedPeakPath_.isEmpty())
-        drawSilkTrace(g, cachedPeakPath_, theme.seriesPeak, 1.8f, viewWidth, true, 1.2f, true);
-
---------------------------------------------------------------------------------
-
-### CHANGE 3: Add area fill for peak trace (optional enhancement)
-
-After the main FFT fill, add a subtle fill for the peak trace as well:
-
-FIND (after the main FFT area fill code you just added):
-
-    // Main FFT trace (with area fill drawn above)
-    drawSilkTrace(g, cachedFftPath_, colRms, 2.0f, viewWidth, false, 1.0f, false);
-
-ADD BEFORE the peak trace drawing:
-
-    // Subtle area fill under peak trace (very light)
-    if (!cachedPeakPath_.isEmpty())
-    {
-        juce::Path peakFillPath = cachedPeakPath_;
-        const auto peakBounds = cachedPeakPath_.getBounds();
-        if (peakBounds.getWidth() > 1.0f)
-        {
-            const float bottomY = plotAreaTop + plotAreaHeight;
-            peakFillPath.lineTo (peakBounds.getRight(), bottomY);
-            peakFillPath.lineTo (peakBounds.getX(), bottomY);
-            peakFillPath.closeSubPath();
-            
-            juce::ColourGradient peakGradient (
-                theme.seriesPeak.withAlpha (0.15f),
-                0.0f, plotAreaTop,
-                theme.seriesPeak.withAlpha (0.02f),
-                0.0f, bottomY,
-                false);
-            
-            g.setGradientFill (peakGradient);
-            g.fillPath (peakFillPath);
-        }
-    }
-
-================================================================================
-EXPECTED VISUAL RESULT
-================================================================================
-
-After these changes:
-1. The main FFT trace (cyan/blue) will have a gradient fill underneath
-2. The peak trace (yellow) will have a subtle fill underneath  
-3. All traces will be slightly thicker (1.8-2.0px vs 1.5px)
-4. The overall appearance will be more "solid" and professional
+**Root Cause Issue 2:**
+Peak trace rendering may use different path/stroke settings than RMS trace.
 
 ================================================================================
 ACCEPTANCE CRITERIA
 ================================================================================
 
-1. Build succeeds with zero errors
-2. FFT display shows gradient fill under the main trace
-3. Peak trace has subtle fill underneath
-4. Traces appear thicker and more prominent
-5. No visual artifacts or performance issues
-6. No changes to any files outside the scope
+[ ] AC1: Peak Trace Uses Release Time
+    - Set Release Time to 1000ms
+    - Stop audio
+    - Peak trace decays over ~1000ms
+    - Same decay speed as RMS trace
+
+[ ] AC2: All Traces Decay Together
+    - Set Release Time to 500ms
+    - Stop audio  
+    - RMS, Peak, and all multi-channel traces decay together
+    - Unified, synchronized behavior
+
+[ ] AC3: Peak Trace Visual Consistency
+    - Peak trace has same smooth, polished appearance
+    - Same glow, thickness, and smoothing as other traces
+    - Professional, consistent look
+
+[ ] AC4: Attack Time Remains Fast
+    - Peak trace still has fast attack (~10ms)
+    - Responds instantly to transients
+    - Only release time follows Release Time parameter
+
+[ ] AC5: Build Success
+    - Zero errors
+    - Zero warnings
+
+================================================================================
+IMPLEMENTATION SCOPE
+================================================================================
+
+FILES TO MODIFY:
+----------------
+
+TASK 1 - Connect Peak Release to Release Time Parameter:
+
+1. Source/analyzer/AnalyzerEngine.h
+   - Verify setReleaseTimeMs() method exists
+   - May need to add it if missing
+
+2. Source/analyzer/AnalyzerEngine.cpp
+   - Update setReleaseTimeMs() to also set peakReleaseMs_:
+   ```cpp
+   void AnalyzerEngine::setReleaseTimeMs(float ms) {
+       const float clampedMs = juce::jlimit(100.0f, 5000.0f, ms);
+       
+       // Apply to RMS
+       rmsReleaseMs_ = clampedMs;
+       
+       // Apply to Peak ballistics (NEW!)
+       peakReleaseMs_ = clampedMs;
+       
+       // Apply to Peak Hold decay
+       peakDecayDbPerSec_ = 60.0f / (clampedMs / 1000.0f);
+   }
+   ```
+
+3. Source/PluginProcessor.cpp
+   - Ensure Release Time parameter calls setReleaseTimeMs()
+   - Verify connection in parameter change handler
+
+TASK 2 - Ensure Peak Trace Has Same Visual Treatment:
+
+4. Source/ui/analyzer/rta1_import/RTADisplay.cpp
+   - Check paintFFTMode() peak rendering
+   - Ensure Peak trace uses same smoothPath() as RMS
+   - Ensure Peak trace uses drawSilkTrace() with proper settings
+   - Match thickness, glow, and smoothing parameters
+
+================================================================================
+IMPLEMENTATION DETAILS
+================================================================================
+
+TASK 1 DETAILS - Connect Peak to Release Time:
+-----------------------------------------------
+
+**Step 1: Add/Update setReleaseTimeMs() Method**
+
+In AnalyzerEngine.cpp:
+```cpp
+void AnalyzerEngine::setReleaseTimeMs(float ms) {
+    const float clampedMs = juce::jlimit(100.0f, 5000.0f, ms);
+    
+    // RMS ballistics
+    rmsReleaseMs_ = clampedMs;
+    
+    // Peak ballistics (NEW - was hardcoded at 80ms)
+    peakReleaseMs_ = clampedMs;
+    
+    // Peak Hold decay (convert ms to dB/sec)
+    peakDecayDbPerSec_ = 60.0f / (clampedMs / 1000.0f);
+    
+    // Note: Attack times remain fast and separate
+    // rmsAttackMs_ stays at 60ms
+    // peakAttackMs_ stays at 10ms
+}
+```
+
+**Step 2: Verify PluginProcessor Calls It**
+
+In PluginProcessor.cpp, parameter change handler:
+```cpp
+void PluginProcessor::parameterChanged(const String& paramID, float newValue) {
+    if (paramID == "AnalyzerReleaseTime") {  // Or whatever the ID is
+        const float ms = newValue;  // Should already be in ms
+        analyzerEngine.setReleaseTimeMs(ms);
+    }
+}
+```
+
+Or in prepareToPlay/processBlock where Release Time is read:
+```cpp
+if (releaseTimeParam != nullptr) {
+    const float ms = releaseTimeParam->load();
+    if (ms != lastReleaseTimeMs) {
+        lastReleaseTimeMs = ms;
+        analyzerEngine.setReleaseTimeMs(ms);
+    }
+}
+```
+
+TASK 2 DETAILS - Visual Consistency:
+-------------------------------------
+
+**Check Peak Trace Rendering**
+
+In RTADisplay.cpp, paintFFTMode():
+```cpp
+// Peak trace rendering (should look like this):
+if (hasPeaks && !s.fftPeakDb.empty()) {
+    float peakMaxDb = -200.0f;
+    buildPoints(s.fftPeakDb, scratchPoints, peakMaxDb);  // ✅
+    
+    if (!scratchPoints.empty()) {
+        smoothPath(scratchPath, scratchPoints);  // ✅ Must have smoothing
+        
+        const float energyNorm = juce::jlimit(0.0f, 1.0f, 
+            (peakMaxDb - (s.bottomDb + 20.0f)) / 40.0f);
+        const float energyMul = static_cast<float>(
+            juce::jmap(energyNorm, 0.0f, 1.0f, 0.95f, 1.25f));
+        
+        // ✅ Must use drawSilkTrace with proper parameters
+        const bool useShimmer = (MDSP_TRACE_SHIMMER_V2 != 0);
+        drawSilkTrace(g, scratchPath, theme.seriesPeak, 
+                     1.2f,          // thickness (similar to RMS 1.5f)
+                     plotAreaWidth, 
+                     true,          // isPeak = true (for visual treatment)
+                     energyMul,     // energy boost
+                     useShimmer);   // shimmer effect
+    }
+}
+```
+
+**Verify All Traces Use Same Pattern:**
+- RMS: thickness 1.5f, isPeak=false, glow, smooth
+- Peak: thickness 1.2f, isPeak=true, glow, smooth  
+- Peak Hold: thickness 1.4f, isPeak=false, glow, smooth
+
+All should use:
+1. `buildPoints()` - converts dB to screen coords
+2. `smoothPath()` - creates smooth Bezier curves
+3. `drawSilkTrace()` - renders with glow and AA
+
+CRITICAL CHECKS:
+----------------
+
+1. **Verify peakReleaseMs_ is used in ballistics:**
+```cpp
+// In computeFFT(), ballistics section:
+const float peakRelCoeff = calcCoeff(peakReleaseMs_);  // ✅ Uses variable
+
+// NOT:
+const float peakRelCoeff = calcCoeff(80.0f);  // ❌ Hardcoded
+```
+
+2. **Verify smoothPath() is called for Peak:**
+```cpp
+// Must have this for Peak trace:
+smoothPath(scratchPath, scratchPoints);
+
+// Not just:
+buildPoints(...);  // Missing smoothPath!
+```
+
+3. **Verify energy calculation for Peak:**
+Peak should have energy-based glow boost just like RMS.
+
+================================================================================
+EXPECTED BEHAVIOR AFTER FIX
+================================================================================
+
+**Unified Release Time:**
+- Set Release Time to 500ms
+- Stop audio
+- ALL traces (RMS, Peak, multi-channel) decay together over 500ms
+- Smooth, synchronized falloff
+
+**Visual Consistency:**
+- Peak trace has smooth curves (no steps)
+- Peak trace has subtle glow
+- Professional appearance matching other traces
+- Only color/thickness differ, not rendering quality
+
+================================================================================
+FORBIDDEN ACTIONS
+================================================================================
+
+DO NOT:
+- Change attack times (should remain fast)
+- Modify Peak Hold decay (separate from Peak ballistics)
+- Change rendering for other traces
+- Touch smoothing octaves
+- Modify color schemes
 
 ================================================================================
 VERIFICATION COMMANDS
 ================================================================================
 
-Build:
+BUILD:
 cd /Users/avishaylidani/DEV/GitHubRepo/AnalyzerPro
-cmake -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-debug
+cmake --build build-debug --config Debug
 
-Run standalone:
-./build-debug/AnalyzerPro_artefacts/Debug/Standalone/AnalyzerPro.app/Contents/MacOS/AnalyzerPro
+RUNTIME TEST:
 
-Test:
-1. Play audio and observe FFT display
-2. Verify gradient fill appears under traces
-3. Verify traces look thicker/more solid
-4. Check performance (should still be smooth at 30fps+)
+Test 1: Release Time Affects Peak
+1. Set Release Time to 1000ms
+2. Play audio with transients
+3. Stop audio
+4. **Time the decay** - should take ~1000ms to fall
+5. Peak and RMS should decay together
+
+Test 2: Different Release Times
+1. Set to 200ms - fast decay
+2. Set to 2000ms - slow decay
+3. Verify Peak responds to changes
+
+Test 3: Visual Quality
+1. Play pink noise or music
+2. Observe Peak trace appearance
+3. Should be smooth, polished, professional
+4. Same "silk" quality as other traces
+
+================================================================================
+EXPECTED OUTCOME
+================================================================================
+
+After this mission:
+- Release Time controls ALL traces (RMS, Peak, multi-channel)
+- Peak trace has same smooth, polished appearance
+- Unified decay behavior
+- Professional visual consistency
+- No hardcoded release times
 
 ================================================================================
 STOP RULE
 ================================================================================
 
-After modifying RTADisplay.cpp:
-1. Write IMPLEMENTER_RESULT.md with summary of changes
-2. STOP
+IMPLEMENTER MUST STOP after:
+1. Modifying 2-4 files
+2. Writing IMPLEMENTER_RESULT.md
+3. NO verification, NO build, NO test
 
-Do NOT:
-- Run the application
-- Make additional improvements
-- Touch any other files
-- Refactor beyond the specified changes
+VERIFIER MUST STOP after:
+1. Building the project
+2. Testing Release Time affects Peak
+3. Verifying visual consistency
+4. Writing VERIFIER_RESULT.md
+5. Writing LAST_RESULT.md
 
+================================================================================
+END OF MISSION
 ================================================================================

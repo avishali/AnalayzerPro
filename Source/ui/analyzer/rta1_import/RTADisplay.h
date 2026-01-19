@@ -54,7 +54,9 @@ public:
     void setViewMode (int mode);
 
     /** Set FFT data for FFT view mode */
-    void setFFTData (const std::vector<float>& fftBinsDb, const std::vector<float>* peakBinsDbNullable = nullptr);
+    void setFFTData (const std::vector<float>& fftBinsDb, 
+                     const std::vector<float>* peakBinsDbNullable = nullptr,
+                     const std::vector<float>* peakHoldBinsDbNullable = nullptr);
 
     /** Set log band data for Log view mode */
     void setLogData (const std::vector<float>& logBandsDb, const std::vector<float>* peakBandsDbNullable = nullptr);
@@ -182,6 +184,7 @@ private:
         // FFT view
         std::vector<float> fftDb;
         std::vector<float> fftPeakDb;  // empty => no peaks
+        std::vector<float> fftPeakHoldDb; // Peak Hold Trace (M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR)
         
         // Multi-trace: L/R power data (converted to dB on store)
         std::vector<float> lDbL;
@@ -338,6 +341,7 @@ private:
     // Optimization: Cached Trace Paths
     juce::Path cachedFftPath_;
     juce::Path cachedPeakPath_;
+    juce::Path cachedPeakHoldPath_; // M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR
     // Mission FFT_TRACE_STYLE_UNIFY_V1: Cached paths for other traces
     juce::Path cachedLPath_;
     juce::Path cachedRPath_;

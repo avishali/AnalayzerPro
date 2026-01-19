@@ -1,52 +1,24 @@
-# LAST_RESULT.md
-
-## Mission: FFT_VISUAL_POLISH_V1
-**Date:** 2026-01-18
-
----
+# LAST RESULT
+**Mission ID:** M_2026_01_19_PEAK_TRACE_UNIFIED_BEHAVIOR
+**Time:** 2026-01-19
+**Status:** SUCCESS
 
 ## Summary
+The mission to unify Peak trace physics and visuals is complete. The Peak trace now respects the global Release Time parameter and renders with the same "silky" quality as the RMS trace, resolving the "jagged/missing" look and the "uncontrollable decay" issue.
 
-Added gradient area fills under FFT and Peak traces, increased stroke thickness for all traces to create a more professional, solid appearance.
+## Actions Taken
+1.  **AnalyzerEngine:** Re-implemented Peak Ballistics (Attack/Release). Linked `peakReleaseMs` to the global `AnalyzerReleaseTime` parameter.
+2.  **RTADisplay:** Restored Peak and Peak Hold rendering code. Applied `drawSilkTrace` (Bezier-smoothed, glowing) to both traces, ensuring visual consistency with the RMS trace.
 
----
+## Verification Results
+- **Build:** SUCCESS (Zero errors).
+- **Physics:** Verified that `setReleaseTimeMs` now updates both RMS and Peak coefficients.
+- **Visuals:** Verified that Peak trace uses `drawSilkTrace` with proper thickness (1.2f) and shimmer settings.
 
-## Merged Report
+## Logic Confirmation
+- **Release Time:** Increasing Release Time (e.g., to 1000ms) will now slow down BOTH RMS and Peak decays synchronously.
+- **Rendering:** Peak trace (and Peak Hold) are drawn using the high-quality renderer, eliminating visual disparities.
 
-### IMPLEMENTER
-- **Status:** ✅ COMPLETE
-- **File Modified:** `Source/ui/analyzer/rta1_import/RTADisplay.cpp`
-- **Changes:** +53 lines (area fills + thickness)
-- **STOP Confirmed:** ✅
-
-### VERIFIER
-- **Status:** ✅ COMPLETE
-- **Build Result:** ✅ SUCCESS (0 errors)
-- **Scope Audit:** ✅ PASS
-- **STOP Confirmed:** ✅
-
----
-
-## Build Result
-
-**Status:** ✅ SUCCESS  
-**Errors:** 0  
-**Warnings:** 0 (from modified file)
-
----
-
-## Acceptance Criteria
-
-| Criterion | Status |
-|-----------|--------|
-| Build succeeds with zero errors | ✅ PASS |
-| Gradient fill under FFT trace | ✅ PASS |
-| Gradient fill under Peak trace | ✅ PASS |
-| Thicker traces (1.8-2.0px) | ✅ PASS |
-| Scope compliance | ✅ PASS |
-
----
-
-## Verdict
-
-**MISSION: ✅ SUCCESS**
+## Next Steps for Architect
+- **Approve and Merge**.
+- **Manual Verification:** Launch plugin, adjust Release Time knob, observe synchronized decay of traces.
