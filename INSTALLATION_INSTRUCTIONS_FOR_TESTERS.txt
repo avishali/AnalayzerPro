@@ -1,0 +1,199 @@
+================================================================================
+  ANALYZERPRO v1.0.0 - INSTALLATION INSTRUCTIONS
+  For Beta Testers
+================================================================================
+
+IMPORTANT: This is an unsigned test build. macOS will show security warnings.
+This is normal - follow the instructions below to install.
+
+================================================================================
+SYSTEM REQUIREMENTS
+================================================================================
+
+✓ macOS 10.13 or later
+✓ Intel Mac or Apple Silicon Mac (M1/M2/M3)
+✓ Compatible DAW: Logic Pro, Ableton Live, Reaper, Pro Tools, etc.
+✓ No JUCE or development tools needed
+
+================================================================================
+QUICK INSTALLATION (RECOMMENDED)
+================================================================================
+
+1. DOWNLOAD
+   - Download: AnalyzerPro-1.0.0-macOS.pkg
+   - File size: ~3-5 MB
+
+2. BYPASS SECURITY WARNING (Required for unsigned builds)
+   a) Try to open the PKG installer (double-click)
+   b) macOS will block it - this is expected!
+   c) Open System Settings (or System Preferences)
+   d) Go to: Privacy & Security
+   e) Scroll down to "Security" section
+   f) You'll see: "AnalyzerPro-1.0.0-macOS.pkg was blocked"
+   g) Click "Open Anyway" button
+   h) Enter your Mac password if prompted
+
+3. RUN INSTALLER
+   - Double-click PKG again
+   - Follow the installation prompts
+   - Click "Continue" → "Install"
+   - Done!
+
+4. RESTART YOUR DAW
+   - Quit your DAW completely
+   - Reopen it
+   - Plugins should now be available
+
+5. GRANT MICROPHONE PERMISSION (Standalone App only)
+   - Launch AnalyzerPro standalone from Applications
+   - Click "Allow" when prompted for microphone access
+   - This allows audio input capture (including virtual devices like BlackHole)
+
+================================================================================
+WHERE IT INSTALLS
+================================================================================
+
+After installation, plugins are located at:
+
+AU Plugin (Logic, GarageBand):
+  ~/Library/Audio/Plug-Ins/Components/AnalyzerPro.component
+
+VST3 Plugin (Ableton, Reaper, FL Studio):
+  ~/Library/Audio/Plug-Ins/VST3/AnalyzerPro.vst3
+
+Standalone App:
+  /Applications/AnalyzerPro.app
+
+================================================================================
+ALTERNATIVE: BYPASS SECURITY FOR EACH PLUGIN (If still blocked)
+================================================================================
+
+If plugins are blocked when loading in your DAW:
+
+METHOD 1 - Right-Click (Easiest):
+  1. Open Finder
+  2. Go to: ~/Library/Audio/Plug-Ins/Components/
+  3. Find: AnalyzerPro.component
+  4. RIGHT-CLICK (or Control-click) on it
+  5. Select "Open" from the menu
+  6. Click "Open" in the dialog that appears
+  7. Repeat for VST3 at: ~/Library/Audio/Plug-Ins/VST3/AnalyzerPro.vst3
+  8. Repeat for Standalone at: /Applications/AnalyzerPro.app
+
+METHOD 2 - Command Line (Advanced):
+  Open Terminal and run:
+  
+  xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/AnalyzerPro.component
+  xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/AnalyzerPro.vst3
+  xattr -dr com.apple.quarantine /Applications/AnalyzerPro.app
+
+================================================================================
+VERIFICATION
+================================================================================
+
+Check if installed correctly:
+
+1. VERIFY FILES EXIST
+   - AU: ~/Library/Audio/Plug-Ins/Components/AnalyzerPro.component
+   - VST3: ~/Library/Audio/Plug-Ins/VST3/AnalyzerPro.vst3
+   - App: /Applications/AnalyzerPro.app
+
+2. TEST IN DAW
+   - Open your DAW
+   - Create a new track/channel
+   - Load "AnalyzerPro" from plugin list
+     * Logic/GarageBand: Look under "Audio Units" → "Audio FX"
+     * Ableton/Reaper: Look under "VST3" or "Audio Units"
+   - If not found, rescan plugins in DAW preferences
+
+3. TEST STANDALONE
+   - Open Applications folder
+   - Double-click AnalyzerPro.app
+   - Should launch successfully
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+PROBLEM: Plugin doesn't show up in DAW
+SOLUTION: 
+  - Restart DAW completely (Quit → Reopen, don't just close window)
+  - Rescan plugins in DAW preferences/settings
+  - Check plugin search paths include standard locations
+
+PROBLEM: "App is damaged and can't be opened"
+SOLUTION:
+  - This means quarantine wasn't removed
+  - Use the "Right-Click → Open" method above
+  - Or use the command line method to remove quarantine
+
+PROBLEM: Plugin crashes when loading
+SOLUTION:
+  - Try the standalone app first
+  - If standalone works but plugin crashes, contact developer
+  - Include: macOS version, DAW name/version, error message
+
+PROBLEM: Standalone won't record audio
+SOLUTION:
+  - Grant microphone permission:
+    System Settings → Privacy & Security → Microphone
+    → Enable for AnalyzerPro
+  - Restart the app
+
+PROBLEM: Different file sizes than expected
+SOLUTION:
+  - File may be corrupted during download
+  - Try downloading again
+  - Use a different browser or download method
+
+================================================================================
+UNINSTALLING (If needed)
+================================================================================
+
+To remove AnalyzerPro:
+
+1. Delete the plugin files:
+   rm -rf ~/Library/Audio/Plug-Ins/Components/AnalyzerPro.component
+   rm -rf ~/Library/Audio/Plug-Ins/VST3/AnalyzerPro.vst3
+   rm -rf /Applications/AnalyzerPro.app
+
+2. Restart your DAW
+
+================================================================================
+PROVIDING FEEDBACK
+================================================================================
+
+If you encounter issues, please provide:
+  ☐ macOS version (Apple Menu → About This Mac)
+  ☐ Mac type (Intel or Apple Silicon M1/M2/M3)
+  ☐ DAW name and version
+  ☐ Error message or description of issue
+  ☐ Screenshots if applicable
+
+Contact: [YOUR EMAIL HERE]
+
+================================================================================
+WHY THE SECURITY WARNINGS?
+================================================================================
+
+This is a TEST BUILD that is not signed or notarized by Apple.
+
+macOS Gatekeeper protects users by blocking unsigned apps from unknown 
+developers. This is a security feature.
+
+For beta testing, you can safely bypass these warnings if you trust the 
+developer. The steps above tell macOS that you explicitly want to run this app.
+
+When AnalyzerPro is officially released, it will be properly signed and 
+notarized, and these warnings will not appear.
+
+================================================================================
+THANK YOU FOR TESTING!
+================================================================================
+
+Your feedback helps make AnalyzerPro better!
+
+MelecDSP
+Copyright © 2026 MelecDSP. All rights reserved.
+
+================================================================================

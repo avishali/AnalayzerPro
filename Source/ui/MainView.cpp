@@ -280,9 +280,17 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     }
     else if (parameterID == "scopeChannelMode")
     {
-        const int val = juce::roundToInt (newValue);
+        // Step 3: Hard defensive clamp (prevents crash even if mapping slips)
+        // Ensure index is valid (0 or 1) regardless of what host/param sends
+        const int raw = juce::roundToInt (newValue);
+        const int val = juce::jlimit (0, 1, raw); 
+        
         juce::MessageManager::callAsync ([this, val]
         {
+            // Step 6: Transition safety (avoid size mismatch during mode switch)
+            // Clear visualization buffers when switching modes to prevent artifacts/crashes
+            stereoScopeView_.resetHold(); 
+            
             stereoScopeView_.setChannelMode (val == 0 ? StereoScopeView::ChannelMode::Stereo : StereoScopeView::ChannelMode::MidSide);
             stereoScopeView_.repaint();
         });

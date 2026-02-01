@@ -22,7 +22,7 @@ public:
 
 private:
     void timerCallback() override;
-    void renderScopeToImage();
+    void renderScopeToImage(int numSamples);
 
     mdsp_ui::UiContext& ui_;
     StereoScopeAnalyzer& analyzer_;
@@ -46,7 +46,14 @@ public:
 
     void setScopeMode (ScopeMode mode) { scopeMode_ = mode; }
     void setScopeShape (ScopeShape shape) { scopeShape_ = shape; }
-    void setChannelMode (ChannelMode mode) { channelMode_ = mode; }
+    void setChannelMode (ChannelMode mode) 
+    { 
+        channelMode_ = mode; 
+        // Force full refresh of visuals
+        resetHold();
+        if (!accumImage_.isNull()) accumImage_.clear(accumImage_.getBounds());
+        repaint();
+    }
     
     // Peak hold toggle (independent from analyzer hold)
     void setHoldEnabled (bool hold);

@@ -61,6 +61,7 @@ public:
     void clear();
 
     void bindSlider(ControlId id, juce::Slider& slider);
+    void bindDraggableValueLabel(ControlId id, class DraggableParamValueLabel& label);
     void bindToggle(ControlId id, juce::Button& button);
     void bindCombo(ControlId id, juce::ComboBox& combo);
 

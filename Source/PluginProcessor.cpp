@@ -453,13 +453,14 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         const float ms = decayParam->load();
 
         const bool first = std::isnan (lastPeakDecayDbPerSec_);
-        const bool changed = first || (std::abs (ms - lastPeakDecayDbPerSec_) > 1.0e-3f); // Using existing float member for cache
+        const bool changed = first || (std::abs (ms - lastPeakDecayDbPerSec_) > 1.0e-3f);
 
         if (changed)
         {
             lastPeakDecayDbPerSec_ = ms;
-            // M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR: Use unified release time
-            analyzerEngine.setReleaseTimeMs (ms);
+            // Param in ms; engine setPeakDecayDbPerSec expects dB/s (pre–Mission 2)
+            const float decayDbPerSec = 60.0f / (ms / 1000.0f);
+            analyzerEngine.setPeakDecayDbPerSec (decayDbPerSec);
         }
     }
     // IMPORTANT: AnalyzerEngine must be fed from the input signal (pre-mute, pre-gain, pre-output).
@@ -711,14 +712,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
         // Actually, let's keep ID "PeakDecay" to avoid breaking ALL presets if not required, but strict read says "Rename parameter".
         // I will change ID to "ReleaseTime" to reflect the shift from dB/s to ms.
         juce::NormalisableRange<float> (100.0f, 5000.0f, 10.0f),
-        1500.0f,  // Default: 1500ms
+        450.0f,  // Default: 1500ms
         "Release Time (ms)"));
     
     // Analyzer Display Gain (-24..+24 dB, default 0.0 dB, step 0.5 dB)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "DisplayGain", "Display Gain",
         juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), // Changed step to 0.1 for precision
-        -2.5f,  // Default: -2.5 dB
+        0.0f,  // Default: -0 dB
         "Display Gain (dB)"));
     
     // Analyzer Tilt (choice: Flat=0, Pink=1, White=2)
@@ -782,7 +783,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
     // Show RMS
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         "analyzerShowRMS", "Show RMS",
-        false,   // Default: Off
+        true,   // Default: on
         "Show RMS"));
         
     // Weighting
@@ -794,8 +795,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
     // Scope Channel Mode
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
         "scopeChannelMode", "Scope Input",
-        juce::StringArray { "Stereo", "Mid-Side" }, // 0=Stereo, 1=M/S
-        0)); // Default Stereo
+        juce::StringArray { "Stereo", "Mid-Side" }, // 1=Stereo, 2=M/S
+        1)); // Default Stereo
 
     // Meter Channel Mode
     params.push_back (std::make_unique<juce::AudioParameterChoice> (

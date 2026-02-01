@@ -58,9 +58,9 @@ endif()
 
 # Plugin formats to build
 if(PLUGIN_DEV_MODE)
-    set(PLUGIN_FORMATS "VST3;Standalone" CACHE STRING "Plugin formats to build (AU, VST3, AAX, Standalone)" FORCE)
+    set(PLUGIN_FORMATS "VST3;AAX;Standalone" CACHE STRING "Plugin formats to build (AU, VST3, AAX, Standalone)" FORCE)
 else()
-    set(PLUGIN_FORMATS "AU;VST3;Standalone" CACHE STRING "Plugin formats to build (AU, VST3, AAX, Standalone)" FORCE)
+    set(PLUGIN_FORMATS "AU;VST3;AAX;Standalone" CACHE STRING "Plugin formats to build (AU, VST3, AAX, Standalone)" FORCE)
 endif()
 
 # ==============================================================================
@@ -208,6 +208,7 @@ target_sources(${PLUGIN_NAME}
         Source/ui/analyzer/rta1_import/RTADisplay.cpp
         Source/ui/layout/HeaderBar.cpp
         Source/ui/layout/ControlRail.cpp
+        Source/ui/layout/DraggableParamValueLabel.cpp
         Source/ui/layout/FooterBar.cpp
         Source/ui/views/AnalyzerGridPlaceholder.cpp
         Source/ui/views/PhaseCorrelationView.cpp

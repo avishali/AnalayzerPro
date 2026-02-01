@@ -1,0 +1,172 @@
+MISSION_ID: SCOPE_MODE_VISUAL_APPLY_V3
+
+TITLE
+Scope mode changes do not affect visuals — restore end-to-end mode propagation and render branching
+
+SYMPTOM
+- VST3 no longer crashes (good)
+- Switching Scope Channel Mode (Stereo <-> Mid-Side) has no visual effect
+Likely: mode value is not reaching StereoScopeView render branch OR branch uses wrong buffers/never re-renders.
+
+GOAL
+- Changing scopeChannelMode must reliably change what’s drawn:
+  - Stereo: x=L, y=R (or your chosen axes)
+  - Mid-Side: x=Mid, y=Side (or your chosen axes)
+- Must repaint immediately and deterministically
+- No crash, no allocations on audio thread
+
+HARD RULES
+- Minimal diffs
+- Do NOT change parameter order
+- Do NOT remove bounds checks that fixed crash
+- Prefer render-only changes + correct wiring
+- No allocations in paint()
+
+FILES ALLOWED
+- Source/ui/MainView.cpp (or wherever scopeChannelMode is consumed)
+- Source/ui/scope/StereoScopeView.cpp
+- Source/ui/scope/StereoScopeView.h
+- Source/ui/layout/ControlRail.cpp (only if attachment mapping is wrong)
+
+============================================================
+IMPLEMENTER PROMPT
+============================================================
+
+STEP 1 — Trace the mode signal path (UI -> scope)
+Search for: scopeChannelMode
+Find:
+A) Where the APVTS param is read/attached
+B) Where the mode is applied to the scope view (e.g. scopeView_.setChannelMode(...))
+
+EXPECTED:
+- On param change: scopeView_.setChannelMode(modeIndex)
+- Then: scopeView_.resetHold() (optional) + repaint()
+
+If you find the mode is only clamped/reset but not passed into StereoScopeView, that explains “no visual effect”.
+
+STOP AFTER DONE
+Report:
+- File + function where scopeChannelMode is handled
+- Whether setChannelMode exists and is called
+
+STEP 2 — Ensure StereoScopeView stores mode and uses it
+In StereoScopeView.{h,cpp}:
+- Add/confirm member:
+  int channelMode_ = 0; // 0=Stereo, 1=MidSide
+
+- Add/confirm API:
+  void setChannelMode(int mode)
+  {
+    channelMode_ = juce::jlimit(0, 1, mode);
+    resetHold();                // keep your crash/transition hygiene
+    invalidateRenderCache();    // see Step 4
+    repaint();
+  }
+
+STOP AFTER DONE
+Report:
+- Where channelMode_ is stored
+- Where setChannelMode is called from
+
+STEP 3 — Make renderScopeToImage branch on channelMode_
+Find the renderer function (per prior fix it now takes numSamples):
+- renderScopeToImage(..., numSamples)
+
+Ensure:
+- It either has access to channelMode_ (member), OR it is passed in explicitly.
+
+Inside render loop:
+Stereo branch:
+  x = L[i];
+  y = R[i];
+
+MidSide branch:
+  mid  = 0.5f * (L[i] + R[i]);
+  side = 0.5f * (L[i] - R[i]);
+  x = mid;
+  y = side;
+
+CRITICAL:
+- Keep the bounds-safety limit you added:
+  limit = min(numSamples, lBuffer.size, rBuffer.size)
+- Do not reintroduce out-of-bounds.
+
+STOP AFTER DONE
+Report:
+- Exact branch logic used (Stereo vs MidSide)
+- Confirm both branches compile and are reachable
+
+STEP 4 — Ensure cache invalidation forces new image
+If the scope uses an offscreen image cache, it may keep drawing the old cached image regardless of mode.
+
+Add:
+- bool renderCacheDirty_ = true;
+
+When:
+- setChannelMode called -> renderCacheDirty_=true
+- new snapshot arrives -> renderCacheDirty_=true
+
+In paint/tick:
+- Only reuse cached image if !renderCacheDirty_
+- When you render a new image, set renderCacheDirty_=false
+
+STOP AFTER DONE
+Report:
+- Whether a cache existed
+- How you invalidate it
+
+STEP 5 — Repaint scheduling (must be deterministic)
+Ensure the mode switch triggers:
+- repaint()
+- and if needed, triggers a timer tick or async update to rebuild image
+
+Minimal approach:
+- call repaint()
+- if your scope renders only on timer, call that refresh method too
+
+STOP AFTER DONE
+Report:
+- How scope refresh is triggered
+
+STEP 6 — Build and runtime sanity
+Build: Standalone + VST3
+Run in VST3 host:
+- switch Stereo/MidSide repeatedly while audio plays
+
+STOP AFTER DONE
+Write PROMPTS/MISSIONS/IMPLEMENTER_RESULT.md:
+- files changed
+- where mode is applied
+- proof: “mode now affects visuals”
+STOP
+
+============================================================
+VERIFIER PROMPT
+============================================================
+
+CHECK 1 — Mapping is still valid and safe
+- Parameter clamping remains (jlimit 0..1) (from crash fix)
+- Bounds checks remain in render loop (limit min(numSamples,...))
+
+CHECK 2 — Mode propagation exists
+- On mode change, StereoScopeView receives the new mode (setChannelMode called)
+
+CHECK 3 — Visual difference is obvious
+Use mono content (L==R):
+- Stereo: tight diagonal/line typical
+- MidSide: side near 0, mid strong (shape collapses)
+
+Use hard pan left:
+- Stereo: L vs R shape changes
+- MidSide: side increases
+
+CHECK 4 — No crash in VST3
+- flip mode 20 times while playing
+PASS if stable.
+
+CHECK 5 — Cache invalidation works
+- Confirm mode switch forces a redraw (no stale image)
+
+Write PROMPTS/MISSIONS/VERIFIER_RESULT.md
+STATUS PASS/FAIL + exact reason if fail.
+STOP

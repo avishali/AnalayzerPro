@@ -38,7 +38,7 @@ void StereoScopeView::timerCallback()
             accumImage_.multiplyAllAlphas (decayFactor_);
         }
         
-        renderScopeToImage();
+        renderScopeToImage(numSamples);
         
         // If hold enabled, composite with max logic
         if (holdEnabled_ && !heldImage_.isNull())
@@ -53,9 +53,17 @@ void StereoScopeView::timerCallback()
     }
 }
 
-void StereoScopeView::renderScopeToImage()
+void StereoScopeView::renderScopeToImage(int numSamples)
 {
     if (accumImage_.isNull()) return;
+
+    // Step 6: Safety check for buffer sizes
+    // Ensure we don't read beyond buffer bounds
+    const int maxL = static_cast<int> (lBuffer_.size());
+    const int maxR = static_cast<int> (rBuffer_.size());
+    const int limit = juce::jmin (numSamples, maxL, maxR);
+    
+    if (limit <= 0) return;
 
     juce::Graphics g (accumImage_);
     
@@ -119,15 +127,19 @@ void StereoScopeView::renderScopeToImage()
     bool first = true;
     
     // Processing loop
-    const size_t count = lBuffer_.size();
+    // Step 5: Channel-count guard (limit loop to valid samples)
+    const size_t count = static_cast<size_t> (limit);
     
     // Optimization: scatter plot can just set pixels or draw small rects
     // Graphics::drawPoint doesn't exist? fillRect(x,y,1,1)
     
     for (size_t i = 0; i < count; ++i)
     {
-        float l = (scopeMode_ == ScopeMode::RMS) ? lSmoothed_[i] : lBuffer_[i];
-        float r = (scopeMode_ == ScopeMode::RMS) ? rSmoothed_[i] : rBuffer_[i];
+        // Safety: ensure indices are valid (redundant with limit but safe)
+        if (i >= lBuffer_.size() || i >= rBuffer_.size()) break;
+
+        float l = (scopeMode_ == ScopeMode::RMS && i < lSmoothed_.size()) ? lSmoothed_[i] : lBuffer_[i];
+        float r = (scopeMode_ == ScopeMode::RMS && i < rSmoothed_.size()) ? rSmoothed_[i] : rBuffer_[i];
         
         // Coordinate Calculation based on Channel Mode
         float sx = 0.0f;

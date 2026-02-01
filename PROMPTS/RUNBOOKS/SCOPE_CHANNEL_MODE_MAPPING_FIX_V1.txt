@@ -1,0 +1,155 @@
+MISSION_ID: SCOPE_CHANNEL_MODE_MAPPING_FIX_V1
+
+TITLE
+Fix inverted Scope Channel Mode mapping (Stereo selection shows M-S and vice versa)
+
+SYMPTOM
+In the Stereo Scope view:
+- Selecting “Stereo” displays Mid-Side behavior
+- Selecting “Mid-Side” displays Stereo behavior
+
+ROOT CAUSE (most likely)
+One of these is inverted:
+1) APVTS AudioParameterChoice order vs UI ComboBox order
+2) ComboBox item IDs vs parameter index mapping (JUCE: combo IDs are 1-based, choice index is 0-based)
+3) The scope DSP/router interprets the enum backwards (switch/case swapped)
+
+GOAL
+Make scopeChannelMode consistent end-to-end:
+- UI label “Stereo” => scope runs Stereo (L/R)
+- UI label “Mid-Side” => scope runs M/S (Mid = L+R, Side = L-R)
+No other behavior change.
+
+HARD RULES
+- Minimal diffs
+- Do NOT rename parameters
+- Prefer not to change the underlying AudioParameterChoice index order (avoid breaking saved sessions)
+- No allocations in audio thread
+
+FILES ALLOWED (tight scope)
+- Source/ui/scope/* (the scope component that applies channel mode)
+- Source/ui/layout/ControlRail.cpp (only if combo mapping is wrong)
+- Source/PluginProcessor.cpp (ONLY if AudioParameterChoice definition is wrong; last resort)
+
+============================================================
+IMPLEMENTER PROMPT
+============================================================
+
+STEP 1 — Find the authoritative parameter
+Search for the parameter id:
+- "scopeChannelMode"
+Identify where it is defined (AudioParameterChoice) and its string order.
+Record:
+- choice[0] label
+- choice[1] label
+Example expected:
+choice[0] = "Stereo"
+choice[1] = "Mid-Side"
+
+STOP and report:
+- where it is defined
+- exact order of labels
+
+STEP 2 — Verify ControlRail ComboBox order and ID mapping
+Locate the scope channel mode ComboBox items.
+Confirm:
+- UI item display order matches the parameter labels
+- The attachment uses correct mapping:
+  - AudioParameterChoice uses 0-based index
+  - ComboBox item IDs are 1-based
+Common correct pattern:
+- combo.addItem("Stereo", 1);
+- combo.addItem("Mid-Side", 2);
+- attachment maps param index 0 <-> id 1, index 1 <-> id 2
+
+FAIL pattern to fix:
+- IDs swapped
+- items added in opposite order
+- custom mapping that inverts index
+
+Fix:
+- Keep parameter order unchanged
+- Ensure combo UI order and IDs match the param order
+- Ensure attachment mapping is direct (no inversion)
+
+STOP and report:
+- which mapping bug was found
+- what you changed
+
+STEP 3 — Verify the scope renderer/router uses the enum correctly
+Find the code that applies the mode, typically:
+switch(mode) { Stereo: ... MidSide: ... }
+
+Check for inversion like:
+case Stereo: doMidSide()
+case MidSide: doStereo()
+
+Fix:
+- Ensure Stereo path uses raw L/R
+- Ensure MidSide path uses:
+  mid  = 0.5*(L + R)
+  side = 0.5*(L - R)
+
+Do NOT change gain scaling unless the scope depends on it; keep existing scaling, only swap the routing if wrong.
+
+STOP and report:
+- file + function where mode is applied
+- which branches were swapped/fixed
+
+STEP 4 — Persistence safety (CRITICAL)
+Because this is a parameter, session recall matters.
+
+Preferred fix order:
+A) Fix interpretation (renderer/router) while leaving param indices untouched
+B) Fix UI combo mapping while leaving param indices untouched
+C) Only if absolutely necessary, fix AudioParameterChoice order (LAST resort)
+
+Do NOT change the order of AudioParameterChoice unless you also add migration logic.
+If you think you must change it, STOP and report before doing it.
+
+STEP 5 — Build
+Build:
+- Standalone
+- VST3
+
+Write IMPLEMENTER_RESULT.md:
+- files changed
+- what mapping was wrong (UI vs router vs param order)
+- confirmation that param index order was preserved
+STOP
+
+============================================================
+VERIFIER PROMPT
+============================================================
+
+CHECK 1 — Static mapping sanity
+- AudioParameterChoice order is:
+  index 0 => Stereo
+  index 1 => Mid-Side
+(or whatever the code says — but must match UI and router)
+
+- ComboBox shows the same order and maps directly (no inversion)
+
+CHECK 2 — Runtime behavior
+In standalone:
+1) Select Stereo
+Expected:
+- Scope behaves as L/R correlation/shape (typical stereo blob/line)
+2) Select Mid-Side
+Expected:
+- Scope changes noticeably; mono content yields strong Mid, low Side
+
+CHECK 3 — Persistence
+- Change scope mode
+- Close + reopen standalone
+Expected:
+- Same selection restored
+- Still correct mapping (not inverted)
+
+CHECK 4 — No collateral damage
+- Analyzer trace toggles unaffected
+- Meter modes unaffected
+
+Write VERIFIER_RESULT.md:
+STATUS PASS/FAIL + precise reason if FAIL
+STOP
