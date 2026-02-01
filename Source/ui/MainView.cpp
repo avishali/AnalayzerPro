@@ -328,7 +328,7 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     }
     else if (parameterID == "PeakDecay")
     {
-        audioProcessor.getAnalyzerEngine().setPeakDecayDbPerSec (newValue);
+        audioProcessor.getAnalyzerEngine().setReleaseTimeMs (newValue);
     }
     else if (parameterID == "DbRange")
     {

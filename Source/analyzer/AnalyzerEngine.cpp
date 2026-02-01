@@ -53,7 +53,8 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     fifoBuffer.resize (fftSizeSz, 0.0f);
     const int numBins = fftSize / 2 + 1;
     smoothedMagnitude.resize (static_cast<size_t> (numBins), 0.0f);
-    
+    smoothedPeak.resize (static_cast<size_t> (numBins), 0.0f);
+
     smoothLowBounds.resize (static_cast<size_t> (numBins), 0);
     smoothHighBounds.resize (static_cast<size_t> (numBins), 0);
     updateSmoothingBounds();
@@ -158,6 +159,7 @@ void AnalyzerEngine::reset()
     fifoBuffer.clear();
     fifoBuffer.clear();
     smoothedMagnitude.clear();
+    smoothedPeak.clear();
     peakHold.clear();
     magnitudes_.clear();
     dbValues_.clear();
@@ -337,16 +339,29 @@ void AnalyzerEngine::computeFFT()
 
     const float rmsAttCoeff = calcCoeff(rmsAttackMs_);
     const float rmsRelCoeff = calcCoeff(rmsReleaseMs_);
+    const float peakAttCoeff = calcCoeff(peakAttackMs_);
+    const float peakRelCoeff = calcCoeff(peakReleaseMs_);
 
     for (int i = 0; i < numBins; ++i)
     {
         const std::size_t idx = static_cast<std::size_t> (i);
         const float inputPower = freqSmoothed[idx];
 
-        // RMS Ballistics (also drives ballistic peak display in V2)
+        // RMS Ballistics
         float& rmsState = smoothedMagnitude[idx];
         const float rmsCoeff = (inputPower > rmsState) ? rmsAttCoeff : rmsRelCoeff;
         rmsState = rmsCoeff * rmsState + (1.0f - rmsCoeff) * inputPower;
+
+        // Peak Ballistics: envelope max (incl. L/R in multi-trace) with fast attack / release
+        float maxPower = inputPower;
+        if (enableMultiTrace_ && !powerL_.empty() && !powerR_.empty())
+        {
+            maxPower = std::max(maxPower, powerL_[idx]);
+            maxPower = std::max(maxPower, powerR_[idx]);
+        }
+        float& peakState = smoothedPeak[idx];
+        const float peakCoeff = (maxPower > peakState) ? peakAttCoeff : peakRelCoeff;
+        peakState = peakCoeff * peakState + (1.0f - peakCoeff) * maxPower;
     }
     
 #if JUCE_DEBUG
@@ -360,9 +375,9 @@ void AnalyzerEngine::computeFFT()
     
     // Convert Time-Smoothed POWER to dB for display (Main Trace / RMS)
     convertToDb (smoothedMagnitude.data(), dbValues_.data(), numBins);
-    
-    // Ballistic Peak Trace: use same smoothed power as RMS (V2 single ballistics)
-    convertToDb (smoothedMagnitude.data(), dbRaw_.data(), numBins);
+
+    // Ballistic Peak Trace: separate peak envelope (fast attack/release)
+    convertToDb (smoothedPeak.data(), dbRaw_.data(), numBins);
     
     // Peak Pipeline: Calculate Instantaneous dB from RAW magnitudes (no octave smoothing)
     // This ensures Peak latches the TRUE session max, independent from RMS smoothing.
@@ -834,6 +849,15 @@ void AnalyzerEngine::setPeakDecayCurve (PeakDecayCurve curve)
 void AnalyzerEngine::setPeakDecayTimeConstantSec (float seconds)
 {
     peakDecayTimeConstantSec_ = juce::jlimit (0.01f, 10.0f, seconds);
+}
+
+void AnalyzerEngine::setReleaseTimeMs (float ms)
+{
+    const float clampedMs = juce::jlimit (100.0f, 5000.0f, ms);
+    rmsReleaseMs_ = clampedMs;
+    peakReleaseMs_ = clampedMs;
+    const float seconds = clampedMs / 1000.0f;
+    peakDecayDbPerSec = 60.0f / seconds;
 }
 
 void AnalyzerEngine::setSmoothingOctaves (float octaves)

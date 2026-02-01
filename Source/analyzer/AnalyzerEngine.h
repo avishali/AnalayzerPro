@@ -73,8 +73,11 @@ public:
 
     void setPeakDecayCurve (PeakDecayCurve curve);
     void setPeakDecayTimeConstantSec (float seconds);
-    
-    private:
+
+    /** Unified Release Time (ms): sets RMS release, peak release, and derived peak decay. */
+    void setReleaseTimeMs (float ms);
+
+private:
     static constexpr int kMaxFFTSize = 8192;
     static constexpr float kDbFloor = -120.0f;
     
@@ -101,7 +104,7 @@ public:
     
     // Smoothing buffers (Power domain) - Legacy single-channel
     std::vector<float> smoothedMagnitude; // RMS State
-    // std::vector<float> smoothedPeak;      // Peak State (Removed in V2)
+    std::vector<float> smoothedPeak;      // Peak State (ballistics for peak trace)
 
     // Multi-trace complex bin storage (for L/R channels)
     std::vector<float> fftOutputL;  // Complex FFT output for Left channel
@@ -142,6 +145,8 @@ public:
     // Ballistics Parameters (ms)
     float rmsAttackMs_ = 80.0f;
     float rmsReleaseMs_ = 250.0f;
+    float peakAttackMs_ = 10.0f;
+    float peakReleaseMs_ = 80.0f;
     float smoothingOctaves_ = 1.0f; // 0 = Off
     float peakDecayDbPerSec = 1.0f;
     bool peakHoldEnabled_ = true;  // Always enabled now (toggled by Hold logic)

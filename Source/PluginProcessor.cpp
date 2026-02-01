@@ -458,9 +458,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         if (changed)
         {
             lastPeakDecayDbPerSec_ = ms;
-            // Param in ms; engine setPeakDecayDbPerSec expects dB/s (pre–Mission 2)
-            const float decayDbPerSec = 60.0f / (ms / 1000.0f);
-            analyzerEngine.setPeakDecayDbPerSec (decayDbPerSec);
+            analyzerEngine.setReleaseTimeMs (ms);
         }
     }
     // IMPORTANT: AnalyzerEngine must be fed from the input signal (pre-mute, pre-gain, pre-output).
