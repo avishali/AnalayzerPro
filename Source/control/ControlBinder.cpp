@@ -1,4 +1,5 @@
 #include "ControlBinder.h"
+#include "ui/layout/DraggableParamValueLabel.h"
 
 namespace AnalyzerPro
 {
@@ -71,6 +72,22 @@ void ControlBinder::bindSlider(ControlId id, juce::Slider& slider)
             uiState.setValue(id, normalized);
         }
     };
+}
+
+void ControlBinder::bindDraggableValueLabel(ControlId id, DraggableParamValueLabel& label)
+{
+    if (apvts && paramIdMap)
+    {
+        const auto paramId = paramIdMap(id);
+        if (paramId.isNotEmpty())
+        {
+            if (auto* param = apvts->getParameter(paramId))
+            {
+                if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(param))
+                    label.setParameter(ranged);
+            }
+        }
+    }
 }
 
 void ControlBinder::bindToggle(ControlId id, juce::Button& button)

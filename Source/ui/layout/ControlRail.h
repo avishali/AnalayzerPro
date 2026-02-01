@@ -6,7 +6,7 @@
 #include <mdsp_ui/controls/SectionHeader.h>
 #include <mdsp_ui/controls/ChoiceRow.h>
 #include <mdsp_ui/controls/ToggleRow.h>
-#include <mdsp_ui/controls/SliderRow.h>
+#include "DraggableParamValueLabel.h"
 #include <functional>
 
 //==============================================================================
@@ -40,7 +40,8 @@ private:
 
     // Underlying controls
     juce::ToggleButton holdButton;
-    juce::Slider peakDecaySlider;
+    juce::Label releaseTimeLabel_;
+    AnalyzerPro::DraggableParamValueLabel releaseTimeValue_;
     juce::ComboBox tiltCombo;
     juce::TextButton resetPeaksButton { "Reset" };
     
@@ -62,7 +63,6 @@ private:
     
     // Control rows
     mdsp_ui::ToggleRow holdRow;
-    mdsp_ui::SliderRow peakDecayRow;
     mdsp_ui::ChoiceRow tiltRow;
     
     mdsp_ui::ChoiceRow scopeModeRow;

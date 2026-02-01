@@ -1,292 +1,45 @@
-================================================================================
-MISSION: PHASE_1_BETA_STABILITY_AND_AAX
-================================================================================
+Mission 2 — Faster + smoother fall to -inf when signal stops, and Release Time affects all traces
 
-MISSION ID: M_2026_01_19_PHASE1_BETA_STABILITY_AAX
+Scope: unify decay/hold logic so “Release Time” is the single knob affecting FFT trace + other traces (RMS/L/R/M/S if present) + meter falloff.
 
-ROLE SPLIT: Multi-Agent Mode ENABLED
+IMPLEMENTER PROMPT — Mission 2
 
-TARGET: AnalyzerPro Beta Release - Phase 1: Critical Stability + AAX
+Return only the final code changes. No markdown.
 
-PRIORITY: CRITICAL (Beta Release Blocker)
+Goal:
+	1.	When signal stops, FFT trace + meters currently fall to -inf too slowly. Make the decay faster but still smooth (no step/jitter).
+	2.	The existing “Release Time” control must affect all traces (not only Peak).
 
-================================================================================
-CONTEXT
-================================================================================
+Rules:
+	•	Do NOT change the Peak algorithm (it’s its own thing), but its display must remain consistent.
+	•	Implement a single “ballistics/decay” function used by:
+	•	FFT display trace fall/decay to floor
+	•	All non-peak traces (RMS/Avg/whatever) fall/decay
+	•	Meter falloff (if currently separate)
+	•	Make decay time constant derived from Release Time parameter.
+	•	Smoothness: use a one-pole envelope style or exponential smoothing with a coefficient derived from dt and release time.
+	•	When input magnitude is effectively zero (or below a noise gate threshold already used), decay should continue toward floor quickly.
 
-AnalyzerPro is being prepared for its first beta release. This mission addresses
-Phase 1: Critical bug fixes, stability improvements, and AAX format support.
+Engineering details:
+	•	Must be sample-rate/block-rate safe: if updates are per GUI timer, use dt from timer interval; if updates are per audio block, use block duration.
+	•	No allocations in paint().
+	•	Ensure the trace does not “stick” when silence.
+	•	Keep the UI and parameter list unchanged (no new params in this mission).
 
-Current State:
-- Build works: VST3, Standalone (dev mode), or AU, VST3, Standalone (release)
-- Last mission completed: Peak envelope maximum tracking
-- AAX format NOT currently enabled
-- No known critical bugs, but comprehensive validation needed
+Definition of Done:
+	•	On signal stop, FFT and meters reach floor “fast but not abrupt” (audibly like a pro analyzer).
+	•	Release Time knob clearly changes how long it takes to decay for every non-peak trace + meters.
 
-Beta Release Requirements:
-- Must support AAX format (Pro Tools compatibility)
-- Must be RT-safe and stable under all conditions
-- Must handle edge cases gracefully (silence, clipping, extreme values)
-- Must build successfully on release configuration
+VERIFIER PROMPT — Mission 2
 
-================================================================================
-OBJECTIVE
-================================================================================
+Return only pass/fail checklist + failing notes.
 
-Add AAX support and perform comprehensive stability validation for beta release.
+Verify in a host:
+	•	Play steady tone → stop transport or mute track.
+	•	Observe: FFT trace decays smoothly and faster than before.
+	•	Observe: meters decay smoothly and faster than before.
+	•	Turn Release Time: all non-peak traces and meters change decay rate.
+	•	No “stepping squares”, no sudden jumps, no flicker.
+	•	No CPU spikes.
 
-Deliverables:
-1. AAX plugin format enabled in CMakeLists.txt
-2. All RT-safety guarantees verified
-3. Edge case handling validated
-4. Release build configuration tested
-5. No regressions in existing functionality
-
-================================================================================
-SCOPE
-================================================================================
-
-FILES TO MODIFY:
-1. CMakeLists.txt
-   - Add AAX to PLUGIN_FORMATS for both dev and release modes
-   - Ensure AAX SDK path configuration is present (if needed)
-
-FILES TO AUDIT (NO MODIFICATIONS UNLESS BUG FOUND):
-2. Source/analyzer/AnalyzerEngine.cpp/.h
-   - Verify RT-safety (no malloc/new/resize in processBlock)
-   - Verify thread-safe atomic operations
-   - Verify proper buffer handling
-
-3. Source/ui/analyzer/rta1_import/RTADisplay.cpp
-   - Verify trace rendering stability
-   - Verify no crashes on extreme values
-
-4. Source/audio/DeviceRoutingHelper.cpp/.h
-   - Verify safe device switching
-   - Verify channel count edge cases
-
-5. Source/PluginProcessor.cpp
-   - Verify processBlock RT-safety
-   - Verify state save/load robustness
-
-FILES EXPLICITLY FORBIDDEN:
-- Do NOT touch any file not listed above
-- Do NOT refactor working code
-- Do NOT add new features
-- Do NOT change existing architecture
-
-================================================================================
-ACCEPTANCE CRITERIA
-================================================================================
-
-AC1: AAX Format Added
-- CMakeLists.txt contains AAX in PLUGIN_FORMATS
-- AAX added to both dev mode and release mode format lists
-- Build configuration preserves existing formats (AU, VST3, Standalone)
-
-AC2: RT-Safety Verified
-- AnalyzerEngine::processBlock contains no heap allocations
-- No vector::resize() calls in audio thread
-- All atomic operations are properly ordered
-- FFT objects pre-allocated in constructor
-
-AC3: Edge Cases Handled
-- Plugin handles zero samples gracefully (no divide by zero)
-- Plugin handles silence without crashes
-- Plugin handles clipping/extreme values without artifacts
-- Plugin handles rapid channel count changes safely
-
-AC4: Release Build Success
-- Project builds with PLUGIN_DEV_MODE=OFF
-- All formats build successfully: AU, VST3, AAX, Standalone
-- No new compiler warnings introduced
-- Build artifacts generated correctly
-
-AC5: No Regressions
-- Peak envelope still tracks maximum correctly
-- All traces render properly
-- UI remains responsive
-- State save/restore works correctly
-
-AC6: AAX-Specific Requirements (if applicable)
-- Verify plugin meets AAX technical requirements
-- Verify AAX wrapping/signing configuration (if present)
-- Note: AAX signing/authorization deferred to deployment phase
-
-================================================================================
-IMPLEMENTATION PLAN
-================================================================================
-
-IMPLEMENTER TASKS:
-
-1. ADD AAX FORMAT
-   Location: CMakeLists.txt
-   
-   Current (line ~58-62):
-   ```cmake
-   if(PLUGIN_DEV_MODE)
-       set(PLUGIN_FORMATS "VST3;Standalone" ...)
-   else()
-       set(PLUGIN_FORMATS "AU;VST3;Standalone" ...)
-   endif()
-   ```
-   
-   Change to:
-   ```cmake
-   if(PLUGIN_DEV_MODE)
-       set(PLUGIN_FORMATS "VST3;Standalone" ...)
-   else()
-       set(PLUGIN_FORMATS "AU;VST3;AAX;Standalone" ...)
-   endif()
-   ```
-   
-   Rationale: AAX only needed for release builds (pro tools users)
-
-2. VERIFY RT-SAFETY AUDIT
-   Read and audit (DO NOT MODIFY unless bug found):
-   - AnalyzerEngine.cpp: processBlock method
-   - PluginProcessor.cpp: processBlock method
-   
-   Check for:
-   - Any malloc/new/delete calls
-   - Any vector::resize()/push_back() calls
-   - Any FFT creation/destruction
-   - Any mutex locks (should be try_lock or atomic only)
-   
-   Document findings in IMPLEMENTER_RESULT.md
-
-3. TEST EDGE CASES
-   If you can run tests, verify:
-   - Zero sample buffer handling
-   - Null pointer checks
-   - Division by zero guards
-   - Extreme value clamping
-   
-   Document findings in IMPLEMENTER_RESULT.md
-
-4. STOP
-   Write IMPLEMENTER_RESULT.md
-   Do NOT build
-   Do NOT verify
-   STOP
-
-VERIFIER TASKS:
-
-1. VERIFY AAX ADDITION
-   - Confirm AAX in release mode PLUGIN_FORMATS
-   - Confirm dev mode unchanged (VST3;Standalone)
-   - Confirm no other CMake changes made
-
-2. BUILD RELEASE CONFIGURATION
-   Command: 
-   ```bash
-   ./clean_build.sh
-   cmake --preset release
-   cmake --build build-release --config Release
-   ```
-   
-   Expected artifacts:
-   - build-release/AnalyzerPro_artefacts/Release/AU/AnalyzerPro.component
-   - build-release/AnalyzerPro_artefacts/Release/VST3/AnalyzerPro.vst3
-   - build-release/AnalyzerPro_artefacts/Release/AAX/AnalyzerPro.aaxplugin
-   - build-release/AnalyzerPro_artefacts/Release/Standalone/AnalyzerPro.app
-   
-   Note: AAX artifact may require AAX SDK. If SDK missing, document this
-   as expected limitation and verify other formats build.
-
-3. CODE AUDIT VERIFICATION
-   Review IMPLEMENTER findings on RT-safety
-   If issues found, document them
-   If no issues found, confirm clean audit
-
-4. ACCEPTANCE CRITERIA CHECK
-   Verify each AC 1-6 line by line
-
-5. WRITE RESULTS
-   - Write VERIFIER_RESULT.md
-   - Write merged LAST_RESULT.md
-   - STOP
-
-================================================================================
-STOP RULES
-================================================================================
-
-IMPLEMENTER STOPS AFTER:
-- AAX format added to CMakeLists.txt
-- Code audit completed
-- IMPLEMENTER_RESULT.md written
-- NO BUILD PERFORMED
-- NO VERIFICATION PERFORMED
-
-VERIFIER STOPS AFTER:
-- Release build attempted
-- Audit findings reviewed
-- All acceptance criteria evaluated
-- VERIFIER_RESULT.md written
-- LAST_RESULT.md written
-- NO CODE MODIFICATIONS
-
-If either role continues beyond their STOP point: MISSION FAILS
-
-================================================================================
-FORBIDDEN ACTIONS
-================================================================================
-
-IMPLEMENTER MUST NOT:
-- Build the project
-- Run any tests
-- Verify build artifacts
-- Modify files outside listed scope
-- Add AAX SDK configuration beyond format list
-- Refactor existing code
-- Add new features
-
-VERIFIER MUST NOT:
-- Modify any code
-- Add any features
-- Fix any bugs found (document only)
-- Continue after writing LAST_RESULT.md
-- Install or configure AAX SDK (document if missing)
-
-================================================================================
-KNOWN RISKS
-================================================================================
-
-Risk 1: AAX SDK Not Installed
-- JUCE requires AAX SDK for AAX builds
-- If SDK missing, build will fail for AAX format
-- This is EXPECTED and ACCEPTABLE for this mission
-- Document in VERIFIER_RESULT.md
-- Other formats (AU, VST3, Standalone) must still build
-
-Risk 2: AAX Signing Required
-- AAX plugins must be signed for release
-- Signing is deferred to deployment phase
-- Unsigned AAX builds are acceptable for beta
-
-Risk 3: Potential Compiler Warnings
-- New format may expose warnings
-- Document warnings, don't fix unless critical
-
-================================================================================
-SUCCESS CRITERIA
-================================================================================
-
-Mission succeeds if:
-- AAX added to CMakeLists.txt release mode
-- Release build succeeds for AU, VST3, Standalone (minimum)
-- AAX builds if SDK present, documented if SDK missing
-- No RT-safety violations found
-- No critical bugs found
-- All acceptance criteria marked PASS or PASS (with notes)
-- Both roles STOPPED correctly
-
-Mission fails if:
-- Any acceptance criterion marked FAIL
-- Release build fails for existing formats
-- RT-safety violations found
-- Either role violated STOP rules
-
-================================================================================
-END OF MISSION
-================================================================================
+STOP. You test.

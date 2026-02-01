@@ -1,0 +1,196 @@
+MISSION_ID: SCOPE_CHANNEL_MODE_SWITCH_CRASH_AND_INVERSION_FIX_V2
+
+TITLE
+Fix VST3 crash when switching scope mode + fix true Stereo<->MidSide mapping (not just default UI)
+
+SYMPTOMS
+1) VST3 crashes when changing scope mode from Stereo to Mid-Side.
+2) Mapping still feels inverted (Stereo shows M/S behavior and vice versa).
+
+ROOT CAUSES (MOST COMMON)
+A) Mapping bug:
+   - ComboBox IDs (1-based) written directly into AudioParameterChoice (0-based), producing wrong value.
+   - Choice order differs between UI and AudioParameterChoice.
+   - DSP router switch-case swapped.
+B) Crash bug:
+   - Out-of-range channel access on switch (host may deliver 1 channel in some cases).
+   - Invalid parameter value (e.g., 2 when only {0,1}) causing invalid enum/switch path.
+   - Scope FIFO/renderer reading buffers with mismatched sizes during mode transition (no guard).
+
+GOAL
+- Selecting “Stereo” ALWAYS uses L/R.
+- Selecting “Mid-Side” ALWAYS uses Mid=(L+R)/2 and Side=(L-R)/2.
+- Switching modes NEVER crashes in VST3.
+- Parameter order preserved (no session recall break).
+
+HARD RULES
+- Minimal diffs.
+- Do NOT change AudioParameterChoice order unless you implement migration (avoid).
+- Clamp parameter values defensively at the point-of-use.
+- No allocations on audio thread.
+- Keep scope visual behavior otherwise unchanged.
+
+FILES ALLOWED
+- Source/ui/layout/ControlRail.cpp (only if mapping/attachment is wrong)
+- Source/ui/scope/* (where scope mode is applied/rendered)  <-- search by "scopeChannelMode"
+- Source/PluginProcessor.cpp (ONLY to inspect param definition; do not reorder choices unless unavoidable)
+
+============================================================
+IMPLEMENTER PROMPT
+============================================================
+
+STEP 0 — Repro + locate crash surface
+- Reproduce crash in VST3 by switching Stereo -> Mid-Side.
+- Note whether crash happens immediately on switch or on next audio block.
+
+STOP AFTER DONE
+Report:
+- Host used (REAPER etc)
+- Whether input is mono/stereo
+- When it crashes (immediate vs next frame)
+
+STEP 1 — Confirm parameter definition (DO NOT CHANGE ORDER)
+Search in PluginProcessor for "scopeChannelMode" AudioParameterChoice.
+Record:
+- number of choices
+- exact labels in order
+Expected:
+index 0 => "Stereo"
+index 1 => "Mid-Side"
+
+If it’s already correct, DO NOT change it.
+
+STOP AFTER DONE
+Report:
+- labels in order
+
+STEP 2 — Fix UI<->parameter mapping (likely bug)
+Search for ComboBox binding for scopeChannelMode.
+Check if you do any custom conversion.
+
+RULE:
+AudioParameterChoice value is 0-based.
+ComboBox item IDs are 1-based.
+
+Correct mapping:
+- Combo item "Stereo" has ID 1
+- Combo item "Mid-Side" has ID 2
+- Attachment maps param index 0 <-> ID 1, index 1 <-> ID 2
+No inversion.
+
+If you have custom code that sets:
+param = combo.getSelectedId();
+Fix to:
+param = combo.getSelectedId() - 1;
+
+If you have code that sets combo from param:
+combo.setSelectedId(param + 1, dontSendNotification);
+
+STOP AFTER DONE
+Report:
+- what was wrong
+- exact fix (id->index or index->id)
+
+STEP 3 — Hard defensive clamp (prevents crash even if mapping slips)
+At the point where scope mode is read (scope renderer/router):
+- load int modeIndex
+- clamp:
+  modeIndex = jlimit(0, numChoices-1, modeIndex)
+- then cast to enum / switch
+
+This alone often stops the VST3 crash if param receives 2 or -1 transiently.
+
+STOP AFTER DONE
+Report:
+- file + function where clamp was added
+
+STEP 4 — Fix actual DSP/router inversion (if still inverted)
+In the scope code (search "MidSide" or "scopeChannelMode"):
+Locate where samples are prepared for drawing.
+
+Ensure:
+if (mode == Stereo):
+  x = L
+  y = R  (or whatever your scope axes use)
+if (mode == MidSide):
+  mid  = 0.5f*(L + R)
+  side = 0.5f*(L - R)
+  x = mid
+  y = side
+
+If these branches are swapped, correct them.
+
+STOP AFTER DONE
+Report:
+- whether router branches were inverted
+- exact lines swapped
+
+STEP 5 — Channel-count guard (common crash trigger)
+Some hosts deliver mono to a stereo plugin or temporarily provide 1 channel.
+Before reading R channel:
+- if numChannels < 2:
+    treat R = L
+    side = 0
+This must be in the audio capture path or in the scope render conversion path (whichever reads buffers).
+
+STOP AFTER DONE
+Report:
+- where the channel-count guard was added
+
+STEP 6 — Transition safety (avoid size mismatch during mode switch)
+If scope uses a FIFO/buffer and mode switch changes what is drawn:
+- On mode change, clear/reset the scope display buffer (UI-side), not audio thread.
+- Ensure renderer checks buffer sizes before drawing.
+
+Only do this if crash persists after clamps/guards.
+
+STOP AFTER DONE
+Report:
+- whether you had to add transition reset
+
+STEP 7 — Build + test
+- Build Standalone + VST3.
+- Test in VST3 host: switch Stereo <-> Mid-Side repeatedly.
+
+STOP AFTER DONE
+Write PROMPTS/MISSIONS/IMPLEMENTER_RESULT.md including:
+- Files changed
+- What fixed crash (clamp/guard)
+- What fixed inversion (mapping vs router)
+- Verification steps
+STOP
+
+============================================================
+VERIFIER PROMPT
+============================================================
+
+CHECK 1 — Parameter order unchanged
+Confirm AudioParameterChoice order is preserved (index mapping stable).
+FAIL if reordered without migration.
+
+CHECK 2 — UI mapping correct
+- Stereo UI selects param index 0
+- Mid-Side UI selects param index 1
+Confirm combo ID mapping is 1<->0, 2<->1.
+
+CHECK 3 — Runtime mapping correct
+Use mono content (L==R):
+- Stereo scope: diagonal/line typical for mono
+- Mid-Side: side collapses near 0 (thin line), mid strong
+Use hard pan left:
+- Stereo: shows strong L vs weak R behavior
+- Mid-Side: side increases relative to mid
+
+CHECK 4 — No crash in VST3
+In a host (REAPER):
+- Switch Stereo <-> Mid-Side 20 times while playing audio.
+PASS if no crash.
+
+CHECK 5 — Channel-count safety
+Force mono input if possible.
+PASS if no out-of-bounds and behavior sensible (R=L fallback).
+
+OUTPUT
+Write PROMPTS/MISSIONS/VERIFIER_RESULT.md:
+STATUS PASS/FAIL + exact reason if FAIL
+STOP

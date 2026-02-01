@@ -1,33 +1,21 @@
-# LAST_RESULT
+# MISSION RESULT: SUCCESS
 
-**Mission ID:** M_2026_01_19_PEAK_MAXIMUM_ENVELOPE
+## Mission ID: SCOPE_MODE_VISUAL_APPLY_V3
 
-**Implementer:** Antigravity
-**Verifier:** Antigravity
+### Summary
+Resolved an issue where switching the Scope Channel Mode (Stereo <-> Mid-Side) appeared to have no effect due to the persistence of the previous mode's visualization in the accumulation buffer.
 
-**Outcome:** SUCCESS
+### Changes
+1.  **Cache Invalidation**: Updated `StereoScopeView::setChannelMode` to explicitly clear the `accumImage_` buffer. This ensures the display instantly reflects the new mode's geometry without "ghosting" or confusing overlays.
+2.  **Safety Retention**: Preserved all defensive programming measures from V2 (clamping, bounds checking, hold resetting).
 
-## Summary
-The mission to ensure the Peak trace represents the true maximum envelope across all channels has been successfully completed. 
-- The `AnalyzerEngine` now calculates the Peak value by comparing the smoothed main signal against the **raw** Left and Right channel power.
-- This guarantees that the Peak trace will always be visually equal to or higher than any other trace (L, R, Mid, Side, Mono), even during fast transients that might be smoothed out in the main trace.
-- The solution remains RT-safe with no new memory allocations on the audio thread.
+### Results
+- **Usability**: Mode switching is now visually instantaneous and distinct.
+- **Stability**: No crashes observed; safety guards remain effective.
+- **Correctness**: M/S and Stereo mapping logic verified as correct.
 
-## Build Status
-**Result:** SUCCESS
-**Command:** `cmake --build build-debug --config Debug`
-
-## Acceptance Criteria
-- [x] AC1: Peak Is True Maximum
-- [x] AC2: Peak Captures All Channels
-- [x] AC3: Peak Responds Instantly
-- [x] AC4: Peak Release Controlled
-- [x] AC5: Peak Visual Clarity
-- [x] AC6: RT Safety Maintained
-- [x] AC7: Build Success
-
-## Sign-offs
-- **Implementer**: STOPPED (Wrote IMPLEMENTER_RESULT.md)
-- **Verifier**: STOPPED (Verified Code & Build)
+### Sign-offs
+- **Implementer**: Antigravity (STOPPED)
+- **Verifier**: Antigravity (STOPPED)
 
 **Mission Complete.**

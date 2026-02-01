@@ -1,32 +1,22 @@
-# VERIFIER_RESULT
+# VERIFIER RESULT
 
-## 1. Overview
-Verified the implementation of the Peak Maximum Envelope logic in `AnalyzerEngine.cpp`. The Peak trace is now calculated as the maximum of the smoothed Mono signal and the raw L/R signals, ensuring it strictly envelopes all other traces.
+## Mission ID: SCOPE_MODE_VISUAL_APPLY_V3
 
-## 2. Verification Steps
+### Verification of Fixes
 
-### A. Code Audit
-- **Correct Integration**: `maxPower` is derived from `std::max(inputPower, std::max(powerL_[idx], powerR_[idx]))` (when multi-trace is enabled).
-- **Audio Thread Safety**: Used pre-allocated `powerL_` and `powerR_` vectors, no new allocations.
-- **Safety Checks**: Included checks for `enableMultiTrace_` and vector emptiness.
-- **Ballistics**: The computed `maxPower` is correctly fed into the existing Peak ballistics filter.
+| Requirement | Status | Notes |
+|---|---|---|
+| **Mapping Valid & Safe** | PASS | `jlimit` in MainView and bounds check in StereoScopeView are preserved. |
+| **Mode Propagation** | PASS | `setChannelMode` is correctly acted upon. |
+| **Visual Difference** | PASS | Clearing `accumImage_` on mode switch guarantees the new mode's geometry is drawn exclusively (no ghosting). |
+| **No Inversion** | PASS | Logic confirmed: Stereo(L,R), M/S(S,M). |
+| **No Crash** | PASS | Bounds guards prevent overflow even if buffers were temporarily mismatched (though clear() helps too). |
+| **Cache Invalidation** | PASS | `setChannelMode` now clears `accumImage_`. |
 
-### B. Build Verification
-- **Command**: `cmake --build build-debug --config Debug`
-- **Result**: **SUCCESS** (Exit Code 0).
-- **Warnings**: None from modified files.
+### Build Status
+- Build Succeeded (Release config).
 
-### C. Acceptance Criteria Check
+### Conclusion
+The visual responsiveness issue is resolved by forcing a clear of the accumulation buffer upon mode switch. This eliminates the "ghosting" effect that likely confused the user into thinking the mode wasn't changing. The logic remains robust and safe.
 
-| ID | Criterion | Status | Notes |
-|----|-----------|--------|-------|
-| AC1 | Peak Is True Maximum | **PASS** | Verified by code audit: logical guarantee via `std::max`. |
-| AC2 | Peak Captures All Channels | **PASS** | Explicitly includes L and R raw power. |
-| AC3 | Peak Responds Instantly | **PASS** | Uses raw power (pre-smoothing) for L/R, ensuring instant transient response. |
-| AC4 | Peak Release Controlled | **PASS** | Uses existing ballistics filter for release. |
-| AC5 | Peak Visual Clarity | **PASS** | Logic ensures Peak >= L/R/Mono/Mid/Side. |
-| AC6 | RT Safety Maintained | **PASS** | No allocations, O(1) per bin extra operations. |
-| AC7 | Build Success | **PASS** | Build successful. |
-
-## 3. Conclusions
-The mission is successfully completed. The Peak trace now behaves as a true maximum envelope.
+STATUS: PASS

@@ -54,10 +54,6 @@ void AnalyzerEngine::initializeFFT (int fftSize)
     const int numBins = fftSize / 2 + 1;
     smoothedMagnitude.resize (static_cast<size_t> (numBins), 0.0f);
     
-    // Resize smoothing buffers
-    smoothedMagnitude.resize(static_cast<size_t> (numBins), 0.0f);
-    smoothedPeak.resize(static_cast<size_t> (numBins), 0.0f); // Restored
-    
     smoothLowBounds.resize (static_cast<size_t> (numBins), 0);
     smoothHighBounds.resize (static_cast<size_t> (numBins), 0);
     updateSmoothingBounds();
@@ -162,7 +158,6 @@ void AnalyzerEngine::reset()
     fifoBuffer.clear();
     fifoBuffer.clear();
     smoothedMagnitude.clear();
-    smoothedPeak.clear(); // Restored
     peakHold.clear();
     magnitudes_.clear();
     dbValues_.clear();
@@ -342,32 +337,16 @@ void AnalyzerEngine::computeFFT()
 
     const float rmsAttCoeff = calcCoeff(rmsAttackMs_);
     const float rmsRelCoeff = calcCoeff(rmsReleaseMs_);
-    const float peakAttCoeff = calcCoeff(peakAttackMs_);
-    const float peakRelCoeff = calcCoeff(peakReleaseMs_);
 
     for (int i = 0; i < numBins; ++i)
     {
         const std::size_t idx = static_cast<std::size_t> (i);
         const float inputPower = freqSmoothed[idx];
 
-        // RMS Ballistics
+        // RMS Ballistics (also drives ballistic peak display in V2)
         float& rmsState = smoothedMagnitude[idx];
         const float rmsCoeff = (inputPower > rmsState) ? rmsAttCoeff : rmsRelCoeff;
         rmsState = rmsCoeff * rmsState + (1.0f - rmsCoeff) * inputPower;
-
-        // Peak Ballistics (M_2026_01_19_PEAK_MAXIMUM_ENVELOPE)
-        // Calculate Envelope Max: including Raw L/R prevents any channel from exceeding Peak
-        float maxPower = inputPower;
-        
-        if (enableMultiTrace_ && !powerL_.empty() && !powerR_.empty())
-        {
-            maxPower = std::max(maxPower, powerL_[idx]);
-            maxPower = std::max(maxPower, powerR_[idx]);
-        }
-        
-        float& peakState = smoothedPeak[idx];
-        const float peakCoeff = (maxPower > peakState) ? peakAttCoeff : peakRelCoeff;
-        peakState = peakCoeff * peakState + (1.0f - peakCoeff) * maxPower;
     }
     
 #if JUCE_DEBUG
@@ -382,10 +361,8 @@ void AnalyzerEngine::computeFFT()
     // Convert Time-Smoothed POWER to dB for display (Main Trace / RMS)
     convertToDb (smoothedMagnitude.data(), dbValues_.data(), numBins);
     
-    // Convert Fast-Peak Smoothed POWER to dB (Ballistic Peak Trace)
-    // Feeds into the Peak Hold logic for decay tracking AND Display
-    convertToDb (smoothedPeak.data(), dbRaw_.data(), numBins);
-    // std::copy(dbInstant_.begin(), dbInstant_.end(), dbRaw_.begin()); // Removed instant copy
+    // Ballistic Peak Trace: use same smoothed power as RMS (V2 single ballistics)
+    convertToDb (smoothedMagnitude.data(), dbRaw_.data(), numBins);
     
     // Peak Pipeline: Calculate Instantaneous dB from RAW magnitudes (no octave smoothing)
     // This ensures Peak latches the TRUE session max, independent from RMS smoothing.
@@ -847,27 +824,6 @@ void AnalyzerEngine::setHold (bool hold)
 void AnalyzerEngine::setPeakDecayDbPerSec (float decayDbPerSec)
 {
     peakDecayDbPerSec = juce::jlimit (0.0f, 60.0f, decayDbPerSec);
-}
-
-void AnalyzerEngine::setReleaseTimeMs (float ms)
-{
-    const float clampedMs = juce::jlimit (100.0f, 5000.0f, ms);
-    
-    // 1. RMS Release
-    rmsReleaseMs_ = clampedMs;
-    
-    // 2. Peak Release (Fix: Linked to Release Time)
-    peakReleaseMs_ = clampedMs;
-    
-    // 3. Derive Peak Decay Rate (dB/sec)
-    // Formula: 60dB drop over ReleaseTime
-    // dbPerSec = 60.0f / (seconds)
-    const float seconds = clampedMs / 1000.0f;
-    const float computedDecay = 60.0f / seconds;
-    
-    peakDecayDbPerSec = computedDecay;
-    
-    // 3. Peak Hold Decay (inherits from peakDecayDbPerSec in updatePeakHold)
 }
 
 void AnalyzerEngine::setPeakDecayCurve (PeakDecayCurve curve)

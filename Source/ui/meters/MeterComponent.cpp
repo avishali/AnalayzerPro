@@ -1,6 +1,7 @@
 #include "MeterComponent.h"
 #include <mdsp_ui/UiContext.h>
 #include <cmath>
+#include <cstdint>
 #include <utility>
 
 namespace
@@ -278,13 +279,24 @@ void MeterComponent::paint (juce::Graphics& g)
 
         // Labels (if space allows)
         // Draw centered small numbers
-        // Only label select values to avoid clutter
-        if (db == 6.0f || db == 0.0f || db == -12.0f || db == -24.0f || db == -48.0f || db == -96.0f) 
+        // Only draw labels for specific dB tick values to keep the meter uncluttered.
+        // Uses epsilon-based proximity check to avoid -Wfloat-equal (no == or != with floats).
+        constexpr float kLabelEps = 0.001f;
+        auto nearTick = [] (float val, float target) noexcept {
+            return std::abs (val - target) < kLabelEps;
+        };
+        const bool shouldLabel = nearTick (db, 6.0f) || nearTick (db, 0.0f)
+            || nearTick (db, -12.0f) || nearTick (db, -24.0f)
+            || nearTick (db, -48.0f) || nearTick (db, -96.0f);
+        if (shouldLabel)
         {
-            g.setColour (db >= 0.0f ? theme.danger.withAlpha(0.8f) : theme.textMuted.withAlpha(0.8f));
-            juce::String label = juce::String (static_cast<int> (db));
-            if (db > 0) label = "+" + label;
-            g.drawText (label, xLeft, y - 4.0f, width, 8.0f, juce::Justification::centred);
+            // Use 0–255 alpha to avoid -Wfloat-conversion (JUCE has withAlpha(float) and withAlpha(uint8))
+            constexpr std::uint8_t kLabelAlpha255 = 204; // 0.8f
+            g.setColour (db >= 0.0f ? theme.danger.withAlpha (kLabelAlpha255) : theme.textMuted.withAlpha (kLabelAlpha255));
+            const int dbInt = static_cast<int> (std::lround (static_cast<double> (db)));
+            juce::String label = juce::String (dbInt);
+            if (db > 0.0f) label = "+" + label;
+            g.drawText (label, juce::Rectangle<float> (xLeft, y - 4.0f, width, 8.0f), juce::Justification::centred);
         }
     }
 

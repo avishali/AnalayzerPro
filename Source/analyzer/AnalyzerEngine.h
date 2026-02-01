@@ -74,10 +74,7 @@ public:
     void setPeakDecayCurve (PeakDecayCurve curve);
     void setPeakDecayTimeConstantSec (float seconds);
     
-    // Unified Release Time Control (M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR)
-    void setReleaseTimeMs (float ms);
-    
-private:
+    private:
     static constexpr int kMaxFFTSize = 8192;
     static constexpr float kDbFloor = -120.0f;
     
@@ -94,16 +91,17 @@ private:
     
     // Published snapshot for lock-free transport (audio thread writes, UI thread reads)
     PublishedAnalyzerSnapshot published_;
+    // Staging snapshot filled in computeFFT, then published (avoids stack overflow)
+    AnalyzerSnapshot stagingSnapshot_;
     
     // State
-    AnalyzerSnapshot stagingSnapshot_; // Pre-allocated scratch snapshot (avoids stack allocation)
     double currentSampleRate = 44100.0;
     bool prepared = false;
     
     
     // Smoothing buffers (Power domain) - Legacy single-channel
     std::vector<float> smoothedMagnitude; // RMS State
-    std::vector<float> smoothedPeak;      // Peak State (Restored for Ballistics)
+    // std::vector<float> smoothedPeak;      // Peak State (Removed in V2)
 
     // Multi-trace complex bin storage (for L/R channels)
     std::vector<float> fftOutputL;  // Complex FFT output for Left channel
@@ -144,10 +142,6 @@ private:
     // Ballistics Parameters (ms)
     float rmsAttackMs_ = 80.0f;
     float rmsReleaseMs_ = 250.0f;
-    
-    float peakAttackMs_ = 10.0f;   // Fast attack for peaks
-    float peakReleaseMs_ = 80.0f;  // Default release (will be overridden by setReleaseTimeMs)
-    
     float smoothingOctaves_ = 1.0f; // 0 = Off
     float peakDecayDbPerSec = 1.0f;
     bool peakHoldEnabled_ = true;  // Always enabled now (toggled by Hold logic)
