@@ -7,6 +7,7 @@ DraggableParamValueLabel::DraggableParamValueLabel (mdsp_ui::UiContext& ui)
     : ui_ (ui)
 {
     setMouseCursor (juce::MouseCursor::NormalCursor);
+    setWantsMouseWheelEvents (true);
 }
 
 DraggableParamValueLabel::~DraggableParamValueLabel()
