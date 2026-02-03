@@ -38,6 +38,18 @@ public:
     /** Get latest snapshot (non-blocking, UI thread only) */
     bool getLatestSnapshot (AnalyzerSnapshot& dest) const;
     
+    /** Get pointer to FFT data (dB values) - thread-safe read from published snapshot */
+    const float* getFFTData() const noexcept;
+    
+    /** Get current FFT size */
+    int getFFTSize() const noexcept { return currentFFTSize; }
+    
+    /** Check if new data block is available (thread-safe atomic flag) */
+    bool hasNextDataBlock() const noexcept { return hasNewData_.load (std::memory_order_acquire); }
+    
+    /** Clear the new data flag (call after reading data) */
+    void clearDataFlag() noexcept { hasNewData_.store (false, std::memory_order_release); }
+    
     /** Update parameters from APVTS (call from UI thread or parameter change callback) */
     void setFftSize (int fftSize);
 
@@ -159,6 +171,9 @@ private:
     std::atomic<int> pendingFftSize_{ 0 };
     std::atomic<bool> fftResizeRequested_{ false };
     // shouldResetHoldToLive_ removed in V2 (using local edge detection)
+    
+    // Thread-safe flag indicating new data is available (UI can peek without interrupting audio thread)
+    std::atomic<bool> hasNewData_{ false };
 
     // Peak hold mode/timer (used by updatePeakHold)
     PeakHoldMode peakHoldMode_ = PeakHoldMode::HoldThenDecay;

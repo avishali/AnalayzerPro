@@ -2,6 +2,7 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <mdsp_gui/components/SpectrumComponent.h>
 #include <mdsp_ui/Theme.h>
 #include <mdsp_ui/ThemeVariant.h>
 #include <vector>
@@ -76,6 +77,11 @@ public:
     RTADisplay& getRTADisplay() noexcept { return rtaDisplay; }
     const RTADisplay& getRTADisplay() const noexcept { return rtaDisplay; }
 
+    /** Forward to shared spectrum engine: FFT order (e.g. 10=1024, 11=2048). */
+    void setSpectrumFftOrder (int order);
+    /** Forward to shared spectrum engine: decay 0.0 (instant) to 1.0 (max smooth). */
+    void setSpectrumDecayRate (float decay);
+
     /** Shutdown: stop timer and clear references. Safe to call multiple times. */
     void shutdown();
 
@@ -105,6 +111,7 @@ private:
 
     AnalayzerProAudioProcessor& audioProcessor;
     RTADisplay rtaDisplay;
+    mdsp::gui::SpectrumComponent spectrumEngine;
     Mode currentMode_ = Mode::FFT;
     DbRange dbRange_ = DbRange::Minus120;
     DbRange appliedDbRange_ = DbRange::Minus120;

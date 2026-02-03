@@ -1,4 +1,5 @@
 #include "AnalyzerDisplayView.h"
+#include <mdsp_gui/dsp/AnalyzerSettings.h>
 #include <mdsp_ui/Theme.h>
 #include <cmath>
 #include <limits>
@@ -41,6 +42,14 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
 #endif
 {
     addAndMakeVisible (rtaDisplay);
+    addAndMakeVisible (spectrumEngine);
+    spectrumEngine.setAudioBufferQueue (&audioProcessor.getSpectrumBufferQueue());
+
+    // Use mdsp_gui default "Yellow Peak" aesthetic (sharp yellow stroke, gradient fill)
+    spectrumEngine.setStyle (mdsp::gui::SpectrumComponent::Style{});
+
+    // Initial FFT order: 4096 (order 12) for high-resolution spectrum
+    spectrumEngine.setFftOrder (mdsp::gui::SpectrumComponent::defaultFftOrder);
     // Initialize RTADisplay with default ranges
     rtaDisplay.setFrequencyRange (20.0f, 20000.0f);
     targetMinDb_ = dbRangeToMinDb (dbRange_);
@@ -328,7 +337,9 @@ void AnalyzerDisplayView::mouseDrag (const juce::MouseEvent& e)
 
 void AnalyzerDisplayView::resized()
 {
-    rtaDisplay.setBounds (getLocalBounds());
+    auto bounds = getLocalBounds();
+    rtaDisplay.setBounds (bounds);
+    spectrumEngine.setBounds (bounds);
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     modeOverlay_.setBounds (8, 8, 260, 18);
     modeOverlay_.toFront (false);
@@ -585,12 +596,33 @@ void AnalyzerDisplayView::setMode (Mode mode)
     assertModeSync();
 #endif
 
+    // Sync shared spectrum engine analysis mode (Line / Log / Band)
+    mdsp::gui::SpectrumComponent::AnalysisMode specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Log;
+    switch (currentMode_)
+    {
+        case Mode::FFT:  specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Line; break;
+        case Mode::LOG:  specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Log;  break;
+        case Mode::BAND:  specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Band; break;
+        default:         specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Log;  break;
+    }
+    spectrumEngine.setAnalysisMode (specMode);
+
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     updateModeOverlayText();
 #endif
     
     // Force repaint
     repaint();
+}
+
+void AnalyzerDisplayView::setSpectrumFftOrder (int order)
+{
+    spectrumEngine.setFftOrder (order);
+}
+
+void AnalyzerDisplayView::setSpectrumDecayRate (float decay)
+{
+    spectrumEngine.setDecayRate (decay);
 }
 
 void AnalyzerDisplayView::timerCallback()
@@ -649,6 +681,45 @@ void AnalyzerDisplayView::timerCallback()
             monoState_.clear();
             rmsState_.clear();
         }
+    }
+
+    // Push mdsp_gui spectrum settings: Smoothing, Tilt, Range, FFT order, Peak decay
+    {
+        mdsp::gui::AnalyzerSettings specSettings;
+        specSettings.rangeMinDb = dbRangeToMinDb (dbRange_);
+        specSettings.rangeMaxDb = 0.0f;
+        specSettings.fftOrder = mdsp::gui::SpectrumComponent::defaultFftOrder;
+        auto* pFftSize = apvts.getRawParameterValue ("FftSize");
+        if (pFftSize != nullptr)
+        {
+            const int sizes[] = { 1024, 2048, 4096, 8192 };
+            const int idx = juce::jlimit (0, 3, static_cast<int> (pFftSize->load()));
+            const int fftSize = sizes[static_cast<size_t> (idx)];
+            specSettings.fftOrder = static_cast<int> (std::log2 (fftSize));
+        }
+        auto* pSmooth = apvts.getRawParameterValue ("Averaging");
+        if (pSmooth != nullptr)
+        {
+            constexpr float kSmoothingOctaves[] = { 0.0f, 1.0f/24.0f, 1.0f/12.0f, 1.0f/6.0f, 1.0f/3.0f, 1.0f };
+            const int idx = juce::jlimit (0, 5, static_cast<int> (pSmooth->load()));
+            const float oct = kSmoothingOctaves[static_cast<size_t> (idx)];
+            specSettings.smoothingAlpha = juce::jmap (oct, 0.0f, 1.0f, 0.0f, 0.9f);
+        }
+        auto* pDecay = apvts.getRawParameterValue ("PeakDecay");
+        if (pDecay != nullptr)
+        {
+            const float ms = pDecay->load();
+            specSettings.peakDecayRate = juce::jlimit (0.0f, 1.0f, (ms - 100.0f) / 4900.0f);
+        }
+        auto* pTilt = apvts.getRawParameterValue ("Tilt");
+        if (pTilt != nullptr)
+        {
+            const int idx = static_cast<int> (pTilt->load());
+            if (idx == 1) specSettings.tiltDbPerOct = 4.5f;
+            else if (idx == 2) specSettings.tiltDbPerOct = -4.5f;
+            else specSettings.tiltDbPerOct = 0.0f;
+        }
+        spectrumEngine.setSettings (specSettings);
     }
     
 #if JUCE_DEBUG
@@ -816,6 +887,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         lastMetaFftSize_ = snapshot.fftSize;
         expectedBins_ = snapshot.fftSize / 2 + 1;
         fftMetaReady_ = true;
+        spectrumEngine.prepare (snapshot.sampleRate);
     }
     
     // Update Hold Status

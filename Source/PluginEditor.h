@@ -10,6 +10,7 @@
 
 
 #include "PluginProcessor.h"
+#include "analyzer/AnalyzerEngine.h"
 #include "ui/MainView.h"
 #include "ui/tooltips/TooltipManager.h"
 
@@ -30,6 +31,7 @@ public:
 
 private:
     AnalayzerProAudioProcessor& audioProcessor;
+    AnalyzerEngine& analyzerModule;  // Reference to analyzer module for direct access
     mdsp_ui::UiContext ui_;  // Single shared UiContext instance for all UI
     mdsp_ui::LookAndFeel lnf_; // Custom LookAndFeel
 
