@@ -144,6 +144,10 @@ add_subdirectory(
     third_party/melechdsp-hq/shared/mdsp_dsp
 )
 
+add_subdirectory(
+    third_party/melechdsp-hq/shared/mdsp_gui
+)
+
 # ==============================================================================
 # PLUGIN TARGET
 # ==============================================================================
@@ -189,6 +193,8 @@ target_sources(${PLUGIN_NAME}
         Source/parameters/Parameters.h
         Source/ui/MainView.cpp
         Source/ui/MainView.h
+        Source/ui/ControlPanel.cpp
+        Source/ui/ControlPanel.h
         Source/ui/meters/MeterComponent.cpp
         Source/ui/meters/MeterComponent.h
         Source/ui/meters/MeterGroupComponent.cpp
@@ -240,6 +246,7 @@ target_include_directories(${PLUGIN_NAME}
     PRIVATE
         Source
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/melechdsp-hq/shared/mdsp_ui/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/melechdsp-hq/shared/mdsp_gui/include
 )
 
 target_compile_definitions(${PLUGIN_NAME}
@@ -260,6 +267,7 @@ target_link_libraries(${PLUGIN_NAME}
         juce::juce_dsp
         mdsp_ui
         mdsp_dsp
+        mdsp_gui
     PUBLIC
         ui_core
         mdsp_core

@@ -490,9 +490,8 @@ void AnalyzerEngine::computeFFT()
         const std::size_t idx = static_cast<std::size_t> (i);
         snapshot.fftDb[idx] = juce::jmax (dbFloor, dbValues_[idx]);
         
-        // Populate snapshot with Ballistic Peak (dbRaw_)
-        // Previously used peakHold, now peakHold is separate
-        snapshot.fftPeakDb[idx] = juce::jmax (dbFloor, dbRaw_[idx]);
+        // Peak trace is always the envelope: max(ballistic peak, RMS) so peak is never below other traces
+        snapshot.fftPeakDb[idx] = juce::jmax (dbFloor, dbRaw_[idx], dbValues_[idx]);
         
         // Populate snapshot with Peak Hold (AC1 - Existing Buffer)
         snapshot.fftPeakHoldDb[idx] = juce::jmax (dbFloor, peakHold[idx]);

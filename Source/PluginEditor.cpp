@@ -12,10 +12,10 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
     // Apply custom LookAndFeel globally
     juce::LookAndFeel::setDefaultLookAndFeel (&lnf_);
 
-
-    // Init Tooltips
+    // Init Tooltips (custom overlay for rich tooltips + JUCE native for controls)
     tooltipManager_ = std::make_unique<mdsp_ui::TooltipManager> (*this, ui_);
     mainView.setTooltipManager (tooltipManager_.get());
+    tooltipWindow_ = std::make_unique<juce::TooltipWindow> (this, 500);
 
     addAndMakeVisible (mainView);
 
