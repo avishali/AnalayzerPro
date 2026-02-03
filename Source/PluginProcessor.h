@@ -9,6 +9,7 @@
 #include "presets/PresetManager.h"
 #include "presets/ABStateManager.h"
 #include "dsp/loudness/LoudnessAnalyzer.h"
+#include <mdsp_core/containers/AudioBufferQueue.h>
 #include <limits>
 
 
@@ -99,6 +100,10 @@ public:
     void resetMeterClipLatches() noexcept;
     const SoftwareMeterSink& getSoftwareMeterSink() const noexcept { return softwareMeterSink_; }
 
+    /** Lock-free queue of mono samples for spectrum visualization (UI reads, processBlock pushes). */
+    mdsp::core::AudioBufferQueue& getSpectrumBufferQueue() noexcept { return spectrumBufferQueue_; }
+    const mdsp::core::AudioBufferQueue& getSpectrumBufferQueue() const noexcept { return spectrumBufferQueue_; }
+
     void setEditorSize (int width, int height) noexcept { parameters.setEditorSize (width, height); }
     int getEditorWidth() const noexcept { return parameters.getEditorWidth(); }
     int getEditorHeight() const noexcept { return parameters.getEditorHeight(); }
@@ -151,6 +156,10 @@ private:
     // Scratch buffer for analysis (avoids modifying output buffer for visualization)
     juce::AudioBuffer<float> analysisBuffer;
     juce::AudioBuffer<float> outputAnalysisBuffer; // Added for V2 Output Metering
+
+    // Queue for spectrum: audio thread pushes mono, message thread pulls and runs FFT
+    static constexpr int kSpectrumQueueCapacity = 8192;
+    mdsp::core::AudioBufferQueue spectrumBufferQueue_ { kSpectrumQueueCapacity };
     
     // Cached parameter pointers
     std::atomic<float>* pFftSize_ = nullptr;
@@ -158,7 +167,7 @@ private:
     std::atomic<float>* pHoldPeaks_ = nullptr;
     std::atomic<float>* pPeakDecay_ = nullptr;
     std::atomic<float>* pBypass_ = nullptr;
-    
+
     // Trace Config Parameters
     std::atomic<float>* pTraceShowLR_ = nullptr;
     std::atomic<float>* pTraceShowMono_ = nullptr;

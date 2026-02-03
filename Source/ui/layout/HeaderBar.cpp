@@ -31,18 +31,21 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     initModeBtn (bandButton_, "BAND", 2);
     initModeBtn (logButton_, "LOG", 3);
     fftButton_.setToggleState (true, juce::dontSendNotification);
+    fftButton_.setTooltip ("FFT spectrum mode");
+    bandButton_.setTooltip ("Band spectrum mode");
+    logButton_.setTooltip ("Log spectrum mode");
 
     // FFT Size control
     fftSizeCombo_.addItem ("1024", 1);
     fftSizeCombo_.addItem ("2048", 2);
     fftSizeCombo_.addItem ("4096", 3);
     fftSizeCombo_.addItem ("8192", 4);
-    fftSizeCombo_.setSelectedId (2, juce::dontSendNotification);
-    fftSizeCombo_.setTooltip ("FFT Size");
+    fftSizeCombo_.setSelectedId (3, juce::dontSendNotification);
+    fftSizeCombo_.setTooltip ("FFT size (1024–8192). Larger = better frequency resolution, more CPU.");
     addAndMakeVisible (fftSizeCombo_);
 
+    peakRangeBox_.setTooltip ("Peak display range (dB). Drag analyzer vertical axis to change.");
 
-    
     // Preset & State Buttons
     presetButton.setButtonText ("Preset");
     presetButton.setTooltip ("Load Preset");
@@ -108,15 +111,15 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     initSlotBtn (slotAButton, "A", AnalyzerPro::presets::ABStateManager::Slot::A);
     initSlotBtn (slotBButton, "B", AnalyzerPro::presets::ABStateManager::Slot::B);
     slotAButton.setToggleState (true, juce::dontSendNotification);
+    slotAButton.setTooltip ("Compare state A");
+    slotBButton.setTooltip ("Compare state B");
 
     // Bypass
     bypassButton.setButtonText ("BYPASS");
     bypassButton.setClickingTogglesState (true);
     bypassButton.setColour (juce::ToggleButton::tickColourId, theme.accent); 
     bypassButton.setColour (juce::TextButton::buttonColourId, theme.panel); // If using TextButton vs ToggleButton logic
-    // Wait, declaration is ToggleButton.
-    // Let's style it like others?
-    // ToggleButton style is different. Let's assume standard toggle behavior for now.
+    bypassButton.setTooltip ("Bypass analyzer processing");
     addAndMakeVisible (bypassButton);
 }
 

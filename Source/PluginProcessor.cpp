@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <juce_dsp/juce_dsp.h>
 #include <atomic>
 #include <cmath>
 #include <limits>
@@ -321,6 +322,9 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (int ch = numAnalChannels; ch < analysisBuffer.getNumChannels(); ++ch)
         analysisBuffer.clear (ch, 0, n);
 
+    // Push mono (L+R mix) to spectrum queue for UI visualization
+    spectrumBufferQueue_.push (buffer, 0, numAnalChannels > 1 ? 1 : -1);
+
     // DECOUPLED: Analysis buffer always carries Stereo L/R.
     // Downstream consumers (Scope, Meters) can decide how to view it.
     // RTADisplay derives its own Mid/Side/Mono traces from this L/R data.
@@ -388,8 +392,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         for (int channel = 0; channel < totalNumInputChannels; ++channel)
             buffer.applyGain (channel, 0, buffer.getNumSamples(), gainValue);
     }
-    
-    
+
     // Update analyzer parameters from APVTS (audio thread, real-time safe)
     // Note: Mode is UI-only, handled on message thread
     auto* fftSizeParam = apvts.getRawParameterValue ("FftSize");
@@ -665,6 +668,10 @@ void AnalayzerProAudioProcessor::migrateLegacyParameters (juce::ValueTree& state
     {
         state.removeProperty ("PeakHold", nullptr);
     }
+
+    // Remove legacy Low-pass filter "Cutoff" (parameter removed for pure analyzer)
+    if (state.hasProperty ("Cutoff"))
+        state.removeProperty ("Cutoff", nullptr);
 }
 
 // ADD — Source/PluginProcessor.cpp (very bottom, after all code)
@@ -710,9 +717,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
         // Actually, let's keep ID "PeakDecay" to avoid breaking ALL presets if not required, but strict read says "Rename parameter".
         // I will change ID to "ReleaseTime" to reflect the shift from dB/s to ms.
         juce::NormalisableRange<float> (100.0f, 5000.0f, 10.0f),
-        450.0f,  // Default: 1500ms
+        450.0f,  // Default: 450ms
         "Release Time (ms)"));
-    
+
     // Analyzer Display Gain (-24..+24 dB, default 0.0 dB, step 0.5 dB)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "DisplayGain", "Display Gain",

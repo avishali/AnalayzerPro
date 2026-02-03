@@ -622,7 +622,7 @@ void AnalyzerDisplayView::timerCallback()
     traceConfig.weightingMode = (pWeight != nullptr) ? (int)pWeight->load() : 0;
     currentWeightingMode_ = traceConfig.weightingMode; // Store for updateFromSnapshot
     
-    // Read Release Time (PeakDecay) for Ballistics
+    // Release Time (PeakDecay): single control for ballistics on all traces (RMS + L/R/Mid/Side/Mono)
     auto* pRelease = apvts.getRawParameterValue("PeakDecay");
     if (pRelease != nullptr)
         releaseMs_ = pRelease->load();
@@ -701,14 +701,11 @@ void AnalyzerDisplayView::timerCallback()
                         float peakDb = fftPeakDb_[i];
                         if (isInvalidPeakDb (peakDb))
                             peakDb = fftDb_[i];
-                        
-                        // NO MAPPING: Use same scale as FFT
-                        // float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
-                        
-                        float result = peakDb;
+                        if (i < fftDb_.size())
+                            peakDb = juce::jmax (peakDb, fftDb_[i]);
                         if (flashActive)
-                            result = juce::jmin (0.0f, result + 2.0f);
-                        fftPeakDbDisplay_[i] = result;
+                            peakDb = juce::jmin (0.0f, peakDb + 2.0f);
+                        fftPeakDbDisplay_[i] = peakDb;
                     }
                     rtaDisplay.setFFTData (fftDb_, 
                                            &fftPeakDbDisplay_,
@@ -1126,23 +1123,25 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             // Remap peak trace into FFT/grid dB space using the separate Peak Range.
             if (usePeaks)
             {
-                // REMOVED Independent Peak Scaling to match timerCallback logic
-                // const float fftMinDb = lastAppliedMinDb_;
-                // const float peakMinDb = dbRangeToMinDb (peakDbRange_);
                 fftPeakDbDisplay_.resize (validBinsSize);
-
                 const bool flash = (peakFlashActive_ && juce::Time::getMillisecondCounterHiRes() < peakFlashUntilMs_);
-                
+
                 for (size_t i = 0; i < validBinsSize; ++i)
                 {
-                    float peakDb = fftPeakDb_[i]; // Already latched
-                    
-                    // NO MAPPING: Use same scale as FFT
-                    // float mapped = mapDbToDisplayDb (peakDb, peakMinDb, fftMinDb);
-                    
+                    // Peak trace is always the highest: envelope of peak, RMS, and all multi-traces
+                    float peakDb = fftPeakDb_[i];
+                    if (i < fftDb_.size())
+                        peakDb = juce::jmax (peakDb, fftDb_[i]);
+                    if (snapshot.multiTraceEnabled && i < scratchPowerL_.size())
+                    {
+                        peakDb = juce::jmax (peakDb, scratchPowerL_[i]);
+                        if (i < scratchPowerR_.size()) peakDb = juce::jmax (peakDb, scratchPowerR_[i]);
+                        if (i < scratchPowerMid_.size()) peakDb = juce::jmax (peakDb, scratchPowerMid_[i]);
+                        if (i < scratchPowerSide_.size()) peakDb = juce::jmax (peakDb, scratchPowerSide_[i]);
+                        if (i < scratchPowerMono_.size()) peakDb = juce::jmax (peakDb, scratchPowerMono_[i]);
+                    }
                     if (flash)
-                        peakDb = juce::jmin (0.0f, peakDb + 2.0f); 
-                        
+                        peakDb = juce::jmin (0.0f, peakDb + 2.0f);
                     fftPeakDbDisplay_[i] = peakDb;
                 }
 

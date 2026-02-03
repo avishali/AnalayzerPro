@@ -47,6 +47,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     releaseTimeLabel_.setFont (type.labelSmallFont());
     releaseTimeLabel_.setJustificationType (juce::Justification::centredLeft);
     releaseTimeLabel_.setColour (juce::Label::textColourId, theme.grey);
+    releaseTimeLabel_.setTooltip ("Peak decay / release time. Drag value or use mouse wheel to change.");
     addAndMakeVisible (releaseTimeLabel_);
     addAndMakeVisible (releaseTimeValue_);
     tiltRow.attachToParent (*this);
@@ -54,9 +55,11 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     scopeShapeRow.attachToParent (*this);
     scopeInputRow.attachToParent (*this);
     scopePeakHoldRow.attachToParent (*this);
+    scopePeakHoldButton.setTooltip ("Hold stereo scope peak.");
     
     meterInputRow.attachToParent (*this);
     meterPeakHoldRow.attachToParent (*this);
+    meterPeakHoldButton.setTooltip ("Hold meter peak.");
     
     showLrRow.attachToParent (*this);
     showMonoRow.attachToParent (*this);
@@ -65,6 +68,13 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     showMidRow.attachToParent (*this);
     showSideRow.attachToParent (*this);
     showRmsRow.attachToParent (*this);
+    showLrButton.setTooltip ("Show left/right stereo trace.");
+    showMonoButton.setTooltip ("Show mono sum trace.");
+    showLButton.setTooltip ("Show left channel trace.");
+    showRButton.setTooltip ("Show right channel trace.");
+    showMidButton.setTooltip ("Show mid (L+R) trace.");
+    showSideButton.setTooltip ("Show side (L−R) trace.");
+    showRmsButton.setTooltip ("Show RMS trace.");
 
     smoothingRow.attachToParent (*this);
     weightingRow.attachToParent (*this);
@@ -74,6 +84,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     tiltCombo.addItem ("Pink", 2);
     tiltCombo.addItem ("White", 3);
     tiltCombo.setSelectedId (1, juce::dontSendNotification);
+    tiltCombo.setTooltip ("Frequency tilt: Flat, Pink, or White noise weighting.");
     
     // Smoothing Combo
     // Options: Off, 1/24, 1/12, 1/6, 1/3, 1 Octave
@@ -84,6 +95,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     smoothingCombo.addItem ("1/3 Oct", 5);
     smoothingCombo.addItem ("1 Octave", 6);
     smoothingCombo.setSelectedId (4, juce::dontSendNotification); // Default 1/6 (matches plugin default)
+    smoothingCombo.setTooltip ("Spectrum smoothing (averaging). 1/6 octave is a common default.");
 
     // Weighting Combo
     // Options: None, A-Weighting, BS.468-4
@@ -91,6 +103,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     weightingCombo.addItem ("A-Wgt", 2);
     weightingCombo.addItem ("BS.468", 3);
     weightingCombo.setSelectedId (1, juce::dontSendNotification);
+    weightingCombo.setTooltip ("Frequency weighting: None, A-Weighting, or BS.468-4.");
 
     // Scope Combos
 
@@ -98,25 +111,30 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     scopeModeCombo.addItem ("Peak", 1);
     scopeModeCombo.addItem ("RMS", 2);
     scopeModeCombo.setSelectedId (1, juce::dontSendNotification);
+    scopeModeCombo.setTooltip ("Stereo scope display: Peak or RMS.");
     scopeModeCombo.onChange = [this] { if (onScopeModeChanged) onScopeModeChanged (scopeModeCombo.getSelectedId()); };
 
     scopeShapeCombo.addItem ("Basic", 1);
     scopeShapeCombo.addItem ("PAZ", 2);
     scopeShapeCombo.setSelectedId (1, juce::dontSendNotification);
+    scopeShapeCombo.setTooltip ("Stereo scope shape: Basic or PAZ (phase-amplitude).");
     scopeShapeCombo.onChange = [this] { if (onScopeShapeChanged) onScopeShapeChanged (scopeShapeCombo.getSelectedId()); };
     
     // Scope Input: Stereo Scope, Mid-Side
     scopeInputCombo.addItem ("M/S", 1);
     scopeInputCombo.addItem ("Stereo", 2);
     scopeInputCombo.setSelectedId (1, juce::dontSendNotification); // Default Stereo (matches Param default)
+    scopeInputCombo.setTooltip ("Stereo scope input: Mid-Side (M/S) or Stereo.");
 
     // Meter Input: Stereo, M/S
     meterInputCombo.addItem ("Stereo", 1);
     meterInputCombo.addItem ("Mid-Side", 2);
     meterInputCombo.setSelectedId (1, juce::dontSendNotification); // Default Stereo
+    meterInputCombo.setTooltip ("Meter input: Stereo or Mid-Side.");
 
     // Configure toggles
     holdButton.setButtonText ("Hold Peaks");
+    holdButton.setTooltip ("Hold analyzer peak trace.");
 
     // Configure reset button
     resetPeaksButton.setTooltip ("Clear peak trace");
