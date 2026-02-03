@@ -972,6 +972,9 @@ void AnalyzerEngine::publishSnapshot (const AnalyzerSnapshot& source)
     const uint32_t currentSeq = published_.sequence.load (std::memory_order_relaxed);
     const uint32_t next = (currentSeq == 0) ? 1 : (currentSeq + 1);  // Ensure we never stay at 0
     published_.sequence.store (next, std::memory_order_release);
+    
+    // Set flag indicating new data is available (UI can peek without interrupting audio thread)
+    hasNewData_.store (true, std::memory_order_release);
 }
 
 bool AnalyzerEngine::getLatestSnapshot (AnalyzerSnapshot& dest) const
@@ -1045,4 +1048,11 @@ bool AnalyzerEngine::getLatestSnapshot (AnalyzerSnapshot& dest) const
     
     // After retries, return false (sequence kept changing, likely high update rate)
     return false;
+}
+
+const float* AnalyzerEngine::getFFTData() const noexcept
+{
+    // Return pointer to published FFT data (thread-safe read)
+    // UI should check hasNextDataBlock() before accessing
+    return published_.data.fftDb.data();
 }

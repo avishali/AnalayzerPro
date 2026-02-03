@@ -59,7 +59,11 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         stereoScopeView_.repaint();
     };
 
-    // Wire parameter changes to AnalyzerEngine and AnalyzerDisplayView
+    // Wire parameter changes to AnalyzerEngine and AnalyzerDisplayView.
+    // Spectrum engine wiring (HeaderBar controls -> APVTS -> parameterChanged -> display view):
+    //   fftSizeComboBox (AnalyzerFftSize) -> FftSize -> analyzerView_.setSpectrumFftOrder(order)
+    //   decaySlider (PeakDecay)          -> PeakDecay -> analyzerView_.setSpectrumDecayRate(decayNorm)
+    //   viewModeButton (Mode)            -> Mode -> analyzerView_.setMode(...) -> spectrumEngine.setAnalysisMode(...)
     if (apvts != nullptr)
     {
         apvts->addParameterListener ("Mode", this);
@@ -139,6 +143,18 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
             if (idx == 1) viewMode = AnalyzerDisplayView::Mode::BAND;
             if (idx == 2) viewMode = AnalyzerDisplayView::Mode::LOG;
             analyzerView_.setMode (viewMode);
+        }
+        if (auto* raw = apvts_->getRawParameterValue ("FftSize"))
+        {
+            const int index = juce::jlimit (0, 3, juce::roundToInt (raw->load()));
+            const int order = 10 + index;
+            analyzerView_.setSpectrumFftOrder (order);
+        }
+        if (auto* raw = apvts_->getRawParameterValue ("PeakDecay"))
+        {
+            const float ms = raw->load();
+            const float decayNorm = juce::jlimit (0.0f, 1.0f, (ms - 100.0f) / 4900.0f);
+            analyzerView_.setSpectrumDecayRate (decayNorm);
         }
     }
         
@@ -264,11 +280,14 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     else if (parameterID == "FftSize")
     {
         // Convert choice index to FFT size (handled in PluginProcessor::parameterChanged)
-        // This is redundant but ensures UI thread safety
         const int sizes[] = { 1024, 2048, 4096, 8192 };
         const int index = juce::roundToInt (newValue);
         if (index >= 0 && index < 4)
+        {
             audioProcessor.getAnalyzerEngine().setFftSize (sizes[index]);
+            const int order = 10 + index;  // 1024=10, 2048=11, 4096=12, 8192=13
+            analyzerView_.setSpectrumFftOrder (order);
+        }
     }
     else if (parameterID == "Averaging")
     {
@@ -329,6 +348,8 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     else if (parameterID == "PeakDecay")
     {
         audioProcessor.getAnalyzerEngine().setReleaseTimeMs (newValue);
+        const float decayNorm = juce::jlimit (0.0f, 1.0f, (newValue - 100.0f) / 4900.0f);
+        analyzerView_.setSpectrumDecayRate (decayNorm);
     }
     else if (parameterID == "DbRange")
     {
