@@ -9,7 +9,7 @@ ControlPanel::ControlPanel (juce::AudioProcessorValueTreeState& apvts)
     cutoffSlider_.setNumDecimalPlacesToDisplay (0);
     cutoffSlider_.setTextValueSuffix (" Hz");
     cutoffSlider_.setName ("Cutoff");
-    cutoffSlider_.setTooltip ("Low-pass filter cutoff (20 Hz – 20 kHz).");
+    cutoffSlider_.setTooltip ("Low-pass filter cutoff (20 Hz - 20 kHz).");
     addAndMakeVisible (cutoffSlider_);
 
     cutoffLabel_.setText ("Cutoff", juce::dontSendNotification);
