@@ -41,7 +41,7 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     fftSizeCombo_.addItem ("4096", 3);
     fftSizeCombo_.addItem ("8192", 4);
     fftSizeCombo_.setSelectedId (3, juce::dontSendNotification);
-    fftSizeCombo_.setTooltip ("FFT size (1024–8192). Larger = better frequency resolution, more CPU.");
+    fftSizeCombo_.setTooltip ("FFT size (1024-8192). Larger = better frequency resolution, more CPU.");
     addAndMakeVisible (fftSizeCombo_);
 
     peakRangeBox_.setTooltip ("Peak display range (dB). Drag analyzer vertical axis to change.");

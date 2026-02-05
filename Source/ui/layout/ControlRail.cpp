@@ -73,7 +73,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     showLButton.setTooltip ("Show left channel trace.");
     showRButton.setTooltip ("Show right channel trace.");
     showMidButton.setTooltip ("Show mid (L+R) trace.");
-    showSideButton.setTooltip ("Show side (L−R) trace.");
+    showSideButton.setTooltip ("Show side (L-R) trace.");
     showRmsButton.setTooltip ("Show RMS trace.");
 
     smoothingRow.attachToParent (*this);

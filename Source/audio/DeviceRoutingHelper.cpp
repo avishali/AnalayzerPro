@@ -37,10 +37,13 @@ void DeviceRoutingHelper::logAvailableDevices(juce::AudioDeviceManager& dm)
         const auto outs = t->getDeviceNames(false);
 
         DBG("  Inputs:");
+#if 0  // Disabled: device names can contain non-ASCII, triggering JUCE String(char*) assert
         for (auto& n : ins)  { juce::ignoreUnused (n); DBG("    - " + n); }
-
+#endif
         DBG("  Outputs:");
+#if 0  // Disabled: device names can contain non-ASCII, triggering JUCE String(char*) assert
         for (auto& n : outs) { juce::ignoreUnused (n); DBG("    - " + n); }
+#endif
     }
     DBG("----------------------------");
 }
@@ -49,8 +52,10 @@ void DeviceRoutingHelper::logSetup(const juce::AudioDeviceManager::AudioDeviceSe
 {
     juce::ignoreUnused (s);
     DBG("---- AudioDeviceSetup ----");
+#if 0  // Disabled: device names can contain non-ASCII, triggering JUCE String(char*) assert
     DBG(" inputDeviceName  : " + s.inputDeviceName);
     DBG(" outputDeviceName : " + s.outputDeviceName);
+#endif
     DBG(" sampleRate       : " + juce::String(s.sampleRate));
     DBG(" bufferSize       : " + juce::String(s.bufferSize));
     DBG(" inputChannels    : " + s.inputChannels.toString(2));
@@ -181,13 +186,16 @@ DeviceRoutingHelper::Result DeviceRoutingHelper::applyPreset(juce::AudioDeviceMa
         const auto activeIn  = dev->getActiveInputChannels();
         const auto activeOut = dev->getActiveOutputChannels();
 
+#if 0  // Disabled: device/channel names can contain non-ASCII, triggering JUCE String(char*) assert
         DBG("Current device: " + dev->getName());
+#endif
         DBG("Active IN : " + activeIn.toString(2));
         DBG("Active OUT: " + activeOut.toString(2));
 
         if (activeIn.countNumberOfSetBits() == 0)
             return { false, "Device opened but no active input channels (input mask is zero)." };
 
+#if 0  // Disabled: channel names can contain non-ASCII, triggering JUCE String(char*) assert
         // One-time debug: channel names (to confirm channel indices in the aggregate device)
         static bool loggedChannelNamesOnce = false;
         if (! loggedChannelNamesOnce)
@@ -209,6 +217,7 @@ DeviceRoutingHelper::Result DeviceRoutingHelper::applyPreset(juce::AudioDeviceMa
             }
             DBG("----------------------------------------");
         }
+#endif
     }
     else
     {
