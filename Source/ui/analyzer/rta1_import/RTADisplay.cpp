@@ -352,7 +352,21 @@ void RTADisplay::setTiltMode (TiltMode mode)
 
 void RTADisplay::setTraceConfig (const TraceConfig& config)
 {
-    // B1: Every setter updates state
+    // Only invalidate paths if config actually changed to prevent unnecessary rebuilds
+    // This fixes the issue where changing weighting dropdown causes peak trace to fade/rebuild
+    if (traceConfig_.showL == config.showL &&
+        traceConfig_.showR == config.showR &&
+        traceConfig_.showMono == config.showMono &&
+        traceConfig_.showMid == config.showMid &&
+        traceConfig_.showSide == config.showSide &&
+        traceConfig_.showLR == config.showLR &&
+        traceConfig_.showRMS == config.showRMS &&
+        traceConfig_.weightingMode == config.weightingMode)
+    {
+        return; // No change detected, skip invalidation
+    }
+
+    // B1: Config changed - update state and invalidate paths
     traceConfig_ = config;
     invalidatePaths(); // Trace config affects paths (e.g. weighting, multi-trace visibility)
     repaint();
@@ -438,9 +452,16 @@ void RTADisplay::setMultiTraceData (const float* powerL, const float* powerR,
         if (pMax > maxDb) maxDb = pMax;
     }
     
-    // FFT No Data Guard
-    if (std::isfinite(maxDb) && maxDb > (state.bottomDb + 6.0f))
+    // Per-trace data guard: always allow multi-trace rendering if main spectrum is valid
+    // Quiet channels should render at floor level rather than being suppressed
+    // Main trace's setFFTData already controls hasValidSpectrumFrame
+    if (state.hasValidSpectrumFrame)
     {
+        // Main spectrum is valid - multi-trace data is valid regardless of level
+    }
+    else if (std::isfinite (maxDb) && maxDb > (state.bottomDb + 6.0f))
+    {
+        // Multi-trace has audible data even if main trace hasn't been set yet
         state.hasValidSpectrumFrame = true;
     }
     
@@ -484,20 +505,23 @@ float RTADisplay::computeTiltDb (float freqHz) const
 
 float RTADisplay::dbToYWithCompensation (float db, float freqHz, const RenderState& s) const
 {
+    // TEMPORARILY DISABLED - Testing if double-weighting/tilt causes flat line issue
     // Apply display gain and tilt compensation
-    const float tiltDb = computeTiltDb (freqHz);
-    
+    // const float tiltDb = computeTiltDb (freqHz);
+    const float tiltDb = 0.0f; // DISABLED FOR TEST
+
     // Apply frequency weighting if enabled
-    float weightingDb = 0.0f;
-    if (traceConfig_.weightingMode == 1)
-        weightingDb = getAWeightingDb (freqHz);
-    else if (traceConfig_.weightingMode == 2)
-        weightingDb = getBS468WeightingDb (freqHz);
-    
+    // float weightingDb = 0.0f;
+    // if (traceConfig_.weightingMode == 1)
+    //     weightingDb = getAWeightingDb (freqHz);
+    // else if (traceConfig_.weightingMode == 2)
+    //     weightingDb = getBS468WeightingDb (freqHz);
+    const float weightingDb = 0.0f; // DISABLED FOR TEST
+
     const float dbWithCompensation = db + displayGainDb + tiltDb + weightingDb;
-    
-    // Clamp to display range
-    const float clampedDb = juce::jlimit (s.bottomDb, s.topDb, dbWithCompensation);
+
+    // Clamp to display range (allow +18dB headroom above topDb for peaks/overs)
+    const float clampedDb = juce::jlimit (s.bottomDb, s.topDb + 18.0f, dbWithCompensation);
     
     const float range = s.topDb - s.bottomDb;
     if (range <= 0.0f)
@@ -632,10 +656,29 @@ void RTADisplay::buildFftPaths()
     if (!s.fftDb.empty())
 
         buildDecimatedPath(s.fftDb, cachedFftPath_);
-        
-    // Build Peak Path
+
+    // Build Peak Path (with visibility guard to prevent flat line at noise floor)
     if (!s.fftPeakDb.empty() && s.fftPeakDb.size() == s.fftDb.size())
-        buildDecimatedPath(s.fftPeakDb, cachedPeakPath_);
+    {
+        // Only render peak trace if at least one bin exceeds noise floor
+        // This prevents the "flat yellow line" issue when all values are at -120 dB floor
+        bool hasPeakSignal = false;
+        constexpr float kPeakVisibleThresholdDb = -100.0f;
+
+        for (float db : s.fftPeakDb)
+        {
+            if (db > kPeakVisibleThresholdDb)
+            {
+                hasPeakSignal = true;
+                break;
+            }
+        }
+
+        if (hasPeakSignal)
+            buildDecimatedPath(s.fftPeakDb, cachedPeakPath_);
+        else
+            cachedPeakPath_.clear(); // Clear cached path when no signal to prevent rendering stale data
+    }
 
     // Build Peak Hold Path (M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR)
     if (!s.fftPeakHoldDb.empty() && s.fftPeakHoldDb.size() == s.fftDb.size())
@@ -663,6 +706,15 @@ void RTADisplay::buildFftPaths()
         
     // Build Multi-Traces if configured
     const auto& c = traceConfig_;
+#if JUCE_DEBUG
+    static int pathDebugCounter = 0;
+    if (pathDebugCounter++ < 5)
+    {
+        DBG("buildFftPaths: hasValidMultiTrace=" << (int)s.hasValidMultiTraceData
+            << " lrBinCount=" << s.lrBinCount << " fftDb.size=" << s.fftDb.size()
+            << " showL=" << (int)c.showL << " showR=" << (int)c.showR << " showMid=" << (int)c.showMid);
+    }
+#endif
     if (s.hasValidMultiTraceData && static_cast<size_t>(s.lrBinCount) == s.fftDb.size())
     {
          if (c.showL) buildDecimatedPath(s.lDbL, cachedLPath_);
@@ -670,17 +722,28 @@ void RTADisplay::buildFftPaths()
          if (c.showMid) buildDecimatedPath(s.midDb, cachedMidPath_);
          if (c.showSide) buildDecimatedPath(s.sideDb, cachedSidePath_);
          if (c.showMono) buildDecimatedPath(s.monoDb, cachedMonoPath_);
-         // Stereo implies combined L/R envelope usually, or separate L/R? 
+         // Stereo implies combined L/R envelope usually, or separate L/R?
          // RenderState has stereoDb (max(L,R)).
-         // "traceConfig.showLR" usually means show L and R, or stereo? 
+         // "traceConfig.showLR" usually means show L and R, or stereo?
          // Looking at RenderState: "std::vector<float> stereoDb; // Max(L, R) combined envelope"
          // Let's assume there's a config for it? traceConfig has showLR, showL, showR.
          // If showLR is true, maybe we show stereoDb? Or individual L/R?
          // Runbook says "stereo" trace. I'll assume showLR -> stereoDb if implemented, or just L and R?
-         // But traceConfig has showL and showR. 
+         // But traceConfig has showL and showR.
          // For safety: if state.stereoDb is populated, I'll cache it.
          if (!s.stereoDb.empty()) buildDecimatedPath(s.stereoDb, cachedStereoPath_);
     }
+#if JUCE_DEBUG
+    else if (s.hasValidMultiTraceData)
+    {
+        static bool warnedMismatch = false;
+        if (!warnedMismatch)
+        {
+            DBG("Multi-trace size MISMATCH: lrBinCount=" << s.lrBinCount << " != fftDb.size=" << s.fftDb.size());
+            warnedMismatch = true;
+        }
+    }
+#endif
     
     // Atomic End
     lastBuiltGen_ = pathGen_;
@@ -750,8 +813,8 @@ void RTADisplay::buildDecimatedPath(const std::vector<float>& data, juce::Path& 
                  float v1 = data[idx];
                  float v2 = data[idx+1];
                  // Sanitize inputs
-                 if (!std::isfinite(v1)) v1 = -120.0f;
-                 if (!std::isfinite(v2)) v2 = -120.0f;
+                 if (!std::isfinite(v1)) v1 = -200.0f;
+                 if (!std::isfinite(v2)) v2 = -200.0f;
                  finalDb = v1 * (1.0f - frac) + v2 * frac;
             }
             else if (idx < numBins)
@@ -788,6 +851,19 @@ void RTADisplay::buildDecimatedPath(const std::vector<float>& data, juce::Path& 
         {
             pts.emplace_back(x0, y);
             lastX = x0;
+        }
+    }
+    
+    // 1b. Spatial smoothing of Y values to soften step edges (makes traces look rounder)
+    if (pts.size() >= 3)
+    {
+        std::vector<float> ys (pts.size());
+        for (size_t i = 0; i < pts.size(); ++i)
+            ys[i] = pts[i].y;
+        for (size_t i = 1; i < pts.size() - 1; ++i)
+        {
+            const float smoothed = 0.25f * ys[i - 1] + 0.5f * ys[i] + 0.25f * ys[i + 1];
+            pts[i].y = smoothed;
         }
     }
     
@@ -2146,8 +2222,8 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
     const juce::Colour colSide = juce::Colour(0xffe91e63);   // Pink
     const juce::Colour colMid  = juce::Colour(0xff00bcd4);   // Cyan
     const juce::Colour colLeft = juce::Colour(0xff4caf50);   // Green
-    const juce::Colour colRight= juce::Colour(0xfff44336);   // Red
-    const juce::Colour colStereo=juce::Colour(0xff9c27b0);   // Purple
+    const juce::Colour colRight = juce::Colour(0xfff44336);   // Red
+    const juce::Colour colStereo = juce::Colour(0xff9c27b0);   // Purple
     const juce::Colour colMono = juce::Colour(0xffffeb3b);   // Yellow
     const juce::Colour colRms  = theme.accent;               // Use accent for Main RMS (Blue)
 
