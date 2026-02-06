@@ -1,3 +1,16 @@
+/*
+  ==============================================================================
+
+    CLEANUP: UNUSED PLACEHOLDER CLASS - Never referenced or instantiated!
+    Real implementation exists in AnalyzerDisplayView.
+    This legacy placeholder is no longer used in the codebase.
+
+    Commented out for review - safe to delete after validation.
+
+  ==============================================================================
+*/
+
+/*
 #include "AnalyzerGridPlaceholder.h"
 #include <mdsp_ui/Theme.h>
 #include <mdsp_ui/GridRenderer.h>
@@ -33,3 +46,4 @@ void AnalyzerGridPlaceholder::paint (juce::Graphics& g)
     g.drawText ("FFT / RTA Display (placeholder)", bounds.reduced (8).removeFromTop (20),
                 juce::Justification::centredLeft);
 }
+*/

@@ -62,6 +62,9 @@ public:
     void setAveragingMs (float averagingMs);
     void setSmoothingOctaves (float octaves);
 
+    /** Set frequency weighting mode: 0=None, 1=A-Weighting, 2=BS.468-4 */
+    void setWeightingMode (int mode);
+
     void resetPeaks();
 
     enum class PeakHoldMode
@@ -91,7 +94,7 @@ public:
 
 private:
     static constexpr int kMaxFFTSize = 8192;
-    static constexpr float kDbFloor = -120.0f;
+    static constexpr float kDbFloor = -200.0f;
     
     int currentFFTSize = 2048;
     int currentHopSize = 512;
@@ -135,7 +138,14 @@ private:
     std::vector<float> smoothedMono_;
     std::vector<float> smoothedMid_;
     std::vector<float> smoothedSide_;
-    
+
+    // RMS ballistics state for multi-trace (audio thread)
+    std::vector<float> smoothedLRms_;      // RMS ballistics state for L
+    std::vector<float> smoothedRRms_;      // RMS ballistics state for R
+    std::vector<float> smoothedMidRms_;    // RMS ballistics state for Mid
+    std::vector<float> smoothedSideRms_;   // RMS ballistics state for Side
+    std::vector<float> smoothedMonoRms_;   // RMS ballistics state for Mono
+
     // Multi-trace peak hold
     std::vector<float> peakL_;
     std::vector<float> peakR_;
@@ -161,6 +171,16 @@ private:
     float peakReleaseMs_ = 80.0f;
     float smoothingOctaves_ = 1.0f; // 0 = Off
     float peakDecayDbPerSec = 1.0f;
+
+    // Frequency weighting
+    int weightingMode_ = 0; // 0=None, 1=A, 2=BS.468
+    std::vector<float> weightingGainTable_; // linear gain multiplier per bin
+    int lastWeightingMode_ = -1;
+    int lastWeightingFftSize_ = 0;
+    double lastWeightingSampleRate_ = 0.0;
+    void rebuildWeightingGainTable();
+    static float getAWeightingDb (float freqHz);
+    static float getBS468WeightingDb (float freqHz);
     bool peakHoldEnabled_ = true;  // Always enabled now (toggled by Hold logic)
     std::atomic<bool> freezePeaks_{ false };      // Atomic for thread safety
 

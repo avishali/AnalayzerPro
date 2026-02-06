@@ -134,7 +134,7 @@ private:
     bool peakFlashActive_ = false;
     double peakFlashUntilMs_ = 0.0;
     // uint32_t lastSequence_ = 0;  // Unused
-    // uint32_t lastSequence_ = 0;  // Unused
+    // CLEANUP: DUPLICATE - Removed duplicate commented variable (line 137)
     AnalyzerSnapshot snapshot_;
     AnalyzerSnapshot lastValidSnapshot_;  // Hold last valid frame for grace period
     bool hasLastValid_ = false;
@@ -148,12 +148,9 @@ private:
     std::vector<float> logPeakDb_;
     std::vector<float> uiHeldPeak_; // UI-side safety latch for true freeze
     std::vector<float> rmsState_;    // Ballistics state for Main RMS
-    std::vector<float> powerLState_; // Ballistics state for Left Trace
-    std::vector<float> powerRState_; // Ballistics state for Right Trace
-    std::vector<float> midState_;    // Ballistics state for Mid Trace
-    std::vector<float> sideState_;   // Ballistics state for Side Trace
-    std::vector<float> monoState_;   // Ballistics state for Mono Trace
-    
+    // NOTE: Multi-trace ballistics state removed (Fix 3)
+    // Engine already applies full RMS ballistics to multi-traces in AnalyzerEngine::computeFFT
+
     // Scratch buffers for derived trace processing
     std::vector<float> scratchPowerMid_;
     std::vector<float> scratchPowerSide_;

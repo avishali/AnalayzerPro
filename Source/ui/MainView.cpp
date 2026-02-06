@@ -40,10 +40,11 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     {
         triggerResetPeaks();
     });
-    rail_.setResetPeaksCallback ([this]
-    {
-        triggerResetPeaks();
-    });
+    // CLEANUP: DUPLICATE - Removed duplicate callback registration (lines 43-46)
+    // rail_.setResetPeaksCallback ([this]
+    // {
+    //     triggerResetPeaks();
+    // });
     
     rail_.onScopeModeChanged = [this] (int id)
     {
@@ -73,7 +74,8 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         apvts->addParameterListener ("PeakDecay", this);
         apvts->addParameterListener ("DbRange", this);
         apvts->addParameterListener ("DisplayGain", this);
-        apvts->addParameterListener ("DisplayGain", this);
+        // CLEANUP: DUPLICATE - Removed duplicate parameter listener registration (line 76)
+        // apvts->addParameterListener ("DisplayGain", this);
         apvts->addParameterListener ("Tilt", this);
         apvts->addParameterListener ("scopeChannelMode", this); // New
         apvts->addParameterListener ("meterChannelMode", this); // New
@@ -291,11 +293,10 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     }
     else if (parameterID == "Averaging")
     {
-        // Convert choice index to ms (handled in PluginProcessor::parameterChanged)
-        const float avgMs[] = { 0.0f, 50.0f, 100.0f, 250.0f, 500.0f, 1000.0f };
-        const int index = juce::roundToInt (newValue);
-        if (index >= 0 && index < 6)
-            audioProcessor.getAnalyzerEngine().setAveragingMs (avgMs[index]);
+        // Averaging is fractional octave smoothing (Off, 1/24, 1/12, 1/6, 1/3, 1 Oct).
+        // PluginProcessor::processBlock applies it via setSmoothingOctaves.
+        // AnalyzerDisplayView::timerCallback pushes it to spectrumEngine via AnalyzerSettings.
+        // No message-thread action needed here.
     }
     else if (parameterID == "scopeChannelMode")
     {
