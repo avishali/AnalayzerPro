@@ -14,6 +14,7 @@
 #include "ui/MainView.h"
 #include "ui/tooltips/TooltipManager.h"
 
+
 //==============================================================================
 /**
     Audio Processor Editor Template.

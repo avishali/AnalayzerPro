@@ -36,7 +36,8 @@ public:
     juce::StringArray listPresets() const; // Returns basenames (files without extension)
     void savePreset (const juce::String& name);
     void loadPreset (const juce::String& name); // Load by name (searches folder)
-    void loadingPresetFromFile (const juce::File& file); // Internal worker or public? Task says loadPreset(file)
+    // CLEANUP: UNUSED METHOD - Never called in codebase, use loadPresetInternal() internally
+    // void loadingPresetFromFile (const juce::File& file); // Internal worker or public? Task says loadPreset(file)
     void loadFactory();
     void saveDefault();
     void loadDefaultOrFactory();

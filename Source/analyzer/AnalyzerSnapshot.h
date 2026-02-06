@@ -22,7 +22,14 @@ struct AnalyzerSnapshot
     std::array<float, kMaxFFTBins> fftDbMono{};   // Mono (L+R)/2
     std::array<float, kMaxFFTBins> fftDbMid{};    // Mid (L+R)/2 (same as Mono, different label)
     std::array<float, kMaxFFTBins> fftDbSide{};   // Side (L-R)/2
-    
+
+    // Engine-side RMS-processed multi-trace arrays (with audio-thread ballistics)
+    std::array<float, kMaxFFTBins> fftDbLRms{};    // L channel with RMS ballistics
+    std::array<float, kMaxFFTBins> fftDbRRms{};    // R channel with RMS ballistics
+    std::array<float, kMaxFFTBins> fftDbMidRms{};  // Mid with RMS ballistics
+    std::array<float, kMaxFFTBins> fftDbSideRms{}; // Side with RMS ballistics
+    std::array<float, kMaxFFTBins> fftDbMonoRms{}; // Mono with RMS ballistics
+
     // Peak hold versions for each trace
     std::array<float, kMaxFFTBins> fftPeakDbL{};
     std::array<float, kMaxFFTBins> fftPeakDbR{};
@@ -70,6 +77,7 @@ struct AnalyzerSnapshot
     // Debug / Status
     bool isHoldOn = false;
     bool multiTraceEnabled = false;
+    int weightingMode = 0; // 0=None, 1=A, 2=BS.468 (applied engine-side to power before smoothing)
 };
 
 //==============================================================================

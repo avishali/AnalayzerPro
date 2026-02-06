@@ -128,6 +128,7 @@ private:
     int   lastAveragingIndex_ = -1;
     bool  lastHold_ = false;
     float lastPeakDecayDbPerSec_ = std::numeric_limits<float>::quiet_NaN();
+    int   lastWeightingIndex_ = -1;
         
     // APVTS for analyzer controls
     juce::AudioProcessorValueTreeState apvts;
@@ -167,6 +168,7 @@ private:
     std::atomic<float>* pHoldPeaks_ = nullptr;
     std::atomic<float>* pPeakDecay_ = nullptr;
     std::atomic<float>* pBypass_ = nullptr;
+    std::atomic<float>* pAnalyzerWeighting_ = nullptr;
 
     // Trace Config Parameters
     std::atomic<float>* pTraceShowLR_ = nullptr;

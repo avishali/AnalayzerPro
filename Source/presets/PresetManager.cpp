@@ -57,11 +57,12 @@ void PresetManager::loadPreset (const juce::String& name)
         loadPresetInternal (file);
 }
 
-void PresetManager::loadingPresetFromFile (const juce::File& file)
-{
-    if (file.existsAsFile())
-        loadPresetInternal (file);
-}
+// CLEANUP: UNUSED METHOD - Never called in codebase, commented out for review
+// void PresetManager::loadingPresetFromFile (const juce::File& file)
+// {
+//     if (file.existsAsFile())
+//         loadPresetInternal (file);
+// }
 
 void PresetManager::loadPresetInternal (const juce::File& file)
 {

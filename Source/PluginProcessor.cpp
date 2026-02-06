@@ -117,7 +117,7 @@ AnalayzerProAudioProcessor::AnalayzerProAudioProcessor()
     pTraceShowMid_  = apvts.getRawParameterValue ("analyzerShowMid");
     pTraceShowSide_ = apvts.getRawParameterValue ("analyzerShowSide");
     pTraceShowRMS_  = apvts.getRawParameterValue ("analyzerShowRMS");
-    // pAnalyzerWeighting_ = apvts.getRawParameterValue ("analyzerWeighting"); // Add if needed in Processor
+    pAnalyzerWeighting_ = apvts.getRawParameterValue ("analyzerWeighting");
 
     #if JUCE_DEBUG
     jassert (pFftSize_   != nullptr);
@@ -441,6 +441,16 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             // AnalyzerEngine defaults can handle time averaging separately.
         }
     
+    if (pAnalyzerWeighting_ != nullptr)
+    {
+        const int wIdx = static_cast<int> (pAnalyzerWeighting_->load());
+        if (wIdx != lastWeightingIndex_)
+        {
+            lastWeightingIndex_ = wIdx;
+            analyzerEngine.setWeightingMode (wIdx);
+        }
+    }
+
     if (pHoldPeaks_ != nullptr)
     {
         const bool hold = (pHoldPeaks_->load() > 0.5f);
