@@ -42,14 +42,15 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
 #endif
 {
     addAndMakeVisible (rtaDisplay);
-    addAndMakeVisible (spectrumEngine);
-    spectrumEngine.setAudioBufferQueue (&audioProcessor.getSpectrumBufferQueue());
+    // DISABLED: spectrumEngine was causing flat yellow line at maximum
+    // addAndMakeVisible (spectrumEngine);
+    // spectrumEngine.setAudioBufferQueue (&audioProcessor.getSpectrumBufferQueue());
 
-    // Use mdsp_gui default "Yellow Peak" aesthetic (sharp yellow stroke, gradient fill)
-    spectrumEngine.setStyle (mdsp::gui::SpectrumComponent::Style{});
+    // DISABLED: Use mdsp_gui default "Yellow Peak" aesthetic (sharp yellow stroke, gradient fill)
+    // spectrumEngine.setStyle (mdsp::gui::SpectrumComponent::Style{});
 
-    // Initial FFT order: 4096 (order 12) for high-resolution spectrum
-    spectrumEngine.setFftOrder (mdsp::gui::SpectrumComponent::defaultFftOrder);
+    // DISABLED: Initial FFT order: 4096 (order 12) for high-resolution spectrum
+    // spectrumEngine.setFftOrder (mdsp::gui::SpectrumComponent::defaultFftOrder);
     // Initialize RTADisplay with default ranges
     rtaDisplay.setFrequencyRange (20.0f, 20000.0f);
     targetMinDb_ = dbRangeToMinDb (dbRange_);
@@ -122,13 +123,26 @@ void AnalyzerDisplayView::resetViewPeaks()
 {
     // Clear UI-side latch buffer
     std::fill (uiHeldPeak_.begin(), uiHeldPeak_.end(), -120.0f);
-    
+
+    // CRITICAL: Clear UI-side peak trace buffers that retain stale max values
+    // These are copies from snapshots and won't reset automatically
+    std::fill (fftPeakDb_.begin(), fftPeakDb_.end(), -120.0f);
+    std::fill (fftDb_.begin(), fftDb_.end(), -120.0f);
+    std::fill (fftPeakDbDisplay_.begin(), fftPeakDbDisplay_.end(), -120.0f);
+
+    // Clear multi-trace UI buffers
+    std::fill (scratchPowerL_.begin(), scratchPowerL_.end(), -120.0f);
+    std::fill (scratchPowerR_.begin(), scratchPowerR_.end(), -120.0f);
+    std::fill (scratchPowerMid_.begin(), scratchPowerMid_.end(), -120.0f);
+    std::fill (scratchPowerSide_.begin(), scratchPowerSide_.end(), -120.0f);
+    std::fill (scratchPowerMono_.begin(), scratchPowerMono_.end(), -120.0f);
+
     // Clear session marker
     resetSessionMarker();
-    
+
     // Trigger flash for visual feedback
     triggerPeakFlash();
-    
+
     // Force remap/repaint
     peakScaleDirty_ = true;
     repaint();
@@ -165,8 +179,10 @@ void AnalyzerDisplayView::shutdown()
 static inline float sanitizeDb (float db) noexcept
 {
     if (!std::isfinite (db))
-        return -120.0f;
-    return juce::jlimit (-120.0f, 24.0f, db);
+        return -200.0f;
+    // Use -200 dB internal floor to avoid hard-clamping artifacts (flat/squared segments)
+    // in smoothed traces. The display range handles the visible floor.
+    return juce::jlimit (-200.0f, 24.0f, db);
 }
 
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
@@ -339,7 +355,9 @@ void AnalyzerDisplayView::resized()
 {
     auto bounds = getLocalBounds();
     rtaDisplay.setBounds (bounds);
-    spectrumEngine.setBounds (bounds);
+    // DISABLED: spectrumEngine.setBounds (bounds);
+    // Keep AnalyzerEngine-driven display on top (timerCallback feeds rtaDisplay via getLatestSnapshot).
+    rtaDisplay.toFront (false);
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     modeOverlay_.setBounds (8, 8, 260, 18);
     modeOverlay_.toFront (false);
@@ -596,16 +614,16 @@ void AnalyzerDisplayView::setMode (Mode mode)
     assertModeSync();
 #endif
 
-    // Sync shared spectrum engine analysis mode (Line / Log / Band)
-    mdsp::gui::SpectrumComponent::AnalysisMode specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Log;
-    switch (currentMode_)
-    {
-        case Mode::FFT:  specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Line; break;
-        case Mode::LOG:  specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Log;  break;
-        case Mode::BAND:  specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Band; break;
-        default:         specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Log;  break;
-    }
-    spectrumEngine.setAnalysisMode (specMode);
+    // DISABLED: Sync shared spectrum engine analysis mode (Line / Log / Band)
+    // mdsp::gui::SpectrumComponent::AnalysisMode specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Log;
+    // switch (currentMode_)
+    // {
+    //     case Mode::FFT:  specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Line; break;
+    //     case Mode::LOG:  specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Log;  break;
+    //     case Mode::BAND:  specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Band; break;
+    //     default:         specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Log;  break;
+    // }
+    // spectrumEngine.setAnalysisMode (specMode);
 
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     updateModeOverlayText();
@@ -617,12 +635,14 @@ void AnalyzerDisplayView::setMode (Mode mode)
 
 void AnalyzerDisplayView::setSpectrumFftOrder (int order)
 {
-    spectrumEngine.setFftOrder (order);
+    // DISABLED: spectrumEngine.setFftOrder (order);
+    juce::ignoreUnused(order);
 }
 
 void AnalyzerDisplayView::setSpectrumDecayRate (float decay)
 {
-    spectrumEngine.setDecayRate (decay);
+    // DISABLED: spectrumEngine.setDecayRate (decay);
+    juce::ignoreUnused(decay);
 }
 
 void AnalyzerDisplayView::timerCallback()
@@ -674,26 +694,28 @@ void AnalyzerDisplayView::timerCallback()
             ++smoothingGen_; // SMOOTHING_RENDERING_STABILITY_V2
             
             // Reset ballistics state to prevent glitches during smoothing transitions
-            powerLState_.clear();
-            powerRState_.clear();
-            midState_.clear();
-            sideState_.clear();
-            monoState_.clear();
             rmsState_.clear();
         }
     }
 
-    // Push mdsp_gui spectrum settings: Smoothing, Tilt, Range, FFT order, Peak decay
+    // Push mdsp_gui spectrum settings: Smoothing, Tilt, Range, FFT order, Peak decay, DisplayGain
     {
         mdsp::gui::AnalyzerSettings specSettings;
-        specSettings.rangeMinDb = dbRangeToMinDb (dbRange_);
-        specSettings.rangeMaxDb = 0.0f;
+        const float displayGainDb = [&apvts]()
+        {
+            auto* p = apvts.getRawParameterValue ("DisplayGain");
+            return (p != nullptr) ? p->load() : 0.0f;
+        }();
+        specSettings.rangeMinDb = dbRangeToMinDb (dbRange_) + displayGainDb;
+        specSettings.rangeMaxDb = 0.0f + displayGainDb;
         specSettings.fftOrder = mdsp::gui::SpectrumComponent::defaultFftOrder;
         auto* pFftSize = apvts.getRawParameterValue ("FftSize");
         if (pFftSize != nullptr)
         {
             const int sizes[] = { 1024, 2048, 4096, 8192 };
-            const int idx = juce::jlimit (0, 3, static_cast<int> (pFftSize->load()));
+            constexpr int kNumFftSizes = 4;
+            const float raw = pFftSize->load();
+            const int idx = juce::jlimit (0, kNumFftSizes - 1, juce::roundToInt (raw));
             const int fftSize = sizes[static_cast<size_t> (idx)];
             specSettings.fftOrder = static_cast<int> (std::log2 (fftSize));
         }
@@ -701,7 +723,8 @@ void AnalyzerDisplayView::timerCallback()
         if (pSmooth != nullptr)
         {
             constexpr float kSmoothingOctaves[] = { 0.0f, 1.0f/24.0f, 1.0f/12.0f, 1.0f/6.0f, 1.0f/3.0f, 1.0f };
-            const int idx = juce::jlimit (0, 5, static_cast<int> (pSmooth->load()));
+            constexpr int kNumOpts = static_cast<int> (std::size (kSmoothingOctaves));
+            const int idx = juce::jlimit (0, kNumOpts - 1, juce::roundToInt (pSmooth->load()));
             const float oct = kSmoothingOctaves[static_cast<size_t> (idx)];
             specSettings.smoothingAlpha = juce::jmap (oct, 0.0f, 1.0f, 0.0f, 0.9f);
         }
@@ -714,12 +737,12 @@ void AnalyzerDisplayView::timerCallback()
         auto* pTilt = apvts.getRawParameterValue ("Tilt");
         if (pTilt != nullptr)
         {
-            const int idx = static_cast<int> (pTilt->load());
+            const int idx = juce::jlimit (0, 2, juce::roundToInt (pTilt->load()));
             if (idx == 1) specSettings.tiltDbPerOct = 4.5f;
             else if (idx == 2) specSettings.tiltDbPerOct = -4.5f;
             else specSettings.tiltDbPerOct = 0.0f;
         }
-        spectrumEngine.setSettings (specSettings);
+        // DISABLED: spectrumEngine.setSettings (specSettings);
     }
     
 #if JUCE_DEBUG
@@ -887,7 +910,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         lastMetaFftSize_ = snapshot.fftSize;
         expectedBins_ = snapshot.fftSize / 2 + 1;
         fftMetaReady_ = true;
-        spectrumEngine.prepare (snapshot.sampleRate);
+        // DISABLED: spectrumEngine.prepare (snapshot.sampleRate);
     }
     
     // Update Hold Status
@@ -927,18 +950,23 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     
     // Resize member vectors to expected size
     const size_t validBinsSize = static_cast<size_t> (validBins);
+    const size_t safeCopyBins = std::min (validBinsSize, static_cast<size_t> (AnalyzerSnapshot::kMaxFFTBins));
     fftDb_.resize (validBinsSize);
     fftPeakDb_.resize (validBinsSize);
-    
-    // Copy from snapshot arrays into member vectors
-    std::copy (snapshot.fftDb.begin(), snapshot.fftDb.begin() + validBins, fftDb_.begin());
-    
+
+    // Copy from snapshot arrays into member vectors (bounds-checked)
+    jassert (snapshot.fftDb.size() >= safeCopyBins);
+    std::copy (snapshot.fftDb.begin(),
+               snapshot.fftDb.begin() + static_cast<std::ptrdiff_t> (safeCopyBins),
+               fftDb_.begin());
+
     // Copy peak bins: validate size matches expected bins; if mismatch ignore peaks
     bool usePeaks = false;
-    if (snapshot.fftPeakDb.size() >= static_cast<size_t> (validBins))
+    if (snapshot.fftPeakDb.size() >= safeCopyBins)
     {
-        // Peak bins must match fftDb size (same bin count)
-        std::copy (snapshot.fftPeakDb.begin(), snapshot.fftPeakDb.begin() + validBins, fftPeakDb_.begin());
+        std::copy (snapshot.fftPeakDb.begin(),
+                   snapshot.fftPeakDb.begin() + static_cast<std::ptrdiff_t> (safeCopyBins),
+                   fftPeakDb_.begin());
         usePeaks = true;
     }
     else
@@ -984,48 +1012,19 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     // -------------------------------------------------------------------------
     // 1b. WEIGHTING + SMOOTHING + BALLISTICS PIPELINE
     // -------------------------------------------------------------------------
-    
-    // A. Rebuild weighting table if needed
-    const int weightingMode = currentWeightingMode_; // Use member variable
+
+    // A. Rebuild weighting table (kept for overlay/visual indicator)
+    const int weightingMode = currentWeightingMode_;
     const int currentFftSize = snapshot.fftSize;
     const double currentSampleRate = snapshot.sampleRate;
-    
+
     rebuildWeightingTable (weightingMode, currentSampleRate, currentFftSize);
-    
-    // B. Apply Weighting (Pre-process Raw)
-    // Applies to RMS and Peak buffers BEFORE smoothing or ballistics
-    if (!cachedWeightingTable_.empty())
-    {
-        // Apply to RMS (fftDb_)
-        if (fftDb_.size() == cachedWeightingTable_.size())
-        {
-            for (size_t i = 0; i < fftDb_.size(); ++i)
-                fftDb_[i] += cachedWeightingTable_[i]; // Add dB offsets
-        }
-        
-        // Apply to Peak (fftPeakDb_)
-        if (fftPeakDb_.size() == cachedWeightingTable_.size())
-        {
-            for (size_t i = 0; i < fftPeakDb_.size(); ++i)
-                fftPeakDb_[i] += cachedWeightingTable_[i];
-        }
-        
-        // Apply to Held Peak (uiHeldPeak_) - correction: Hold should represent held *weighted* values.
-        // Since input peak is now weighted, hold logic naturally holds weighted values.
-        // But if we toggle weighting ON while holding, the held values are "raw". 
-        // We accept that limitation for V1 (hold is reset on param change usually not forced though).
-        // Actually, let's not valid-hold-shift. Valid expectation: "Hold" freezes what was on screen.
-        // If we change weighting, the "Frozen" line should probably stay as is?
-        // Or should it re-conform? 
-        // For now, only new data is weighted. Held data is static.
-        
-        // Apply to Multi-Trace Buffers (snapshot L/R are raw)
-        // We must apply weighting to scratch buffers during their processing below.
-    }
 
+    // B. Weighting is now applied ENGINE-SIDE on the power spectrum BEFORE
+    //    octave smoothing (AnalyzerEngine::computeFFT). The snapshot dB values
+    //    already include weighting. No UI-side weighting addition needed.
 
-
-    // Sanitize after weighting
+    // Sanitize
     for (auto& v : fftDb_) v = sanitizeDb(v);
     for (auto& v : fftPeakDb_) v = sanitizeDb(v);
     
@@ -1100,81 +1099,69 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     applyBallistics (fftDb_.data(), rmsState_, validBinsSize, releaseMs_);
     
     // Multi-Trace Processing (moved here to share weighting table)
+    // =========================================================================
+    // MULTI-TRACE PROCESSING (Using Engine-Side RMS Data)
+    // =========================================================================
+
     if (snapshot.multiTraceEnabled)
     {
-        // Resize scratch buffers
+        // Resize and initialize scratch buffers with floor value
         const size_t validBinsSz = static_cast<size_t> (validBins);
-        if (scratchPowerL_.size() != validBinsSz) scratchPowerL_.resize (validBinsSz);
-        if (scratchPowerR_.size() != validBinsSz) scratchPowerR_.resize (validBinsSz);
-        if (scratchPowerMid_.size() != validBinsSz) scratchPowerMid_.resize (validBinsSz);
-        if (scratchPowerSide_.size() != validBinsSz) scratchPowerSide_.resize (validBinsSz);
-        if (scratchPowerMono_.size() != validBinsSz) scratchPowerMono_.resize (validBinsSz);
-        
-        // Copy Raw first
-        if (snapshot.powerL.size() >= validBinsSz)
-            std::copy (snapshot.powerL.begin(), snapshot.powerL.begin() + validBins, scratchPowerL_.begin());
-        if (snapshot.powerR.size() >= validBinsSz)
-            std::copy (snapshot.powerR.begin(), snapshot.powerR.begin() + validBins, scratchPowerR_.begin());
-            
-        // Apply Weighting to L/R (Additive if dB, but treating as additive to linear power currently?)
-        // CONFIRMED: snapshot.powerL is LINEAR POWER.
-        // CONFIRMED: cachedWeightingTable_ is likely dB (getAWeightingDb returns dB).
-        // ISSUE: Adding dB to Linear Power is physically wrong. 
-        // FIX: Convert weighting to linear before adding? Or assume weighting is small/handled elsewhere?
-        // Since we are not changing Weighting logic in this task (focus is Ballistics), we keep existing behavior
-        // BUT we must replicate it for derived traces logic to match.
-        // Actually, if we smooth L/R, we should probably apply weighting AFTER conversion to dB?
-        // Existing code applied it BEFORE ballistics/smoothing.
-        // Let's stick to existing pattern: Apply weighting to L/R scratch buffers.
-        
-        if (!cachedWeightingTable_.empty() && cachedWeightingTable_.size() == validBinsSz)
+        constexpr float kDbFloor = -200.0f;
+
+        if (scratchPowerL_.size() != validBinsSz) scratchPowerL_.resize (validBinsSz, kDbFloor);
+        else std::fill (scratchPowerL_.begin(), scratchPowerL_.end(), kDbFloor);
+
+        if (scratchPowerR_.size() != validBinsSz) scratchPowerR_.resize (validBinsSz, kDbFloor);
+        else std::fill (scratchPowerR_.begin(), scratchPowerR_.end(), kDbFloor);
+
+        if (scratchPowerMid_.size() != validBinsSz) scratchPowerMid_.resize (validBinsSz, kDbFloor);
+        else std::fill (scratchPowerMid_.begin(), scratchPowerMid_.end(), kDbFloor);
+
+        if (scratchPowerSide_.size() != validBinsSz) scratchPowerSide_.resize (validBinsSz, kDbFloor);
+        else std::fill (scratchPowerSide_.begin(), scratchPowerSide_.end(), kDbFloor);
+
+        if (scratchPowerMono_.size() != validBinsSz) scratchPowerMono_.resize (validBinsSz, kDbFloor);
+        else std::fill (scratchPowerMono_.begin(), scratchPowerMono_.end(), kDbFloor);
+
+        // Copy engine-processed dB arrays (already have audio-thread ballistics + smoothing)
+        // Safe bounds check: ensure we don't read beyond snapshot arrays or write beyond scratch buffers
+        const size_t maxSnapshotBins = AnalyzerSnapshot::kMaxFFTBins;
+        const size_t safeBins = std::min (validBinsSz, std::min (maxSnapshotBins, snapshot.fftDbLRms.size()));
+        jassert (scratchPowerL_.size() >= safeBins);
+        jassert (snapshot.fftDbLRms.size() >= safeBins);
+
+        std::copy (snapshot.fftDbLRms.begin(), snapshot.fftDbLRms.begin() + static_cast<std::ptrdiff_t> (safeBins), scratchPowerL_.begin());
+        std::copy (snapshot.fftDbRRms.begin(), snapshot.fftDbRRms.begin() + static_cast<std::ptrdiff_t> (safeBins), scratchPowerR_.begin());
+        std::copy (snapshot.fftDbMidRms.begin(), snapshot.fftDbMidRms.begin() + static_cast<std::ptrdiff_t> (safeBins), scratchPowerMid_.begin());
+        std::copy (snapshot.fftDbSideRms.begin(), snapshot.fftDbSideRms.begin() + static_cast<std::ptrdiff_t> (safeBins), scratchPowerSide_.begin());
+        std::copy (snapshot.fftDbMonoRms.begin(), snapshot.fftDbMonoRms.begin() + static_cast<std::ptrdiff_t> (safeBins), scratchPowerMono_.begin());
+
+#if JUCE_DEBUG
+        static int copyDebugCounter = 0;
+        if (copyDebugCounter++ < 5)
         {
-             for (size_t i = 0; i < validBinsSz; ++i)
-             {
-                 // NOTE: This looks suspicious (adding dB to linear), but preserving existing logic.
-                 scratchPowerL_[i] += cachedWeightingTable_[i];
-                 scratchPowerR_[i] += cachedWeightingTable_[i];
-             }
+            DBG("After copy: L[0]=" << scratchPowerL_[0] << " R[0]=" << scratchPowerR_[0]
+                << " Mid[0]=" << scratchPowerMid_[0] << " Side[0]=" << scratchPowerSide_[0]
+                << " validBins=" << validBins);
         }
-        
-        // Apply Spectral Smoothing (Fractional Octave) to L/R
-        std::vector<float> smoothedL (validBinsSz), smoothedR (validBinsSz);
-        
-        smoother_.setConfig (smoothingOctaves_, snapshot.fftSize);
-        smoother_.process (scratchPowerL_.data(), smoothedL.data(), validBins);
-        smoother_.process (scratchPowerR_.data(), smoothedR.data(), validBins);
-        
-        // Now compute Derived Traces (Mid/Side/Mono) from SMOOTHED Linear L/R
-        // This ensures derived traces benefit from spectral smoothing before ballistics
-        constexpr float kMinPower = 1.0e-20f;
-        
-        for (size_t i = 0; i < validBinsSz; ++i)
-        {
-            const float pL = std::max (smoothedL[i], kMinPower);
-            const float pR = std::max (smoothedR[i], kMinPower);
-            
-            const float magL = std::sqrt (pL);
-            const float magR = std::sqrt (pR);
-            
-            // Mid/Mono = 0.5 * (L+R) (Magnitude)
-            const float magMid = 0.5f * (magL + magR);
-            // Side = 0.5 * |L-R| (Magnitude)
-            const float magSide = 0.5f * std::abs (magL - magR);
-            
-            // Convert everything to dB for Ballistics
-            scratchPowerL_[i] = 10.0f * std::log10(pL);
-            scratchPowerR_[i] = 10.0f * std::log10(pR);
-            scratchPowerMid_[i] = 10.0f * std::log10(std::max(magMid * magMid, kMinPower));
-            scratchPowerMono_[i] = scratchPowerMid_[i]; // Mono same as Mid here
-            scratchPowerSide_[i] = 10.0f * std::log10(std::max(magSide * magSide, kMinPower));
-        }
-        
-        // Apply Ballistics (dB Domain) to ALL traces using unified Release Time
-        applyBallistics (scratchPowerL_.data(), powerLState_, validBinsSz, releaseMs_);
-        applyBallistics (scratchPowerR_.data(), powerRState_, validBinsSz, releaseMs_);
-        applyBallistics (scratchPowerMid_.data(), midState_, validBinsSz, releaseMs_);
-        applyBallistics (scratchPowerSide_.data(), sideState_, validBinsSz, releaseMs_);
-        applyBallistics (scratchPowerMono_.data(), monoState_, validBinsSz, releaseMs_);
+#endif
+
+        // Weighting is now applied ENGINE-SIDE to L/R power before smoothing.
+        // Multi-trace dB values from snapshot already include weighting.
+
+        // Sanitize
+        for (auto& v : scratchPowerL_) v = sanitizeDb (v);
+        for (auto& v : scratchPowerR_) v = sanitizeDb (v);
+        for (auto& v : scratchPowerMid_) v = sanitizeDb (v);
+        for (auto& v : scratchPowerSide_) v = sanitizeDb (v);
+        for (auto& v : scratchPowerMono_) v = sanitizeDb (v);
+
+        // NOTE: UI-side ballistics REMOVED for multi-traces (Fix 3)
+        // The engine (AnalyzerEngine::computeFFT) already applies full RMS ballistics
+        // to smoothedLRms_, smoothedRRms_, etc. which are copied to snapshot.fftDbLRms, etc.
+        // Applying ballistics again here caused "double smoothing" - sluggish response
+        // and deviation from expected ballistics curve (attack/release ~2x longer than intended)
     }
 
     lastMinDb_ = minVal;
@@ -1200,18 +1187,10 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
 
                 for (size_t i = 0; i < validBinsSize; ++i)
                 {
-                    // Peak trace is always the highest: envelope of peak, RMS, and all multi-traces
+                    // Peak trace = main signal peak only (not multi-trace envelope)
                     float peakDb = fftPeakDb_[i];
                     if (i < fftDb_.size())
                         peakDb = juce::jmax (peakDb, fftDb_[i]);
-                    if (snapshot.multiTraceEnabled && i < scratchPowerL_.size())
-                    {
-                        peakDb = juce::jmax (peakDb, scratchPowerL_[i]);
-                        if (i < scratchPowerR_.size()) peakDb = juce::jmax (peakDb, scratchPowerR_[i]);
-                        if (i < scratchPowerMid_.size()) peakDb = juce::jmax (peakDb, scratchPowerMid_[i]);
-                        if (i < scratchPowerSide_.size()) peakDb = juce::jmax (peakDb, scratchPowerSide_[i]);
-                        if (i < scratchPowerMono_.size()) peakDb = juce::jmax (peakDb, scratchPowerMono_[i]);
-                    }
                     if (flash)
                         peakDb = juce::jmin (0.0f, peakDb + 2.0f);
                     fftPeakDbDisplay_[i] = peakDb;
@@ -1223,16 +1202,44 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             // Extract Peak Hold from snapshot (Independent of Peak Trace)
             bool usePeakHold = false;
             fftPeakHoldDb_.resize (validBinsSize);
-            
-            if (snapshot.fftPeakHoldDb.size() >= static_cast<size_t> (validBins))
+
             {
-                std::copy (snapshot.fftPeakHoldDb.begin(), snapshot.fftPeakHoldDb.begin() + validBins, fftPeakHoldDb_.begin());
-                usePeakHold = true;
+                const size_t safeHoldBins = std::min (validBinsSize,
+                                                      std::min (static_cast<size_t> (AnalyzerSnapshot::kMaxFFTBins),
+                                                                snapshot.fftPeakHoldDb.size()));
+                jassert (fftPeakHoldDb_.size() >= safeHoldBins);
+                if (safeHoldBins > 0)
+                {
+                    std::copy (snapshot.fftPeakHoldDb.begin(),
+                               snapshot.fftPeakHoldDb.begin() + static_cast<std::ptrdiff_t> (safeHoldBins),
+                               fftPeakHoldDb_.begin());
+                    usePeakHold = true;
+                }
+                else
+                {
+                    std::fill (fftPeakHoldDb_.begin(), fftPeakHoldDb_.end(), -120.0f);
+                }
             }
-            else
+
+            // Peak dominance: clamp all traces to peak so nothing draws above the peak trace
+            if (usePeaks && fftPeakDbDisplay_.size() == validBinsSize)
             {
-                fftPeakHoldDb_.clear();
-                fftPeakHoldDb_.resize (validBinsSize, -120.0f);
+                for (size_t i = 0; i < validBinsSize; ++i)
+                {
+                    const float peakDb = fftPeakDbDisplay_[i];
+                    if (i < fftDb_.size())
+                        fftDb_[i] = juce::jmin (fftDb_[i], peakDb);
+                    if (i < scratchPowerL_.size())
+                        scratchPowerL_[i] = juce::jmin (scratchPowerL_[i], peakDb);
+                    if (i < scratchPowerR_.size())
+                        scratchPowerR_[i] = juce::jmin (scratchPowerR_[i], peakDb);
+                    if (i < scratchPowerMid_.size())
+                        scratchPowerMid_[i] = juce::jmin (scratchPowerMid_[i], peakDb);
+                    if (i < scratchPowerSide_.size())
+                        scratchPowerSide_[i] = juce::jmin (scratchPowerSide_[i], peakDb);
+                    if (i < scratchPowerMono_.size())
+                        scratchPowerMono_[i] = juce::jmin (scratchPowerMono_[i], peakDb);
+                }
             }
 
             // Feed RTADisplay with FFT data (ONLY in FFT mode)
@@ -1244,12 +1251,37 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             
             // Multi-trace: Feed L/R/Mid/Side/Mono power data if available
             // Logic moved to Step 1b to unify weighting application and ballistics
-            if (snapshot.multiTraceEnabled)
+            if (snapshot.multiTraceEnabled &&
+                !scratchPowerL_.empty() && !scratchPowerR_.empty() &&
+                scratchPowerL_.size() == static_cast<size_t>(validBins) &&
+                scratchPowerR_.size() == static_cast<size_t>(validBins))
             {
+#if JUCE_DEBUG
+                 static int debugCounter = 0;
+                 if (debugCounter++ < 5)
+                 {
+                     DBG("Multi-trace data: validBins=" << validBins
+                         << " L[0]=" << scratchPowerL_[0] << " R[0]=" << scratchPowerR_[0]
+                         << " Mid[0]=" << scratchPowerMid_[0] << " Side[0]=" << scratchPowerSide_[0]);
+                 }
+#endif
                  rtaDisplay.setMultiTraceData (scratchPowerL_.data(), scratchPowerR_.data(),
                                                scratchPowerMid_.data(), scratchPowerSide_.data(), scratchPowerMono_.data(),
                                                validBins);
             }
+#if JUCE_DEBUG
+            else if (snapshot.multiTraceEnabled)
+            {
+                static bool warnedOnce = false;
+                if (!warnedOnce)
+                {
+                    DBG("Multi-trace DISABLED: enabled=" << (int)snapshot.multiTraceEnabled
+                        << " L.size=" << scratchPowerL_.size() << " R.size=" << scratchPowerR_.size()
+                        << " validBins=" << validBins);
+                    warnedOnce = true;
+                }
+            }
+#endif
             
             ++traceDataGen_; // SMOOTHING_RENDERING_STABILITY_V2: data changed
             rtaDisplay.setGenerations (traceDataGen_, smoothingGen_);
@@ -1411,34 +1443,34 @@ void AnalyzerDisplayView::applyBallistics (float* data, std::vector<float>& stat
 {
     if (state.size() != numBins)
     {
-        state.resize (numBins, -120.0f);
-        std::fill (state.begin(), state.end(), -120.0f);
+        state.resize (numBins, -200.0f);
+        std::fill (state.begin(), state.end(), -200.0f);
     }
-    
-    // Assuming UI updates at 60Hz. 
+
+    // Assuming UI updates at 60Hz.
     // Using fixed dt ensures consistent ballistics regardless of FFT rate jitter.
-    const float dt = 1.0f / 60.0f; 
-    
+    const float dt = 1.0f / 60.0f;
+
     const float attSec = kRmsAttackMs / 1000.0f;
     const float relSec = releaseMs / 1000.0f;
-    
+
     // Coefficient = 1 - exp(-dt / tau)
     // Represents the fraction of the distance covered in one frame.
     const float attCoeff = 1.0f - std::exp (-dt / attSec);
     const float relCoeff = 1.0f - std::exp (-dt / relSec);
-    
+
     for (size_t i = 0; i < numBins; ++i)
     {
         float in = data[i];
-        
+
         // Sanitize input
-        if (!std::isfinite(in)) in = -120.0f;
-        
+        if (!std::isfinite(in)) in = -200.0f;
+
         float current = state[i];
-        
+
         // Sanitize state
-        if (!std::isfinite(current)) current = -120.0f;
-        
+        if (!std::isfinite(current)) current = -200.0f;
+
         // Ballistics Logic (dB domain)
         if (in > current)
         {
@@ -1450,10 +1482,10 @@ void AnalyzerDisplayView::applyBallistics (float* data, std::vector<float>& stat
             // Release
             current += (in - current) * relCoeff;
         }
-        
-        // Clamp floor
-        if (current < -120.0f) current = -120.0f;
-        
+
+        // Clamp floor (relaxed to avoid flat segments in smoothed traces)
+        if (current < -200.0f) current = -200.0f;
+
         state[i] = current;
         data[i] = current;
     }
