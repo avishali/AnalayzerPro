@@ -9,6 +9,7 @@
 #include "hardware/PluginHardwareAdapter.h"
 #include "hardware/PluginHardwareOutputAdapter.h"
 #include "../control/AnalyzerProControlContext.h"
+#include "layout/LayoutConstants.h"
 #include "layout/HeaderBar.h"
 #include "layout/ControlRail.h"
 #include "layout/FooterBar.h"
@@ -50,6 +51,9 @@ public:
     
     void setTooltipManager (mdsp_ui::TooltipManager* manager);
 
+    enum class LayoutMode { Compact, Normal, Wide };
+    static LayoutMode getLayoutMode (int width) noexcept;
+
     /** Shutdown: stop timers, clear callbacks, detach listeners. Safe to call multiple times. */
     void shutdown();
     
@@ -72,6 +76,7 @@ private:
     mdsp_ui::UiContext& ui_;  // Reference to shared UiContext from PluginEditor
 
     HeaderBar header_;
+    juce::Viewport railViewport_;
     ControlRail rail_;
     FooterBar footer_;
     AnalyzerDisplayView analyzerView_;
