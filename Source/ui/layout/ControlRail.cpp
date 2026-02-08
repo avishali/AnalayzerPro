@@ -205,6 +205,44 @@ void ControlRail::triggerResetPeaks()
         onResetPeaks_();
 }
 
+int ControlRail::getPreferredHeight() const noexcept
+{
+    const auto& m = ui_.metrics();
+    // Integer-only math so content height matches resized() exactly (no phantom scrollbar).
+    const int padSmall = juce::roundToInt (static_cast<double> (m.padSmall));
+    const int titleHeight = juce::roundToInt (static_cast<double> (m.titleHeight));
+    const int titleSecondaryGap = juce::roundToInt (static_cast<double> (m.titleSecondaryGap));
+    const int secondaryHeight = juce::roundToInt (static_cast<double> (m.secondaryHeight));
+    const int comboH = juce::roundToInt (static_cast<double> (m.comboH));
+    const int gapSmall = juce::roundToInt (static_cast<double> (m.gapSmall));
+    const int buttonSmallH = juce::roundToInt (static_cast<double> (m.buttonSmallH));
+    const int sectionSpacing = juce::roundToInt (static_cast<double> (m.sectionSpacing));
+
+    const int headerH = titleHeight + titleSecondaryGap;
+    const int choiceRowH = secondaryHeight + comboH + gapSmall;
+    const int toggleRowH = secondaryHeight + buttonSmallH + gapSmall;
+    const int valueLabelH = secondaryHeight * 2;
+
+    int y = padSmall;
+    y += headerH + secondaryHeight + sectionSpacing;
+    y += headerH + toggleRowH + secondaryHeight + valueLabelH + gapSmall + sectionSpacing;
+    y += headerH + choiceRowH * 3 + sectionSpacing;
+    y += toggleRowH * 7 + sectionSpacing;
+    y += choiceRowH + sectionSpacing;
+    y += choiceRowH + sectionSpacing;
+    y += headerH + choiceRowH + toggleRowH + choiceRowH + toggleRowH + secondaryHeight;
+
+    return y + padSmall;
+}
+
+void ControlRail::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    if (auto* vp = dynamic_cast<juce::Viewport*> (getParentComponent()))
+        vp->mouseWheelMove (e.getEventRelativeTo (vp), wheel);
+    else
+        juce::Component::mouseWheelMove (e, wheel);
+}
+
 void ControlRail::paint (juce::Graphics& g)
 {
     const auto& theme = ui_.theme();
@@ -218,40 +256,48 @@ void ControlRail::paint (juce::Graphics& g)
 void ControlRail::resized()
 {
     const auto& m = ui_.metrics();
-    auto bounds = getLocalBounds().reduced (m.padSmall);
+    // Same rounded constants as getPreferredHeight() so content height matches exactly.
+    const int padSmall = juce::roundToInt (static_cast<double> (m.padSmall));
+    const int secondaryHeight = juce::roundToInt (static_cast<double> (m.secondaryHeight));
+    const int gapSmall = juce::roundToInt (static_cast<double> (m.gapSmall));
+    const int buttonSmallH = juce::roundToInt (static_cast<double> (m.buttonSmallH));
+    const int sectionSpacing = juce::roundToInt (static_cast<double> (m.sectionSpacing));
+    const int buttonSmallW = juce::roundToInt (static_cast<double> (m.buttonSmallW));
+    const int buttonW = juce::roundToInt (static_cast<double> (m.buttonW));
+    const int valueLabelH = secondaryHeight * 2;
+
+    auto bounds = getLocalBounds().reduced (padSmall);
     int y = bounds.getY();
 
     // Section 1: Navigate
     navigateHeader.layout (bounds, y);
-    placeholderLabel1.setBounds (bounds.getX(), y, bounds.getWidth(), m.secondaryHeight);
-    y += m.secondaryHeight + m.sectionSpacing;
+    y = juce::roundToInt (static_cast<double> (y));
+    placeholderLabel1.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
+    y += secondaryHeight + sectionSpacing;
 
     // Section 2: Analyzer
     analyzerHeader.layout (bounds, y);
-    
-    // Hold + Reset
+    y = juce::roundToInt (static_cast<double> (y));
     holdRow.layout (bounds, y);
-    y -= m.buttonSmallH + m.gapSmall;
-    resetPeaksButton.setBounds (bounds.getX() + m.buttonSmallW + m.gapSmall, y, m.buttonW, m.buttonSmallH);
-    y += m.buttonSmallH + m.gapSmall;
-    
-    releaseTimeLabel_.setBounds (bounds.getX(), y, bounds.getWidth(), m.secondaryHeight);
-    y += m.secondaryHeight;
-    const int valueLabelH = m.secondaryHeight * 2;
+    y = juce::roundToInt (static_cast<double> (y));
+    y -= buttonSmallH + gapSmall;
+    resetPeaksButton.setBounds (bounds.getX() + buttonSmallW + gapSmall, y, buttonW, buttonSmallH);
+    y += buttonSmallH + gapSmall;
+
+    releaseTimeLabel_.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
+    y += secondaryHeight;
     releaseTimeValue_.setBounds (bounds.getX(), y, bounds.getWidth(), valueLabelH);
-    y += valueLabelH + m.gapSmall;
-    y += m.sectionSpacing;
+    y += valueLabelH + gapSmall + sectionSpacing;
 
     // Section 3: Display
     displayHeader.layout (bounds, y);
+    y = juce::roundToInt (static_cast<double> (y));
     tiltRow.layout (bounds, y);
-    // Scope Controls
     scopeModeRow.layout (bounds, y);
     scopeShapeRow.layout (bounds, y);
-    scopeShapeRow.layout (bounds, y);
-    y += m.sectionSpacing;
-    
-    // Traces
+    y = juce::roundToInt (static_cast<double> (y));
+    y += sectionSpacing;
+
     showLrRow.layout (bounds, y);
     showMonoRow.layout (bounds, y);
     showLRow.layout (bounds, y);
@@ -259,15 +305,18 @@ void ControlRail::resized()
     showMidRow.layout (bounds, y);
     showSideRow.layout (bounds, y);
     showRmsRow.layout (bounds, y);
-    y += m.sectionSpacing;
-    
+    y = juce::roundToInt (static_cast<double> (y));
+    y += sectionSpacing;
+
     // Smoothing
     smoothingRow.layout (bounds, y);
-    y += m.sectionSpacing;
-    
+    y = juce::roundToInt (static_cast<double> (y));
+    y += sectionSpacing;
+
     // Weighting
     weightingRow.layout (bounds, y);
-    y += m.sectionSpacing;
+    y = juce::roundToInt (static_cast<double> (y));
+    y += sectionSpacing;
 
     // Section 4: Meters
     metersHeader.layout (bounds, y);
@@ -275,5 +324,6 @@ void ControlRail::resized()
     scopePeakHoldRow.layout (bounds, y);
     meterInputRow.layout (bounds, y);
     meterPeakHoldRow.layout (bounds, y);
-    placeholderLabel4.setBounds (bounds.getX(), y, bounds.getWidth(), m.secondaryHeight);
+    y = juce::roundToInt (static_cast<double> (y));
+    placeholderLabel4.setBounds (bounds.getX(), y, bounds.getWidth(), secondaryHeight);
 }

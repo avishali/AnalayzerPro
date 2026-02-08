@@ -22,15 +22,22 @@ public:
 
     void setControlBinder (AnalyzerPro::ControlBinder& binder);
     void setResetPeaksCallback (std::function<void()> cb);
-    
+    /** 0 = Compact, 1 = Normal, 2 = Wide. All sections always visible; viewport handles overflow. */
+    void setLayoutMode (int mode) { layoutMode_ = juce::jlimit (0, 2, mode); }
+
+    /** Full height required to show all rows (for Viewport content size). */
+    int getPreferredHeight() const noexcept;
+
     // Scope Callbacks
     std::function<void(int)> onScopeModeChanged;  // 1=Peak, 2=RMS
     std::function<void(int)> onScopeShapeChanged; // 1=Lissajous, 2=Scatter
 
     void paint (juce::Graphics& g) override;
     void resized() override;
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 
 private:
+    int layoutMode_ = 1; // 0 Compact, 1 Normal, 2 Wide
     AnalyzerPro::ControlBinder* controlBinder = nullptr;
 
     void triggerResetPeaks();

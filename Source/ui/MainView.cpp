@@ -1,7 +1,10 @@
 #include "MainView.h"
+#include "layout/LayoutConstants.h"
 #include "../PluginProcessor.h"
 #include "analyzer/rta1_import/RTADisplay.h"
 #include <mdsp_ui/UiContext.h>
+
+using namespace AnalyzerPro::Layout;
 
 //==============================================================================
 MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce::AudioProcessorValueTreeState* apvts)
@@ -24,7 +27,11 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
 
     // Add layout components
     addAndMakeVisible (header_);
-    addAndMakeVisible (rail_);
+    addAndMakeVisible (railViewport_);
+    railViewport_.setViewedComponent (&rail_, false);
+    railViewport_.setScrollBarsShown (true, false);
+    railViewport_.setScrollBarThickness (10);
+    railViewport_.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::never);
     addAndMakeVisible (footer_);
     addAndMakeVisible (analyzerView_);
     addAndMakeVisible (stereoScopeView_);
@@ -501,74 +508,99 @@ void MainView::paint (juce::Graphics& g)
 #endif
 }
 
+MainView::LayoutMode MainView::getLayoutMode (int width) noexcept
+{
+    if (width < compactBreakpoint)
+        return LayoutMode::Compact;
+    if (width >= wideBreakpoint)
+        return LayoutMode::Wide;
+    return LayoutMode::Normal;
+}
+
 void MainView::resized()
 {
-    // Layout constants
-    static constexpr int padding = 10;
-    static constexpr int headerH = 32;
-    static constexpr int footerH = 22;
-    static constexpr int railW = 220;   // Sidebar width
-    static constexpr int metersW = 120; // Meter width (Increased for Stereo + Values)
-
-    // Debug: capture full bounds
+    auto bounds = getLocalBounds().reduced (outerPadding);
+#if JUCE_DEBUG
     debugOuter = getLocalBounds();
-    auto bounds = getLocalBounds().reduced (padding);
     debugContent = bounds;
+#endif
 
-    // 1) Footer from bottom
-    auto footerArea = bounds.removeFromBottom (footerH);
-    debugFooter = footerArea;
-    footer_.setBounds (footerArea);
+    if (bounds.isEmpty())
+        return;
 
-    // 2) Header from top
-    auto headerArea = bounds.removeFromTop (headerH);
+    // Header (fixed height)
+    auto headerArea = bounds.removeFromTop (topBarHeight);
+    if (headerArea.getHeight() > 0 && headerArea.getWidth() > 0)
+        header_.setBounds (headerArea);
+#if JUCE_DEBUG
     debugHeader = headerArea;
-    header_.setBounds (headerArea);
+#endif
 
-    // 3) Sidebar (ControlRail) from Right
-    auto sidebarArea = bounds.removeFromRight (railW);
-    // Add some padding/gap between main content and sidebar
-    sidebarArea.removeFromLeft (ui_.metrics().sectionSpacing); 
-    debugRail = sidebarArea;
-    rail_.setBounds (sidebarArea);
+    // Footer
+    auto footerArea = bounds.removeFromBottom (footerHeight);
+    if (footerArea.getHeight() > 0 && footerArea.getWidth() > 0)
+        footer_.setBounds (footerArea);
+#if JUCE_DEBUG
+    debugFooter = footerArea;
+#endif
 
-    // 4) Main Content Area (Input | Center | Output)
-    auto mainArea = bounds;
-    
-    // Input Meters (Left)
-    auto inputMetersArea = mainArea.removeFromLeft (metersW);
-    // Input meters height: match the full mainArea height (Analyzer + Phase)
-    inputMeters_.setBounds (inputMetersArea);
+    // Meter rails (never hidden)
+    auto leftMeters = bounds.removeFromLeft (meterRailWidth);
+    auto rightMeters = bounds.removeFromRight (meterRailWidth);
+    if (leftMeters.getWidth() > 0 && leftMeters.getHeight() > 0)
+        inputMeters_.setBounds (leftMeters);
+    if (rightMeters.getWidth() > 0 && rightMeters.getHeight() > 0)
+        outputMeters_.setBounds (rightMeters);
 
-    // Output Meters (Right of main area, but left of Sidebar)
-    auto outputMetersArea = mainArea.removeFromRight (metersW);
-    outputMeters_.setBounds (outputMetersArea);
+    if (bounds.isEmpty())
+        return;
 
-    // Center Column (Analyzer + Phase)
-    // Gap between meters and center
-    // mainArea.reduce (ui_.metrics().gapSmall, 0); // Optional gap
+    auto mode = getLayoutMode (bounds.getWidth());
+    int railWidth = railNormalWidth;
+    if (mode == LayoutMode::Wide)
+        railWidth = juce::jmin (railWideWidth, bounds.getWidth() / 4);
+    railWidth = juce::jmax (railMinWidth, railWidth);
 
-    // Split Center: Analyzer (Top 70%) / Bottom Area (Bottom 30%)
-    // But Phase Scope is usually square-ish. Let's try flexible height.
-    const int phaseH = juce::jlimit (150, 300, mainArea.getHeight() / 3);
-    
-    auto bottomArea = mainArea.removeFromBottom (phaseH);
-    // Add gap between analyzer and phase
-    bottomArea.removeFromTop (ui_.metrics().gapSmall); 
-    
-    // Split bottom area: Left 50% for Stereo Scope, Right 50% for Loudness
-    auto stereoArea = bottomArea.removeFromLeft (bottomArea.getWidth() / 2);
-    stereoArea.removeFromRight (ui_.metrics().gapSmall / 2); // Internal gap
-    bottomArea.removeFromLeft (ui_.metrics().gapSmall / 2);  // Internal gap
-    
-    debugPhaseBottom = stereoArea;
-    stereoScopeView_.setBounds (stereoArea);
-    loudnessPanel_.setBounds (bottomArea); // Right side
+    auto railArea = bounds.removeFromRight (railWidth);
+    if (railArea.getWidth() > 0 && railArea.getHeight() > 0)
+    {
+        const int viewY = railViewport_.getViewPosition().getY();
+        rail_.setLayoutMode (static_cast<int> (mode));
+        railViewport_.setBounds (railArea);
+        const int preferredH = rail_.getPreferredHeight();
+        rail_.setBounds (0, 0, railViewport_.getWidth(), preferredH);
+        const int maxY = juce::jmax (0, preferredH - railArea.getHeight());
+        railViewport_.setViewPosition (0, juce::jlimit (0, maxY, viewY));
+    }
+#if JUCE_DEBUG
+    debugRail = railArea;
+#endif
 
-    // Remaining is Analyzer
-    debugAnalyzerTop = mainArea;
-    debugLeft = mainArea; // Reusing debug rect
-    analyzerView_.setBounds (mainArea);
+    if (bounds.isEmpty())
+        return;
+
+    // Bottom area (scope + loudness) — clamp so rail is never starved
+    int bottomHeight = juce::jlimit (180, 260, bounds.getHeight() / 3);
+    auto bottomArea = bounds.removeFromBottom (bottomHeight);
+#if JUCE_DEBUG
+    debugPhaseBottom = bottomArea;
+#endif
+    if (bottomArea.getHeight() > 0 && bottomArea.getWidth() > 0)
+    {
+        auto scopeArea = bottomArea.removeFromLeft (bottomArea.getWidth() * 2 / 3);
+        if (scopeArea.getWidth() > 0 && scopeArea.getHeight() > 0)
+            stereoScopeView_.setBounds (scopeArea);
+        if (bottomArea.getWidth() > 0 && bottomArea.getHeight() > 0)
+            loudnessPanel_.setBounds (bottomArea);
+    }
+
+    // Main analyzer plot (all remaining center space)
+    if (bounds.getWidth() > 0 && bounds.getHeight() > 0)
+        analyzerView_.setBounds (bounds);
+#if JUCE_DEBUG
+    debugAnalyzerTop = bounds;
+    debugLeft = bounds;
+#endif
 }
 
 void MainView::setTooltipManager (mdsp_ui::TooltipManager* manager)
