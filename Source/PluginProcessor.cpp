@@ -485,6 +485,8 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         {
              analyzerEngine.processBlock (analysisBuffer); // Feed transformed buffer
              loudnessAnalyzer.process (analysisBuffer);    // Feed transformed buffer
+             if (auto* sink = stereoScopeSink_.load (std::memory_order_relaxed))
+                 sink->pushAudioBlock (analysisBuffer, 0, n);
         }
         
 
@@ -572,6 +574,11 @@ int AnalayzerProAudioProcessor::getMeterInputChannelCount() const noexcept
 int AnalayzerProAudioProcessor::getMeterOutputChannelCount() const noexcept
 {
     return juce::jlimit (1, 2, getTotalNumOutputChannels());
+}
+
+void AnalayzerProAudioProcessor::setStereoScopeSink (IStereoScopeSink* sink) noexcept
+{
+    stereoScopeSink_.store (sink, std::memory_order_release);
 }
 
 void AnalayzerProAudioProcessor::resetMeterClipLatches() noexcept

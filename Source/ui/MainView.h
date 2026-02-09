@@ -16,6 +16,7 @@
 #include "analyzer/AnalyzerDisplayView.h"
 #include "analyzer/StereoScopeView.h"
 #include "meters/MeterGroupComponent.h"
+#include "meters/PhaseFanScopeComponent.h"
 #include "loudness/LoudnessNumericPanel.h"
 #include <memory>
 #if JUCE_DEBUG
@@ -51,6 +52,8 @@ public:
     
     void setTooltipManager (mdsp_ui::TooltipManager* manager);
 
+    PhaseFanScopeComponent& getPhaseFanScopeComponent() noexcept { return phaseFanScopeComponent_; }
+
     enum class LayoutMode { Compact, Normal, Wide };
     static LayoutMode getLayoutMode (int width) noexcept;
 
@@ -63,6 +66,8 @@ public:
 #if JUCE_DEBUG
     /** DEBUG: Audit APVTS parameters for missing UI bindings (runs once at startup) */
     void auditApvtsParameters();
+    using DebugRectCallback = std::function<void(const juce::String&, juce::Rectangle<int>, juce::Colour)>;
+    void setDebugRectCallback (DebugRectCallback cb) { debugRectCallback_ = std::move (cb); }
 #endif
 
 private:
@@ -81,10 +86,14 @@ private:
     FooterBar footer_;
     AnalyzerDisplayView analyzerView_;
     StereoScopeView stereoScopeView_;
+    PhaseFanScopeComponent phaseFanScopeComponent_;
     LoudnessNumericPanel loudnessPanel_; // New Loudness Panel
     MeterGroupComponent outputMeters_;
     MeterGroupComponent inputMeters_;
 
+#if JUCE_DEBUG
+    DebugRectCallback debugRectCallback_;
+#endif
     // Temporary debug overlay rectangles
     juce::Rectangle<int> debugOuter;
     juce::Rectangle<int> debugContent;

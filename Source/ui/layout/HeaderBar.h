@@ -26,13 +26,8 @@ public:
 
     std::function<void (int)> onPeakRangeChanged;
     void setPeakRangeSelectedId (int id);
-    
-    std::function<void (int)> onModeChanged;
-    void setMode (int modeIndex); // 1=FFT, 2=Bands, 3=Log
 
-
-
-    // State Managment
+    // State Management
     void setManagers (AnalyzerPro::presets::PresetManager* pm, AnalyzerPro::presets::ABStateManager* sm);
     
 private:
@@ -44,14 +39,6 @@ private:
     AnalyzerPro::presets::ABStateManager* abStateManager = nullptr;
 
     juce::Label titleLabel;
-    
-    // Mode Toggles
-    juce::TextButton fftButton_;
-    juce::TextButton bandButton_;
-    juce::TextButton logButton_;
-
-    juce::ComboBox fftSizeCombo_;
-    // juce::ComboBox dbRangeBox_; // Removed
     juce::ComboBox peakRangeBox_;
     
     // Presets & State

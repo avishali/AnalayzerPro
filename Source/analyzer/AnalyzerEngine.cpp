@@ -352,54 +352,35 @@ void AnalyzerEngine::computeFFT()
     // -------------------------------------------------------------------------
     // Frequency Smoothing (Fractional Octave) - Applied to POWER
     // -------------------------------------------------------------------------
-    // We reuse fftOutput as a scratch buffer for spectrally smoothed power.
-    // This serves as the "Instantaneous Smoothed Power" (pre-ballistics).
+    // Option A (UISmoothingLogGaussian): Engine does NOT apply spectral smoothing.
+    // UI applies Gaussian in convertFFTToLog over 256 log bins. Single source of truth.
     float* freqSmoothed = fftOutput.data();
-    
-    int binsProcessed = 0;
-    int binsFilled = 0;
-    juce::ignoreUnused (binsProcessed, binsFilled);
+    const bool engineAppliesSpectral = (kSpectralSmoothingStage != SpectralSmoothingStage::UISmoothingLogGaussian);
 
-    if (smoothingOctaves_ > 0.0f && static_cast<int>(smoothLowBounds.size()) == numBins)
+    if (!engineAppliesSpectral)
     {
-        // 1. Compute Prefix Sum of magnitudes (Power) (O(N))
-        if(static_cast<int>(prefixSumMag.size()) != numBins + 1)
-             prefixSumMag.resize(static_cast<std::size_t>(numBins + 1), 0.0f);
-
+        std::copy (magnitudes_.begin(), magnitudes_.begin() + numBins, freqSmoothed);
+    }
+    else if (smoothingOctaves_ > 0.0f && static_cast<int>(smoothLowBounds.size()) == numBins
+             && static_cast<int>(prefixSumMag.size()) == numBins + 1)
+    {
         prefixSumMag[0] = 0.0f;
         for (int i = 0; i < numBins; ++i)
-        {
-            prefixSumMag[static_cast<std::size_t> (i + 1)] = prefixSumMag[static_cast<std::size_t> (i)] + magnitudes_[static_cast<std::size_t> (i)];
-        }
-        
-        // 2. Apply smoothing using bounds (O(N))
+            prefixSumMag[static_cast<std::size_t>(i + 1)] = prefixSumMag[static_cast<std::size_t>(i)] + magnitudes_[static_cast<std::size_t>(i)];
         for (int i = 0; i < numBins; ++i)
         {
-            const int low = smoothLowBounds[static_cast<std::size_t> (i)];
-            const int high = smoothHighBounds[static_cast<std::size_t> (i)];
+            const int low = smoothLowBounds[static_cast<std::size_t>(i)];
+            const int high = smoothHighBounds[static_cast<std::size_t>(i)];
             const int count = high - low + 1;
-            
             if (count > 0)
-            {
-                const float sum = prefixSumMag[static_cast<std::size_t> (high + 1)] - prefixSumMag[static_cast<std::size_t> (low)];
-                freqSmoothed[i] = sum / static_cast<float> (count);
-            }
+                freqSmoothed[i] = (prefixSumMag[static_cast<std::size_t>(high + 1)] - prefixSumMag[static_cast<std::size_t>(low)]) / static_cast<float>(count);
             else
-            {
-                freqSmoothed[i] = magnitudes_[static_cast<std::size_t> (i)];
-            }
-            binsFilled++;
+                freqSmoothed[i] = magnitudes_[static_cast<std::size_t>(i)];
         }
-        binsProcessed = numBins;
     }
     else
     {
-        // Bypass: Copy raw magnitudes (Power) to freqSmoothed
-        // This ensures downstream logic (Time Smoothing, Peaks) always sees consumption-ready data
         std::copy (magnitudes_.begin(), magnitudes_.begin() + numBins, freqSmoothed);
-        
-        binsProcessed = numBins;
-        binsFilled = numBins;
     }
 
     // -------------------------------------------------------------------------
@@ -456,70 +437,46 @@ void AnalyzerEngine::computeFFT()
 
     if (enableMultiTrace_)
     {
-        // Step 1: Apply spectral smoothing to L/R (same algorithm as main trace)
-        std::vector<float> smoothedL (static_cast<size_t>(numBins), 0.0f);
-        std::vector<float> smoothedR (static_cast<size_t>(numBins), 0.0f);
-
-        if (smoothingOctaves_ > 0.0f && static_cast<int>(smoothLowBounds.size()) == numBins)
+        if (!engineAppliesSpectral)
         {
-            // Apply smoothing to L channel using prefix sum
-            std::vector<float> prefixL(static_cast<size_t>(numBins + 1), 0.0f);
-            prefixL[0] = 0.0f;
+            std::copy (powerL_.begin(), powerL_.begin() + numBins, smoothedL_.begin());
+            std::copy (powerR_.begin(), powerR_.begin() + numBins, smoothedR_.begin());
+        }
+        else if (smoothingOctaves_ > 0.0f && static_cast<int>(smoothLowBounds.size()) == numBins
+                 && static_cast<int>(prefixSumMag.size()) == numBins + 1)
+        {
+            prefixSumMag[0] = 0.0f;
             for (int i = 0; i < numBins; ++i)
-            {
-                prefixL[static_cast<size_t>(i + 1)] = prefixL[static_cast<size_t>(i)] + powerL_[static_cast<size_t>(i)];
-            }
-
-            for (int i = 0; i < numBins; ++i)
-            {
-                const int low = smoothLowBounds[static_cast<size_t>(i)];
-                const int high = smoothHighBounds[static_cast<size_t>(i)];
-                const int count = high - low + 1;
-
-                if (count > 0)
-                {
-                    const float sum = prefixL[static_cast<size_t>(high + 1)] - prefixL[static_cast<size_t>(low)];
-                    smoothedL[static_cast<size_t>(i)] = sum / static_cast<float>(count);
-                }
-                else
-                {
-                    smoothedL[static_cast<size_t>(i)] = powerL_[static_cast<size_t>(i)];
-                }
-            }
-
-            // Apply smoothing to R channel using prefix sum
-            std::vector<float> prefixR(static_cast<size_t>(numBins + 1), 0.0f);
-            prefixR[0] = 0.0f;
-            for (int i = 0; i < numBins; ++i)
-            {
-                prefixR[static_cast<size_t>(i + 1)] = prefixR[static_cast<size_t>(i)] + powerR_[static_cast<size_t>(i)];
-            }
-
+                prefixSumMag[static_cast<size_t>(i + 1)] = prefixSumMag[static_cast<size_t>(i)] + powerL_[static_cast<size_t>(i)];
             for (int i = 0; i < numBins; ++i)
             {
                 const int low = smoothLowBounds[static_cast<size_t>(i)];
                 const int high = smoothHighBounds[static_cast<size_t>(i)];
-                const int count = high - low + 1;
-
-                if (count > 0)
-                {
-                    const float sum = prefixR[static_cast<size_t>(high + 1)] - prefixR[static_cast<size_t>(low)];
-                    smoothedR[static_cast<size_t>(i)] = sum / static_cast<float>(count);
-                }
+                if (high - low + 1 > 0)
+                    smoothedL_[static_cast<size_t>(i)] = (prefixSumMag[static_cast<size_t>(high + 1)] - prefixSumMag[static_cast<size_t>(low)]) / static_cast<float>(high - low + 1);
                 else
-                {
-                    smoothedR[static_cast<size_t>(i)] = powerR_[static_cast<size_t>(i)];
-                }
+                    smoothedL_[static_cast<size_t>(i)] = powerL_[static_cast<size_t>(i)];
+            }
+            prefixSumMag[0] = 0.0f;
+            for (int i = 0; i < numBins; ++i)
+                prefixSumMag[static_cast<size_t>(i + 1)] = prefixSumMag[static_cast<size_t>(i)] + powerR_[static_cast<size_t>(i)];
+            for (int i = 0; i < numBins; ++i)
+            {
+                const int low = smoothLowBounds[static_cast<size_t>(i)];
+                const int high = smoothHighBounds[static_cast<size_t>(i)];
+                if (high - low + 1 > 0)
+                    smoothedR_[static_cast<size_t>(i)] = (prefixSumMag[static_cast<size_t>(high + 1)] - prefixSumMag[static_cast<size_t>(low)]) / static_cast<float>(high - low + 1);
+                else
+                    smoothedR_[static_cast<size_t>(i)] = powerR_[static_cast<size_t>(i)];
             }
         }
         else
         {
-            // No smoothing: copy raw power
-            std::copy(powerL_.begin(), powerL_.begin() + numBins, smoothedL.begin());
-            std::copy(powerR_.begin(), powerR_.begin() + numBins, smoothedR.begin());
+            std::copy (powerL_.begin(), powerL_.begin() + numBins, smoothedL_.begin());
+            std::copy (powerR_.begin(), powerR_.begin() + numBins, smoothedR_.begin());
         }
 
-        // Step 2: Apply RMS ballistics to spectrally-smoothed L/R
+        // Apply RMS ballistics to L/R
         constexpr float kMinPower = 1.0e-20f;
 
         for (int i = 0; i < numBins; ++i)
@@ -527,13 +484,13 @@ void AnalyzerEngine::computeFFT()
             const size_t idx = static_cast<size_t>(i);
 
             // L channel (using spectrally-smoothed input)
-            const float inputPowerL = smoothedL[idx];
+            const float inputPowerL = smoothedL_[idx];
             float& rmsStateL = smoothedLRms_[idx];
             const float coeffL = (inputPowerL > rmsStateL) ? rmsAttCoeff : rmsRelCoeff;
             rmsStateL = coeffL * rmsStateL + (1.0f - coeffL) * inputPowerL;
 
             // R channel (using spectrally-smoothed input)
-            const float inputPowerR = smoothedR[idx];
+            const float inputPowerR = smoothedR_[idx];
             float& rmsStateR = smoothedRRms_[idx];
             const float coeffR = (inputPowerR > rmsStateR) ? rmsAttCoeff : rmsRelCoeff;
             rmsStateR = coeffR * rmsStateR + (1.0f - coeffR) * inputPowerR;
@@ -654,6 +611,9 @@ void AnalyzerEngine::computeFFT()
     snapshot.isValid = true;
     snapshot.isHoldOn = freezePeaks_.load (std::memory_order_relaxed);
     snapshot.weightingMode = weightingMode_;
+    snapshot.engineDidSpectralSmooth = engineAppliesSpectral;
+    snapshot.useUILogGaussianOnly = (kSpectralSmoothingStage == SpectralSmoothingStage::UISmoothingLogGaussian);
+    snapshot.smoothingOctaves = smoothingOctaves_;
     
     // Safety guard: ensure numBins doesn't exceed array capacity
     jassert (numBins <= static_cast<int> (snapshot.fftDb.size()));
@@ -1244,6 +1204,9 @@ void AnalyzerEngine::publishSnapshot (const AnalyzerSnapshot& source)
     published_.data.displayBottomDb = source.displayBottomDb;
     published_.data.displayTopDb = source.displayTopDb;
     published_.data.isHoldOn = source.isHoldOn;
+    published_.data.engineDidSpectralSmooth = source.engineDidSpectralSmooth;
+    published_.data.useUILogGaussianOnly = source.useUILogGaussianOnly;
+    published_.data.smoothingOctaves = source.smoothingOctaves;
 
     // Deep copy arrays (fixed-size, but copy only used portion)
     const int numBins = binCount;
@@ -1324,6 +1287,9 @@ bool AnalyzerEngine::getLatestSnapshot (AnalyzerSnapshot& dest) const
         dest.displayBottomDb = published_.data.displayBottomDb;
         dest.displayTopDb = published_.data.displayTopDb;
         dest.isHoldOn = published_.data.isHoldOn;
+        dest.engineDidSpectralSmooth = published_.data.engineDidSpectralSmooth;
+        dest.useUILogGaussianOnly = published_.data.useUILogGaussianOnly;
+        dest.smoothingOctaves = published_.data.smoothingOctaves;
         
         // Deep copy arrays
         // Prefer fftBinCount for FFT bin counts; fallback to numBins exists for legacy snapshots only.

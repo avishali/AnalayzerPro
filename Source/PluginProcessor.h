@@ -4,6 +4,7 @@
 #include <atomic>
 #include "parameters/Parameters.h"
 #include "analyzer/AnalyzerEngine.h"
+#include "audio/IStereoScopeSink.h"
 #include "hardware/HardwareMeterMapper.h"
 #include "hardware/SoftwareMeterSink.h"
 #include "presets/PresetManager.h"
@@ -105,6 +106,8 @@ public:
     const mdsp::core::AudioBufferQueue& getSpectrumBufferQueue() const noexcept { return spectrumBufferQueue_; }
 
     void setEditorSize (int width, int height) noexcept { parameters.setEditorSize (width, height); }
+
+    void setStereoScopeSink (IStereoScopeSink* sink) noexcept;
     int getEditorWidth() const noexcept { return parameters.getEditorWidth(); }
     int getEditorHeight() const noexcept { return parameters.getEditorHeight(); }
     
@@ -161,6 +164,8 @@ private:
     // Queue for spectrum: audio thread pushes mono, message thread pulls and runs FFT
     static constexpr int kSpectrumQueueCapacity = 8192;
     mdsp::core::AudioBufferQueue spectrumBufferQueue_ { kSpectrumQueueCapacity };
+
+    std::atomic<IStereoScopeSink*> stereoScopeSink_ { nullptr };
     
     // Cached parameter pointers
     std::atomic<float>* pFftSize_ = nullptr;

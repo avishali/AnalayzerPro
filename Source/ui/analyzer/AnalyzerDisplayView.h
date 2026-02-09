@@ -5,6 +5,7 @@
 #include <mdsp_gui/components/SpectrumComponent.h>
 #include <mdsp_ui/Theme.h>
 #include <mdsp_ui/ThemeVariant.h>
+#include <array>
 #include <vector>
 #include "rta1_import/RTADisplay.h"
 #include "../../analyzer/AnalyzerSnapshot.h"
@@ -222,15 +223,33 @@ private:
     {
         void setConfig (float octaves, int fftSize);
         void process (const float* inputPower, float* outputPower, int numBins);
+        void setEngineDidSpectralSmooth (bool v) noexcept { engineDidSpectralSmooth_ = v; }
+        void setUseUILogGaussianOnly (bool v) noexcept { useUILogGaussianOnly_ = v; }
         
         float smoothingOctaves_ = 0.0f;
+        bool useUILogGaussianOnly_ = true;
         int currentFFTSize_ = 0;
+        bool engineDidSpectralSmooth_ = false;
         
         std::vector<int> smoothLowBounds;
         std::vector<int> smoothHighBounds;
         std::vector<float> prefixSumMag;
     };
     SmoothingProcessor smoother_;
+
+    // Log-domain Gaussian smoother for 256 log bins (Option A: avoids squared tops)
+    struct LogGaussianSmoother
+    {
+        void setConfig (float octaves);
+        void process (float* powerInOut, int numBins);
+        
+        float smoothingOctaves_ = 0.0f;
+        static constexpr int kMaxBins = 256;
+        std::array<float, kMaxBins * 2 + 1> weights_{};
+        std::array<float, kMaxBins> scratch_{};
+        int radius_ = 0;
+    };
+    LogGaussianSmoother logGaussian_;
     std::vector<float> scratchPowerL_;
     std::vector<float> scratchPowerR_;
     float smoothingOctaves_ = 1.0f / 6.0f; // Default 1/6 Oct

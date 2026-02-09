@@ -1,45 +1,36 @@
-Mission 2 — Faster + smoother fall to -inf when signal stops, and Release Time affects all traces
+Paste-ready Implementer prompt (Cursor)
 
-Scope: unify decay/hold logic so “Release Time” is the single knob affecting FFT trace + other traces (RMS/L/R/M/S if present) + meter falloff.
-
-IMPLEMENTER PROMPT — Mission 2
-
-Return only the final code changes. No markdown.
+Return only the final modified content for the touched files. No markdown. No explanation.
 
 Goal:
-	1.	When signal stops, FFT trace + meters currently fall to -inf too slowly. Make the decay faster but still smooth (no step/jitter).
-	2.	The existing “Release Time” control must affect all traces (not only Peak).
+	•	Option A stays: Gaussian smoothing happens ONLY in UI log domain (256 log bins) in LINEAR POWER.
+	•	Engine never performs spectral smoothing when Option A is active.
+	•	“engineDidSpectralSmooth” flag is correctly produced by Engine and consumed by UI (single source of truth).
+	•	Remove any possibility of double-smoothing (Engine + UI, or UI SmoothingProcessor + UI Gaussian).
+	•	Remove ALL heap allocations from the audio thread (multi-trace included).
 
-Rules:
-	•	Do NOT change the Peak algorithm (it’s its own thing), but its display must remain consistent.
-	•	Implement a single “ballistics/decay” function used by:
-	•	FFT display trace fall/decay to floor
-	•	All non-peak traces (RMS/Avg/whatever) fall/decay
-	•	Meter falloff (if currently separate)
-	•	Make decay time constant derived from Release Time parameter.
-	•	Smoothness: use a one-pole envelope style or exponential smoothing with a coefficient derived from dt and release time.
-	•	When input magnitude is effectively zero (or below a noise gate threshold already used), decay should continue toward floor quickly.
+Tasks:
+	1.	AnalyzerEngine.cpp
+	•	Remove / disable the prefix-sum spectral smoothing path cleanly (do not leave a hardcoded engineWillSmooth=false inside the loop).
+	•	Add a clear config point: spectralSmoothingStage = UISmoothingLogGaussian (or similar) and set snapshot.engineDidSpectralSmooth = false when Option A is used.
+	•	Fix multi-trace: eliminate std::vector allocations in the audio thread. Preallocate member buffers sized to numBins in prepareToPlay / on FFT size change.
+	2.	AnalyzerSnapshot (where defined)
+	•	Ensure it has bool engineDidSpectralSmooth = false; (or equivalent) and it is set every publish.
+	3.	AnalyzerDisplayView.cpp
+	•	In convertFFTToLog:
+	•	Build logPower[256] in linear power (already done via db->power conversion).
+	•	Apply LogGaussianSmoother ONLY when octaves > 0 AND snapshot.engineDidSpectralSmooth == false.
+	•	After smoothing, convert smoothedPower -> dB for logDb.
+	•	Ensure UI SmoothingProcessor is not applied on the same data path (either remove from FFT path or force bypass always for FFT mode when Option A is in use).
 
-Engineering details:
-	•	Must be sample-rate/block-rate safe: if updates are per GUI timer, use dt from timer interval; if updates are per audio block, use block duration.
-	•	No allocations in paint().
-	•	Ensure the trace does not “stick” when silence.
-	•	Keep the UI and parameter list unchanged (no new params in this mission).
+Constraints:
+	•	Real-time safe: no allocations or resizes in audio processing callbacks.
+	•	UI smoothing config (1/24..1 Oct) maps to gaussian sigma in log-bin space consistently.
+	•	Peak trace remains independent.
 
-Definition of Done:
-	•	On signal stop, FFT and meters reach floor “fast but not abrupt” (audibly like a pro analyzer).
-	•	Release Time knob clearly changes how long it takes to decay for every non-peak trace + meters.
+Files likely touched:
+	•	Source/analyzer/AnalyzerEngine.cpp
+	•	Source/analyzer/AnalyzerSnapshot.h (or wherever AnalyzerSnapshot lives)
+	•	Source/ui/analyzer/AnalyzerDisplayView.cpp
 
-VERIFIER PROMPT — Mission 2
-
-Return only pass/fail checklist + failing notes.
-
-Verify in a host:
-	•	Play steady tone → stop transport or mute track.
-	•	Observe: FFT trace decays smoothly and faster than before.
-	•	Observe: meters decay smoothly and faster than before.
-	•	Turn Release Time: all non-peak traces and meters change decay rate.
-	•	No “stepping squares”, no sudden jumps, no flicker.
-	•	No CPU spikes.
-
-STOP. You test.
+⸻

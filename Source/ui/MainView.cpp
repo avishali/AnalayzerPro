@@ -17,6 +17,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
       footer_ (ui_),
       analyzerView_ (p),
       stereoScopeView_ (ui, p.getAnalyzerEngine().getStereoScopeAnalyzer()),
+      phaseFanScopeComponent_ (ui),
       loudnessPanel_ (ui, p),
       outputMeters_ (ui_, p, MeterGroupComponent::GroupType::Output),
       inputMeters_ (ui_, p, MeterGroupComponent::GroupType::Input)
@@ -35,6 +36,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     addAndMakeVisible (footer_);
     addAndMakeVisible (analyzerView_);
     addAndMakeVisible (stereoScopeView_);
+    addAndMakeVisible (phaseFanScopeComponent_);
     addAndMakeVisible (loudnessPanel_);
     addAndMakeVisible (outputMeters_);
     addAndMakeVisible (inputMeters_);
@@ -47,22 +49,15 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     {
         triggerResetPeaks();
     });
-    // CLEANUP: DUPLICATE - Removed duplicate callback registration (lines 43-46)
-    // rail_.setResetPeaksCallback ([this]
-    // {
-    //     triggerResetPeaks();
-    // });
-    
+    rail_.onPreferredHeightChanged = [this] { resized(); };
+
     rail_.onScopeModeChanged = [this] (int id)
     {
-        // 1=Peak, 2=RMS
         stereoScopeView_.setScopeMode (id == 2 ? StereoScopeView::ScopeMode::RMS : StereoScopeView::ScopeMode::Peak);
         stereoScopeView_.repaint();
     };
-    
     rail_.onScopeShapeChanged = [this] (int id)
     {
-        // 1=Basic (Lissajous), 2=PAZ (Scatter)
         stereoScopeView_.setScopeShape (id == 2 ? StereoScopeView::ScopeShape::Scatter : StereoScopeView::ScopeShape::Lissajous);
         stereoScopeView_.repaint();
     };
@@ -90,19 +85,16 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         apvts->addParameterListener ("scopePeakHold", this); // Peak Hold
     }
 
-    // HeaderBar is authoritative for Mode/FFT/Averaging controls
-    // Set default mode to FFT (HeaderBar control will update via parameterChanged)
+    // ControlRail is authoritative for Mode/FFT (Analysis Mode section); set default to FFT
     analyzerView_.setMode (AnalyzerDisplayView::Mode::FFT);
 
-    header_.onModeChanged = [this] (int id)
+    rail_.onModeChanged = [this] (int id)
     {
         // 1=FFT, 2=BAND, 3=LOG
         if (apvts_ != nullptr)
         {
             if (auto* param = apvts_->getParameter ("Mode"))
             {
-                // Param is Choice 0,1,2
-                // UI sends 1,2,3
                 const int idx = juce::jlimit (0, 2, id - 1);
                 const float norm = static_cast<float> (idx) / 2.0f;
                 param->beginChangeGesture();
@@ -145,8 +137,8 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         if (auto* raw = apvts_->getRawParameterValue ("Mode"))
         {
             const int idx = juce::jlimit (0, 2, juce::roundToInt (raw->load()));
-            header_.setMode (idx + 1);
-            
+            rail_.setMode (idx + 1);
+
             // Sync view immediately
             AnalyzerDisplayView::Mode viewMode = AnalyzerDisplayView::Mode::FFT;
             if (idx == 1) viewMode = AnalyzerDisplayView::Mode::BAND;
@@ -175,7 +167,6 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
             const int val = juce::roundToInt (raw->load());
             stereoScopeView_.setChannelMode (val == 0 ? StereoScopeView::ChannelMode::Stereo : StereoScopeView::ChannelMode::MidSide);
         }
-
         if (auto* raw = apvts_->getRawParameterValue ("meterChannelMode"))
         {
             const int val = juce::roundToInt (raw->load());
@@ -191,12 +182,10 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
             outputMeters_.setHoldEnabled (hold);
             inputMeters_.setHoldEnabled (hold);
         }
-        
-        // Apply Scope Peak Hold
         if (auto* raw = apvts_->getRawParameterValue ("scopePeakHold"))
         {
             const bool hold = raw->load() > 0.5f;
-            stereoScopeView_.setHoldEnabled (hold);
+            phaseFanScopeComponent_.setPeakHoldEnabled (hold);  // Scope peak hold applies to PhaseFanScope only, not StereoScopeView
         }
     }
 
@@ -270,17 +259,15 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
         // Update analyzer view
         analyzerView_.setMode (viewMode);
         
-        // Update header toggles
-        header_.setMode (index + 1);
-        
+        rail_.setMode (index + 1);
+
 #if JUCE_DEBUG
-        // Assertion: Verify mode sync
         const AnalyzerDisplayView::Mode currentMode = analyzerView_.getMode();
         const int expectedIndex = (currentMode == AnalyzerDisplayView::Mode::FFT) ? 0
                                 : (currentMode == AnalyzerDisplayView::Mode::BAND) ? 1 : 2;
         if (expectedIndex != index)
         {
-            DBG ("MODE SYNC ERROR: HeaderBar control index=" << index 
+            DBG ("MODE SYNC ERROR: rail control index=" << index
                  << " but AnalyzerDisplayView mode=" << (currentMode == AnalyzerDisplayView::Mode::FFT ? "FFT" : (currentMode == AnalyzerDisplayView::Mode::BAND ? "BANDS" : "LOG")));
             jassertfalse;
         }
@@ -307,17 +294,11 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     }
     else if (parameterID == "scopeChannelMode")
     {
-        // Step 3: Hard defensive clamp (prevents crash even if mapping slips)
-        // Ensure index is valid (0 or 1) regardless of what host/param sends
         const int raw = juce::roundToInt (newValue);
-        const int val = juce::jlimit (0, 1, raw); 
-        
+        const int val = juce::jlimit (0, 1, raw);
         juce::MessageManager::callAsync ([this, val]
         {
-            // Step 6: Transition safety (avoid size mismatch during mode switch)
-            // Clear visualization buffers when switching modes to prevent artifacts/crashes
-            stereoScopeView_.resetHold(); 
-            
+            stereoScopeView_.resetHold();
             stereoScopeView_.setChannelMode (val == 0 ? StereoScopeView::ChannelMode::Stereo : StereoScopeView::ChannelMode::MidSide);
             stereoScopeView_.repaint();
         });
@@ -346,7 +327,7 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
         const bool hold = newValue > 0.5f;
         juce::MessageManager::callAsync ([this, hold]
         {
-            stereoScopeView_.setHoldEnabled (hold);
+            phaseFanScopeComponent_.setPeakHoldEnabled (hold);  // Scope peak hold: PhaseFanScope only
         });
     }
     else if (parameterID == "HoldPeaks")
@@ -471,7 +452,7 @@ void MainView::paint (juce::Graphics& g)
                 debugContent.getX() + 2, debugContent.getY() + 2, 200, 12, juce::Justification::centredLeft);
 
     // Draw header
-    g.setColour (juce::Colours::yellow.withAlpha (0.7f));
+    g.setColour (juce::Colours::pink.withAlpha (0.7f));
     g.drawRect (debugHeader.toFloat(), 1.5f);
     g.drawText (juce::String ("Header: ") + juce::String (debugHeader.getWidth()) + "x" + juce::String (debugHeader.getHeight()),
                 debugHeader.getX() + 2, debugHeader.getY() + 2, 200, 12, juce::Justification::centredLeft);
@@ -547,6 +528,12 @@ void MainView::resized()
     // Meter rails (never hidden)
     auto leftMeters = bounds.removeFromLeft (meterRailWidth);
     auto rightMeters = bounds.removeFromRight (meterRailWidth);
+    if (meterRailHeight > 0)
+    {
+        const int h = juce::jmin (leftMeters.getHeight(), meterRailHeight);
+        leftMeters = leftMeters.withHeight (h);
+        rightMeters = rightMeters.withHeight (h);
+    }
     if (leftMeters.getWidth() > 0 && leftMeters.getHeight() > 0)
         inputMeters_.setBounds (leftMeters);
     if (rightMeters.getWidth() > 0 && rightMeters.getHeight() > 0)
@@ -589,7 +576,18 @@ void MainView::resized()
     {
         auto scopeArea = bottomArea.removeFromLeft (bottomArea.getWidth() * 2 / 3);
         if (scopeArea.getWidth() > 0 && scopeArea.getHeight() > 0)
-            stereoScopeView_.setBounds (scopeArea);
+        {
+            const int availableW = scopeArea.getWidth();
+            const int availableH = scopeArea.getHeight();
+            int squareSize = juce::jmin (availableW, availableH, AnalyzerPro::Layout::kScopeMaxSize);
+            squareSize = juce::jmax (0, squareSize);
+            const int gap = 8;
+            auto stereoBounds = juce::Rectangle<int> (squareSize, squareSize)
+                .withPosition (scopeArea.getX(), scopeArea.getCentreY() - squareSize / 2);
+            auto phaseFanArea = scopeArea.withTrimmedLeft (squareSize + gap);
+            stereoScopeView_.setBounds (stereoBounds);
+            phaseFanScopeComponent_.setBounds (phaseFanArea);
+        }
         if (bottomArea.getWidth() > 0 && bottomArea.getHeight() > 0)
             loudnessPanel_.setBounds (bottomArea);
     }
@@ -600,6 +598,18 @@ void MainView::resized()
 #if JUCE_DEBUG
     debugAnalyzerTop = bounds;
     debugLeft = bounds;
+    if (debugRectCallback_)
+    {
+        debugRectCallback_ ("Analyzer", debugAnalyzerTop, juce::Colours::blue);
+        debugRectCallback_ ("Header", debugHeader, juce::Colours::yellow);
+        debugRectCallback_ ("Footer", debugFooter, juce::Colours::cyan);
+        debugRectCallback_ ("ControlRail", debugRail, juce::Colours::magenta);
+        debugRectCallback_ ("InputMeters", inputMeters_.getBoundsInParent(), juce::Colours::green);
+        debugRectCallback_ ("OutputMeters", outputMeters_.getBoundsInParent(), juce::Colours::green);
+        debugRectCallback_ ("StereoScope", stereoScopeView_.getBoundsInParent(), juce::Colours::lightblue);
+        debugRectCallback_ ("PhaseFanScope", phaseFanScopeComponent_.getBoundsInParent(), juce::Colours::lightgreen);
+        debugRectCallback_ ("Loudness", loudnessPanel_.getBoundsInParent(), juce::Colours::orange);
+    }
 #endif
 }
 
@@ -613,8 +623,15 @@ void MainView::setTooltipManager (mdsp_ui::TooltipManager* manager)
         tooltipManager_->registerTooltip (&stereoScopeView_, {
             "stereoscope",
             "Stereo Scope",
-            "This view visualizes the stereo width and phase correlation of the signal. "
-            "Use the sliders below to adjust decay and hold time.",
+            "Lissajous vectorscope showing stereo width and phase correlation.",
+            []() { return ""; },
+            nullptr
+        });
+        tooltipManager_->registerTooltip (&phaseFanScopeComponent_, {
+            "phasefanscope",
+            "Phase Fan Scope",
+            "PAZ-style phase fan display showing stereo correlation by angle. "
+            "Left/Right labels indicate stereo image; Anti Phase indicates out-of-phase content.",
             []() { return ""; },
             nullptr
         });

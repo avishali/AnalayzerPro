@@ -92,6 +92,12 @@ public:
     /** Unified Release Time (ms): sets RMS release, peak release, and derived peak decay. */
     void setReleaseTimeMs (float ms);
 
+    enum class SpectralSmoothingStage
+    {
+        UISmoothingLogGaussian  // Option A: UI applies Gaussian in log domain; Engine does not smooth.
+    };
+    static constexpr SpectralSmoothingStage kSpectralSmoothingStage = SpectralSmoothingStage::UISmoothingLogGaussian;
+
 private:
     static constexpr int kMaxFFTSize = 8192;
     static constexpr float kDbFloor = -200.0f;

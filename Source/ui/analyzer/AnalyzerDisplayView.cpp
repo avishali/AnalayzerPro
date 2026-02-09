@@ -478,49 +478,44 @@ void AnalyzerDisplayView::convertFFTToBands (const AnalyzerSnapshot& snapshot, s
 //==============================================================================
 void AnalyzerDisplayView::convertFFTToLog (const AnalyzerSnapshot& snapshot, std::vector<float>& logDb, std::vector<float>& logPeakDb)
 {
-    // Resample FFT bins to log-spaced bins (256 bins from 20 Hz to 20 kHz)
     constexpr int numLogBins = 256;
     constexpr float minFreq = 20.0f;
     constexpr float maxFreq = 20000.0f;
+    constexpr float powerFloor = 1.0e-20f;
+    constexpr float dbFloor = -120.0f;
     
-    logDb.resize (numLogBins, -120.0f);
-    logPeakDb.resize (numLogBins, -120.0f);
+    logDb.resize (numLogBins, dbFloor);
+    logPeakDb.resize (numLogBins, dbFloor);
     
     const double sampleRate = snapshot.sampleRate;
-    const int fftSize = snapshot.fftSize;
     const int fftBinCount = (snapshot.fftBinCount > 0) ? snapshot.fftBinCount : snapshot.numBins;
-    const double binWidthHz = sampleRate / static_cast<double> (fftSize);
+    const double binWidthHz = sampleRate / static_cast<double> (snapshot.fftSize);
     
     const double logMin = std::log10 (static_cast<double> (minFreq));
     const double logMax = std::log10 (static_cast<double> (maxFreq));
     const double logRange = logMax - logMin;
     
+    std::array<float, numLogBins> logPower;
+    std::fill (logPower.begin(), logPower.end(), powerFloor);
+    
     for (int logIdx = 0; logIdx < numLogBins; ++logIdx)
     {
-        // Compute log-spaced center frequency
         const double logPos = logMin + (logRange * static_cast<double> (logIdx)) / static_cast<double> (numLogBins - 1);
         const double centerFreq = std::pow (10.0, logPos);
-        
-        // Compute bin edges (halfway to adjacent log bins)
         const double nextLogPos = (logIdx < numLogBins - 1) 
             ? (logMin + (logRange * static_cast<double> (logIdx + 1)) / static_cast<double> (numLogBins - 1))
             : logMax;
         const double prevLogPos = (logIdx > 0)
             ? (logMin + (logRange * static_cast<double> (logIdx - 1)) / static_cast<double> (numLogBins - 1))
             : logMin;
-        
         const double lowerFreq = std::pow (10.0, (logPos + prevLogPos) / 2.0);
         const double upperFreq = std::pow (10.0, (logPos + nextLogPos) / 2.0);
         
-        // Find FFT bins within this log bin
         int lowerBin = static_cast<int> (std::floor (lowerFreq / binWidthHz));
         int upperBin = static_cast<int> (std::ceil (upperFreq / binWidthHz));
-        
-        // Clamp to valid bin range
         lowerBin = juce::jmax (0, lowerBin);
         upperBin = juce::jmin (fftBinCount - 1, upperBin);
         
-        // If lowerBin > upperBin, collapse to nearest valid bin
         if (lowerBin > upperBin)
         {
             const int centerBin = static_cast<int> (std::round (centerFreq / binWidthHz));
@@ -528,10 +523,8 @@ void AnalyzerDisplayView::convertFFTToLog (const AnalyzerSnapshot& snapshot, std
             upperBin = lowerBin;
         }
         
-        // Sum power of bins within log bin
         double sumPower = 0.0;
         int binCount = 0;
-        
         for (int bin = lowerBin; bin <= upperBin; ++bin)
         {
             const std::size_t idx = static_cast<std::size_t> (bin);
@@ -541,28 +534,29 @@ void AnalyzerDisplayView::convertFFTToLog (const AnalyzerSnapshot& snapshot, std
             binCount++;
         }
         
-        // Convert to dB (use average power for proper level)
         if (binCount > 0 && sumPower > 0.0)
-        {
-            const double avgPower = sumPower / static_cast<double> (binCount);
-            const std::size_t logIdxSz = static_cast<std::size_t> (logIdx);
-            logDb[logIdxSz] = 10.0f * static_cast<float> (std::log10 (avgPower));
-        }
-        else
-        {
-            const std::size_t logIdxSz = static_cast<std::size_t> (logIdx);
-            logDb[logIdxSz] = -120.0f;
-        }
+            logPower[static_cast<std::size_t> (logIdx)] = static_cast<float> (sumPower / static_cast<double> (binCount));
         
-        // For peak: use maximum (not average) of peak values (more stable and correct)
-        float maxPeakDb = -120.0f;
+        float maxPeakDb = dbFloor;
         for (int bin = lowerBin; bin <= upperBin && bin < static_cast<int> (fftPeakDb_.size()); ++bin)
-        {
-            const std::size_t idx = static_cast<std::size_t> (bin);
-            maxPeakDb = juce::jmax (maxPeakDb, fftPeakDb_[idx]);
-        }
-        const std::size_t logIdxSz = static_cast<std::size_t> (logIdx);
-        logPeakDb[logIdxSz] = maxPeakDb;
+            maxPeakDb = juce::jmax (maxPeakDb, fftPeakDb_[static_cast<std::size_t> (bin)]);
+        logPeakDb[static_cast<std::size_t> (logIdx)] = maxPeakDb;
+    }
+    
+    const float octaves = snapshot.smoothingOctaves;
+    const bool applyGaussian = (!snapshot.engineDidSpectralSmooth && octaves > 0.0f);
+    if (applyGaussian)
+    {
+        logGaussian_.setConfig (octaves);
+        logGaussian_.process (logPower.data(), numLogBins);
+    }
+    
+    for (int logIdx = 0; logIdx < numLogBins; ++logIdx)
+    {
+        const float p = juce::jmax (powerFloor, logPower[static_cast<std::size_t> (logIdx)]);
+        logDb[static_cast<std::size_t> (logIdx)] = (p > powerFloor) 
+            ? juce::jmax (dbFloor, 10.0f * std::log10 (p)) 
+            : dbFloor;
     }
 }
 
@@ -947,6 +941,9 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
 #if JUCE_DEBUG
     dropReason_.clear();
 #endif
+    
+    smoother_.setEngineDidSpectralSmooth (snapshot.engineDidSpectralSmooth);
+    smoother_.setUseUILogGaussianOnly (snapshot.useUILogGaussianOnly);
     
     // Resize member vectors to expected size
     const size_t validBinsSize = static_cast<size_t> (validBins);
@@ -1540,9 +1537,14 @@ void AnalyzerDisplayView::SmoothingProcessor::setConfig (float octaves, int fftS
 
 void AnalyzerDisplayView::SmoothingProcessor::process (const float* inputPower, float* outputPower, int numBins)
 {
+    if (engineDidSpectralSmooth_ || useUILogGaussianOnly_)
+    {
+        if (inputPower != outputPower)
+            std::copy (inputPower, inputPower + numBins, outputPower);
+        return;
+    }
     if (smoothingOctaves_ <= 0.0f || numBins != (currentFFTSize_ / 2 + 1) || smoothLowBounds.empty())
     {
-        // Bypass
         if (inputPower != outputPower)
             std::copy (inputPower, inputPower + numBins, outputPower);
         return;
@@ -1574,6 +1576,58 @@ void AnalyzerDisplayView::SmoothingProcessor::process (const float* inputPower, 
         {
             outputPower[i] = inputPower[i];
         }
+    }
+}
+
+void AnalyzerDisplayView::LogGaussianSmoother::setConfig (float octaves)
+{
+    if (std::abs (smoothingOctaves_ - octaves) < 1e-6f && radius_ > 0)
+        return;
+    smoothingOctaves_ = octaves;
+    
+    if (octaves <= 0.0f)
+    {
+        radius_ = 0;
+        return;
+    }
+    constexpr double kLogFreqMinHz = 20.0;
+    constexpr double kLogFreqMaxHz = 20000.0;
+    const double totalOctaves = std::log2 (kLogFreqMaxHz / kLogFreqMinHz);
+    const double binsPerOctave = static_cast<double> (kMaxBins) / totalOctaves;
+    const double sigmaBins = juce::jmax (0.5, binsPerOctave * static_cast<double> (octaves) / 2.355);
+    const int radius = juce::jmin (static_cast<int> (std::floor (3.0 * sigmaBins + 0.5)),
+                                   (static_cast<int> (weights_.size()) - 1) / 2);
+    radius_ = juce::jmax (0, radius);
+    const int half = radius_;
+    const double sigma = static_cast<double> (sigmaBins);
+    float sum = 0.0f;
+    for (int d = -half; d <= half; ++d)
+    {
+        const float w = static_cast<float> (std::exp (-0.5 * static_cast<double> (d * d) / (sigma * sigma)));
+        weights_[static_cast<size_t> (d + half)] = w;
+        sum += w;
+    }
+    if (sum > 1e-10f)
+        for (int i = 0; i <= 2 * half; ++i)
+            weights_[static_cast<size_t> (i)] /= sum;
+}
+
+void AnalyzerDisplayView::LogGaussianSmoother::process (float* powerInOut, int numBins)
+{
+    if (radius_ <= 0 || numBins > kMaxBins)
+        return;
+    const int half = radius_;
+    for (int i = 0; i < numBins; ++i)
+        scratch_[static_cast<size_t> (i)] = powerInOut[i];
+    for (int i = 0; i < numBins; ++i)
+    {
+        float sum = 0.0f;
+        for (int d = -half; d <= half; ++d)
+        {
+            const int j = juce::jlimit (0, numBins - 1, i + d);
+            sum += scratch_[static_cast<size_t> (j)] * weights_[static_cast<size_t> (d + half)];
+        }
+        powerInOut[i] = sum;
     }
 }
 

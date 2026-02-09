@@ -6,9 +6,10 @@ namespace Layout
 {
     constexpr int outerPadding       = 24;
     constexpr int gutterGap          = 16;
-    constexpr int topBarHeight       = 52;
+    constexpr int topBarHeight       = 32;
     constexpr int footerHeight       = 32;
     constexpr int meterRailWidth     = 72;
+    constexpr int meterRailHeight    = 0;   // max height for left/right meter strips (0 = use full content height)
     constexpr int railMinWidth       = 240;
     constexpr int railNormalWidth    = 260;
     constexpr int railWideWidth      = 300;
@@ -16,5 +17,9 @@ namespace Layout
 
     constexpr int compactBreakpoint  = 1100;  // Below this = Compact; at min editor 1100 we use Normal
     constexpr int wideBreakpoint     = 1600;
+
+    // Stereo scope: square size cap and aspect (single source of truth for layout)
+    constexpr int kScopeMaxSize      = 360;   // square size cap (adjust only if needed)
+    constexpr float kScopeAspect     = 1.0f;  // MUST remain 1.0f (square)
 }
 }
