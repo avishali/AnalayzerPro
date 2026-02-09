@@ -84,6 +84,13 @@ private:
     juce::Viewport railViewport_;
     ControlRail rail_;
     FooterBar footer_;
+    
+    bool railIsOpen_ = true; // Default: rail is open
+    int animatedRailWidth_ = AnalyzerPro::Layout::railNormalWidth; // Current animated width
+    juce::ComponentAnimator railAnimator_;
+    
+    void toggleRail();
+    void animateRailWidth (int targetWidth);
     AnalyzerDisplayView analyzerView_;
     StereoScopeView stereoScopeView_;
     PhaseFanScopeComponent phaseFanScopeComponent_;

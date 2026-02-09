@@ -8,7 +8,7 @@ namespace Layout
     constexpr int gutterGap          = 16;
     constexpr int topBarHeight       = 32;
     constexpr int footerHeight       = 32;
-    constexpr int meterRailWidth     = 72;
+    constexpr int meterRailWidth     = 88;
     constexpr int meterRailHeight    = 0;   // max height for left/right meter strips (0 = use full content height)
     constexpr int railMinWidth       = 240;
     constexpr int railNormalWidth    = 260;

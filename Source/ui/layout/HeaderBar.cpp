@@ -92,6 +92,20 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     bypassButton.setColour (juce::TextButton::buttonColourId, theme.panel); // If using TextButton vs ToggleButton logic
     bypassButton.setTooltip ("Bypass analyzer processing");
     addAndMakeVisible (bypassButton);
+
+    // Control Rail Toggle
+    railToggleButton.setButtonText ("☰");
+    railToggleButton.setClickingTogglesState (true);
+    railToggleButton.setToggleState (true, juce::dontSendNotification); // Default: rail is open
+    railToggleButton.setColour (juce::ToggleButton::tickColourId, theme.accent);
+    railToggleButton.setColour (juce::TextButton::buttonColourId, theme.panel);
+    railToggleButton.setTooltip ("Toggle control rail visibility");
+    railToggleButton.onClick = [this]
+    {
+        if (onRailToggleClicked)
+            onRailToggleClicked();
+    };
+    addAndMakeVisible (railToggleButton);
 }
 
 HeaderBar::~HeaderBar() = default;
@@ -121,16 +135,22 @@ void HeaderBar::resized()
     const int controlTop = centerY - controlH / 2;
     const int buttonTop = centerY - controlH / 2;
 
-    // Right zone: Peak Range + Preset/Save + A/B + Bypass
+    // Right zone: Peak Range + Preset/Save + A/B + Bypass + Rail Toggle
     const int rightZoneWidth = comboW
                               + headerGap
                               + m.headerButtonW * 2  // Preset/Save
                               + headerGap
                               + smallBtnW * 2         // A/B
                               + headerGap
-                              + m.headerButtonW;      // Bypass
+                              + m.headerButtonW        // Bypass
+                              + headerGap
+                              + smallBtnW;             // Rail Toggle
 
     auto rightZone = area.removeFromRight (rightZoneWidth);
+
+    // Rail Toggle
+    railToggleButton.setBounds (rightZone.removeFromRight (smallBtnW).getX(), controlTop, smallBtnW, controlH);
+    rightZone.removeFromRight (headerGap);
 
     // Bypass
     auto buttonArea = rightZone.removeFromRight (m.headerButtonW);
