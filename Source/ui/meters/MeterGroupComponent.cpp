@@ -37,11 +37,22 @@ MeterGroupComponent::MeterGroupComponent (mdsp_ui::UiContext& ui,
         processor_.setMeterMode (AnalayzerProAudioProcessor::MeterMode::Peak);
     };
 
+    scaleFullButton_.setClickingTogglesState (false);
+    scale24Button_.setClickingTogglesState (false);
+    scale12Button_.setClickingTogglesState (false);
+    scaleFullButton_.onClick = [this] { setScaleMode (MeterComponent::ScaleMode::FullRange); };
+    scale24Button_.onClick  = [this] { setScaleMode (MeterComponent::ScaleMode::Top24Db); };
+    scale12Button_.onClick  = [this] { setScaleMode (MeterComponent::ScaleMode::Top12Db); };
+
     addAndMakeVisible (rmsButton_);
     addAndMakeVisible (peakButton_);
+    addAndMakeVisible (scaleFullButton_);
+    addAndMakeVisible (scale24Button_);
+    addAndMakeVisible (scale12Button_);
 
     // Initial sync (will be corrected by timer if needed)
     setDisplayMode (MeterComponent::DisplayMode::RMS);
+    setScaleMode (MeterComponent::ScaleMode::FullRange);
 
     // Build meter components (wiring to processor state).
     // Build meter components (wiring to processor state).
@@ -71,8 +82,8 @@ MeterGroupComponent::MeterGroupComponent (mdsp_ui::UiContext& ui,
     addAndMakeVisible (*meter1_);
 
     // Force sync meters to ensure they are visible on startup
-    if (meter0_) meter0_->setDisplayMode (displayMode_);
-    if (meter1_) meter1_->setDisplayMode (displayMode_);
+    if (meter0_) { meter0_->setDisplayMode (displayMode_); meter0_->setScaleMode (scaleMode_); }
+    if (meter1_) { meter1_->setDisplayMode (displayMode_); meter1_->setScaleMode (scaleMode_); }
 
     startTimerHz (30); // 30Hz visual update
 }
@@ -133,6 +144,18 @@ void MeterGroupComponent::setHoldEnabled (bool hold)
 {
     if (meter0_) meter0_->setHoldEnabled (hold);
     if (meter1_) meter1_->setHoldEnabled (hold);
+}
+
+void MeterGroupComponent::setScaleMode (MeterComponent::ScaleMode mode)
+{
+    if (scaleMode_ == mode)
+        return;
+    scaleMode_ = mode;
+    if (meter0_) meter0_->setScaleMode (mode);
+    if (meter1_) meter1_->setScaleMode (mode);
+    scaleFullButton_.setToggleState (mode == MeterComponent::ScaleMode::FullRange, juce::dontSendNotification);
+    scale24Button_.setToggleState (mode == MeterComponent::ScaleMode::Top24Db, juce::dontSendNotification);
+    scale12Button_.setToggleState (mode == MeterComponent::ScaleMode::Top12Db, juce::dontSendNotification);
 }
 
 void MeterGroupComponent::timerCallback()
@@ -228,20 +251,30 @@ void MeterGroupComponent::resized()
     const auto& m = ui_.metrics();
     auto b = getLocalBounds();
 
-    headerArea_ = b.removeFromTop (34);  // TODO: Move to metrics
-    labelArea_ = headerArea_.removeFromTop (16);  // TODO: Move to metrics
-    toggleArea_ = headerArea_;
+    const int labelHeight = 16;
+    headerArea_ = b.removeFromTop (labelHeight);  // minimal top: label only, meters pushed up to header
+    labelArea_ = headerArea_;
 
+    const int toggleTotalHeight = 44;  // scale row + RMS/Peak row
+    toggleArea_ = b.removeFromBottom (toggleTotalHeight);
     metersArea_ = b.reduced (static_cast<int> (m.strokeThick), static_cast<int> (m.strokeThick));
 
     auto toggle = toggleArea_.reduced (m.padSmall, static_cast<int> (m.strokeThick));
-    const int toggleW = toggle.getWidth();
-    const int half = toggleW / 2;
-    rmsButton_.setBounds (toggle.removeFromLeft (half));
-    peakButton_.setBounds (toggle);
+    const int scaleRowHeight = 20;
+    auto scaleRow = toggle.removeFromTop (scaleRowHeight);
+    auto modeRow = toggle;
 
-    const int meterW = 44;  // TODO: Move to metrics
-    const int gap = 6;  // TODO: Move to metrics
+    const int scaleThird = scaleRow.getWidth() / 3;
+    scaleFullButton_.setBounds (scaleRow.removeFromLeft (scaleThird));
+    scale24Button_.setBounds (scaleRow.removeFromLeft (scaleThird));
+    scale12Button_.setBounds (scaleRow);
+
+    const int modeHalf = modeRow.getWidth() / 2;
+    rmsButton_.setBounds (modeRow.removeFromLeft (modeHalf));
+    peakButton_.setBounds (modeRow);
+
+    const int meterW = m.meterGroupMeterW;
+    const int gap = m.meterGroupGap;
 
     if (channelCount_ <= 1)
     {
@@ -275,4 +308,3 @@ void MeterGroupComponent::resized()
         }
     }
 }
-

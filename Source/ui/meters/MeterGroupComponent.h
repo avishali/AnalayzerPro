@@ -30,6 +30,9 @@ public:
     // Enable/disable peak hold for both meters
     void setHoldEnabled (bool hold);
 
+    void setScaleMode (MeterComponent::ScaleMode mode);
+    MeterComponent::ScaleMode getScaleMode() const noexcept { return scaleMode_; }
+
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -43,10 +46,14 @@ private:
 
     int channelCount_ = 2;
     MeterComponent::DisplayMode displayMode_ = MeterComponent::DisplayMode::RMS;
+    MeterComponent::ScaleMode scaleMode_ = MeterComponent::ScaleMode::FullRange;
     ChannelMode channelMode_ = ChannelMode::Stereo; // Default Stereo
 
     juce::TextButton rmsButton_ { "RMS" };
     juce::TextButton peakButton_ { "PEAK" };
+    juce::TextButton scaleFullButton_ { "Full" };
+    juce::TextButton scale24Button_ { "24" };
+    juce::TextButton scale12Button_ { "12" };
 
     std::unique_ptr<MeterComponent> meter0_;
     std::unique_ptr<MeterComponent> meter1_;

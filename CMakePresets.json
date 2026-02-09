@@ -64,12 +64,5 @@
             "name": "debug",
             "configurePreset": "debug"
         }
-    ],
-    "testPresets": [
-        {
-            "name": "Stadalone _Debug",
-            "description": "",
-            "displayName": ""
-        }
     ]
 }

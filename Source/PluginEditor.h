@@ -13,7 +13,9 @@
 #include "analyzer/AnalyzerEngine.h"
 #include "ui/MainView.h"
 #include "ui/tooltips/TooltipManager.h"
-
+#if JUCE_DEBUG
+#include "ui/DebugGridOverlay.h"
+#endif
 
 //==============================================================================
 /**
@@ -29,6 +31,9 @@ public:
     //==============================================================================
     void paint (juce::Graphics&) override;
     void resized() override;
+#if JUCE_DEBUG
+    bool keyPressed (const juce::KeyPress&) override;
+#endif
 
 private:
     AnalayzerProAudioProcessor& audioProcessor;
@@ -39,6 +44,9 @@ private:
     std::unique_ptr<mdsp_ui::TooltipManager> tooltipManager_;
     std::unique_ptr<juce::TooltipWindow> tooltipWindow_;
     MainView mainView;
+#if JUCE_DEBUG
+    DebugGridOverlay debugGrid;
+#endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AnalayzerProAudioProcessorEditor)
 };

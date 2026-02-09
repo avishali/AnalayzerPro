@@ -16,7 +16,8 @@ namespace mdsp_ui { struct Theme; }
     Professional RTA display component for 1/3-octave and 1-octave bands.
     Renders band bars, peak trace, grid, labels, and cursor readout.
 */
-class RTADisplay : public juce::Component
+class RTADisplay : public juce::Component,
+                   private juce::Timer
 {
 public:
     RTADisplay();
@@ -271,6 +272,13 @@ private:
     // Helper: find nearest log band index from x position
     int findNearestLogBand (float x, const RenderState& s) const;
 
+    // FFT crosshair: map mouse X to frequency (log axis)
+    float mapXToFreqFFT (float x, const RenderState& s) const;
+    // FFT crosshair: map frequency to bin index (clamped)
+    int mapFreqToBinIndex (float freqHz, const RenderState& s) const;
+    // FFT crosshair: get dB at bin for active trace (peak if enabled, else main); returns -200.0f if invalid
+    float getActiveTraceDbAtBin (int binIndex, const RenderState& s) const;
+
     // B1: RTADisplay owns one RenderState state
     RenderState state;
 
@@ -290,6 +298,26 @@ private:
 
     // Hover state
     int hoveredBandIndex = -1;
+
+    // FFT crosshair hover state (snapped to bin: X = freqToX(snappedFreq), Y = dbToY(snappedDb))
+    bool fftHoverActive_ = false;
+    int fftHoverBinIndex_ = -1;
+    float fftHoverSnappedXpx_ = 0.0f;
+    float fftHoverSnappedYpx_ = 0.0f;
+    float fftHoverSnappedFreq_ = 0.0f;
+    float fftHoverSnappedDb_ = 0.0f;
+    bool fftHoverDbValid_ = false;
+    juce::String fftHoverReadoutText_;
+    juce::String fftHoverFreqText_;
+    float fftHoverReadoutWidth_ = 0.0f;
+    // Y smoothing in dB domain: target from snapshot, smoothed then dbToY for drawing
+    float hoverDbTarget_ = 0.0f;
+    float hoverDbSmooth_ = 0.0f;
+    bool hoverDbHasValue_ = false;
+    float hoverYSmoothPx_ = 0.0f;
+    double hoverLastSmoothTimeSec_ = 0.0;
+
+    void timerCallback() override;
     
     // Axis hover controllers
     mdsp_ui::AxisHoverController freqHover_;  // Frequency axis (X, for Log/FFT modes)

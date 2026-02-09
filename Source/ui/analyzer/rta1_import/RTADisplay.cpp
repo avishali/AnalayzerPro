@@ -178,9 +178,61 @@ RTADisplay::RTADisplay()
     logMinFreq = std::log10 (state.minHz);
     logFreqRange = std::log10 (state.maxHz) - logMinFreq;
     dbRange = state.topDb - state.bottomDb;
+    startTimerHz (60);
 }
 
 RTADisplay::~RTADisplay() = default;
+
+void RTADisplay::timerCallback()
+{
+    if (!fftHoverActive_)
+        return;
+    const double nowSec = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    if (!hoverDbHasValue_)
+    {
+        hoverLastSmoothTimeSec_ = nowSec;
+        return;
+    }
+    double dtSeconds = nowSec - hoverLastSmoothTimeSec_;
+    dtSeconds = juce::jlimit (0.0, 0.1, dtSeconds);
+    hoverLastSmoothTimeSec_ = nowSec;
+    if (dtSeconds <= 0.0)
+        return;
+    constexpr float tau = 0.08f;
+    float alpha = 1.0f - std::exp (static_cast<float> (-dtSeconds / static_cast<double> (tau)));
+    alpha = juce::jlimit (0.02f, 0.35f, alpha);
+    hoverDbSmooth_ += alpha * (hoverDbTarget_ - hoverDbSmooth_);
+    const float dbDiff = std::abs (hoverDbTarget_ - hoverDbSmooth_);
+    if (dbDiff < 0.05f)
+    {
+        hoverDbSmooth_ = hoverDbTarget_;
+        hoverYSmoothPx_ = dbToY (hoverDbSmooth_, state);
+        if (std::isfinite (hoverYSmoothPx_))
+        {
+            fftHoverReadoutText_ = fftHoverFreqText_ + "  " + juce::String (hoverDbSmooth_, 1) + " dB";
+            juce::GlyphArrangement ga;
+            ga.addFittedText (juce::FontOptions().withHeight (10.0f), fftHoverReadoutText_,
+                              0.0f, 0.0f, 10000.0f, 10.0f, juce::Justification::left, 1);
+            fftHoverReadoutWidth_ = ga.getBoundingBox (0, -1, true).getWidth();
+        }
+        return;
+    }
+    hoverYSmoothPx_ = dbToY (hoverDbSmooth_, state);
+    if (!std::isfinite (hoverYSmoothPx_))
+        return;
+    fftHoverReadoutText_ = fftHoverFreqText_ + "  " + juce::String (hoverDbSmooth_, 1) + " dB";
+    {
+        juce::GlyphArrangement ga;
+        ga.addFittedText (juce::FontOptions().withHeight (10.0f), fftHoverReadoutText_,
+                          0.0f, 0.0f, 10000.0f, 10.0f, juce::Justification::left, 1);
+        fftHoverReadoutWidth_ = ga.getBoundingBox (0, -1, true).getWidth();
+    }
+    const int px = static_cast<int> (plotAreaLeft);
+    const int py = static_cast<int> (plotAreaTop);
+    const int pw = static_cast<int> (plotAreaWidth) + 2;
+    const int ph = static_cast<int> (plotAreaHeight) + 2;
+    repaint (px, py, pw, ph);
+}
 
 //==============================================================================
 void RTADisplay::setBandData (const std::vector<float>& currentDb, const std::vector<float>* peakDbNullable)
@@ -205,7 +257,10 @@ void RTADisplay::setViewMode (int mode)
         debugViewMode = mode;
 #endif
         geometryValid = false;
-        hoveredBandIndex = -1;  // A3: Clear hover on view change
+        hoveredBandIndex = -1;
+        fftHoverActive_ = false;
+        hoverDbHasValue_ = false;
+        hoverLastSmoothTimeSec_ = 0.0;
         repaint();
     }
 }
@@ -247,6 +302,22 @@ void RTADisplay::setFFTData (const std::vector<float>& fftBinsDb,
     }
 
     state.status = DataStatus::Ok;
+    if (fftHoverActive_ && fftHoverBinIndex_ >= 0 && static_cast<size_t> (fftHoverBinIndex_) < state.fftDb.size())
+    {
+        const float dbVal = getActiveTraceDbAtBin (fftHoverBinIndex_, state);
+        const bool dbValid = std::isfinite (dbVal) && dbVal > -199.0f;
+        if (dbValid)
+        {
+            const float clampedDb = juce::jlimit (state.bottomDb, state.topDb + 18.0f, dbVal);
+            hoverDbTarget_ = clampedDb;
+            if (!hoverDbHasValue_)
+            {
+                hoverDbSmooth_ = hoverDbTarget_;
+                hoverDbHasValue_ = true;
+                hoverYSmoothPx_ = dbToY (hoverDbSmooth_, state);
+            }
+        }
+    }
     invalidatePaths(); // New data -> new paths
     repaint();
 }
@@ -290,6 +361,9 @@ void RTADisplay::setFftMeta (double sampleRate, int fftSize)
     state.fftSize = fftSize;
     if (fftSize <= 0 || sampleRate <= 0.0)
          state.hasValidSpectrumFrame = false; // Reset on invalid meta
+    fftHoverActive_ = false;
+    hoverDbHasValue_ = false;
+    hoverLastSmoothTimeSec_ = 0.0;
     invalidatePaths(); // FFT meta data affects paths
     repaint();
 }
@@ -557,6 +631,9 @@ void RTADisplay::checkStructuralGeneration (uint32_t currentGen)
         lastStructuralGen = currentGen;
         // Clear cached state on structural change
         hoveredBandIndex = -1;
+        fftHoverActive_ = false;
+        hoverDbHasValue_ = false;
+        hoverLastSmoothTimeSec_ = 0.0;
         geometryValid = false;
         bandGeometry.clear();
         // Clear state data arrays to force re-validation
@@ -936,6 +1013,9 @@ void RTADisplay::resized()
     updateGeometry();
     invalidateBackground();
     invalidatePaths();
+    fftHoverActive_ = false;
+    hoverDbHasValue_ = false;
+    hoverLastSmoothTimeSec_ = 0.0;
 }
 
 void RTADisplay::updateGeometry()
@@ -1130,6 +1210,44 @@ int RTADisplay::findNearestBand (float x) const
     return nearest;
 }
 
+float RTADisplay::mapXToFreqFFT (float x, const RenderState& s) const
+{
+    if (plotAreaWidth <= 0.0f || s.maxHz <= s.minHz || s.minHz <= 0.0f)
+        return s.minHz;
+    const float norm = (x - plotAreaLeft) / plotAreaWidth;
+    const float logMin = std::log10 (s.minHz);
+    const float logMax = std::log10 (s.maxHz);
+    const float logRange = logMax - logMin;
+    const float logFreq = logMin + norm * logRange;
+    return std::pow (10.0f, juce::jlimit (logMin, logMax, logFreq));
+}
+
+int RTADisplay::mapFreqToBinIndex (float freqHz, const RenderState& s) const
+{
+    if (s.sampleRate <= 0.0 || s.fftSize <= 0)
+        return -1;
+    const float binHz = static_cast<float> (s.sampleRate) / static_cast<float> (s.fftSize);
+    if (binHz <= 0.0f)
+        return -1;
+    const int numBins = s.fftSize / 2 + 1;
+    const int idx = static_cast<int> (std::round (freqHz / binHz));
+    return juce::jlimit (0, numBins - 1, idx);
+}
+
+float RTADisplay::getActiveTraceDbAtBin (int binIndex, const RenderState& s) const
+{
+    const size_t idx = static_cast<size_t> (binIndex);
+    if (idx >= s.fftDb.size())
+        return -200.0f;
+    if (!s.fftPeakDb.empty() && s.fftPeakDb.size() == s.fftDb.size() && idx < s.fftPeakDb.size())
+    {
+        const float v = s.fftPeakDb[idx];
+        return std::isfinite (v) ? v : -200.0f;
+    }
+    const float v = s.fftDb[idx];
+    return std::isfinite (v) ? v : -200.0f;
+}
+
 //==============================================================================
 void RTADisplay::mouseMove (const juce::MouseEvent& e)
 {
@@ -1246,17 +1364,107 @@ void RTADisplay::mouseMove (const juce::MouseEvent& e)
     }
     else if (state.viewMode == 0)  // FFT mode
     {
-        // For now, disable band hover in FFT mode
         newHovered = -1;
+        const bool inPlot = (x >= plotAreaLeft && x <= plotAreaLeft + plotAreaWidth &&
+                            y >= plotAreaTop && y <= plotAreaTop + plotAreaHeight);
+        if (inPlot && state.sampleRate > 0.0 && state.fftSize > 0 && !state.fftDb.empty())
+        {
+            const int numBins = state.fftSize / 2 + 1;
+            if (numBins > 0)
+            {
+                const float binHz = static_cast<float> (state.sampleRate) / static_cast<float> (state.fftSize);
+                const float freq = mapXToFreqFFT (x, state);
+                const float clampedFreq = juce::jlimit (state.minHz, state.getEffectiveMaxHz(), freq);
+                const int binIdx = mapFreqToBinIndex (clampedFreq, state);
+                if (binIdx == fftHoverBinIndex_ && fftHoverActive_)
+                {
+                    // Bin unchanged, no repaint
+                }
+                else
+                {
+                    const float snappedFreqHz = (binIdx >= 0) ? (static_cast<float> (binIdx) * binHz) : clampedFreq;
+                    const float snappedXpx = freqToX (snappedFreqHz, state);
+                    const float dbVal = (binIdx >= 0) ? getActiveTraceDbAtBin (binIdx, state) : -200.0f;
+                    const bool dbValid = std::isfinite (dbVal) && dbVal > -199.0f;
+                    const float clampedDb = juce::jlimit (state.bottomDb, state.topDb + 18.0f, dbVal);
+                    const float snappedYpx = dbValid ? dbToY (clampedDb, state) : (plotAreaTop + plotAreaHeight * 0.5f);
+
+                    fftHoverActive_ = true;
+                    fftHoverBinIndex_ = binIdx;
+                    fftHoverSnappedXpx_ = snappedXpx;
+                    fftHoverSnappedYpx_ = snappedYpx;
+                    fftHoverSnappedFreq_ = snappedFreqHz;
+                    fftHoverSnappedDb_ = dbVal;
+                    fftHoverDbValid_ = dbValid;
+                    if (dbValid)
+                    {
+                        hoverDbTarget_ = clampedDb;
+                        if (!hoverDbHasValue_)
+                        {
+                            hoverDbSmooth_ = hoverDbTarget_;
+                            hoverDbHasValue_ = true;
+                            hoverYSmoothPx_ = dbToY (hoverDbSmooth_, state);
+                            hoverLastSmoothTimeSec_ = juce::Time::getMillisecondCounterHiRes() * 0.001;
+                        }
+                    }
+
+                    if (snappedFreqHz >= 1000.0f)
+                        fftHoverFreqText_ = juce::String (snappedFreqHz / 1000.0f, 2) + " kHz";
+                    else
+                        fftHoverFreqText_ = juce::String (static_cast<int> (snappedFreqHz)) + " Hz";
+                    if (hoverDbHasValue_)
+                        fftHoverReadoutText_ = fftHoverFreqText_ + "  " + juce::String (hoverDbTarget_, 1) + " dB";
+                    else
+                        fftHoverReadoutText_ = fftHoverFreqText_ + "  \u2014";
+                    {
+                        juce::GlyphArrangement ga;
+                        ga.addFittedText (juce::FontOptions().withHeight (10.0f), fftHoverReadoutText_,
+                                          0.0f, 0.0f, 10000.0f, 10.0f, juce::Justification::left, 1);
+                        fftHoverReadoutWidth_ = ga.getBoundingBox (0, -1, true).getWidth();
+                    }
+
+                    needsRepaint = true;
+                }
+            }
+            else
+            {
+                if (fftHoverActive_)
+                    needsRepaint = true;
+                fftHoverActive_ = false;
+                hoverDbHasValue_ = false;
+                hoverLastSmoothTimeSec_ = 0.0;
+            }
+        }
+        else
+        {
+            if (fftHoverActive_)
+                needsRepaint = true;
+            fftHoverActive_ = false;
+            hoverDbHasValue_ = false;
+            hoverLastSmoothTimeSec_ = 0.0;
+        }
     }
     if (newHovered != hoveredBandIndex)
     {
         hoveredBandIndex = newHovered;
         needsRepaint = true;
     }
-    
+
     if (needsRepaint)
-        repaint();
+    {
+        if (state.viewMode == 0)
+        {
+            const int px = static_cast<int> (plotAreaLeft);
+            const int py = static_cast<int> (plotAreaTop);
+            const int pw = static_cast<int> (plotAreaWidth) + 2;
+            const int ph = static_cast<int> (plotAreaHeight) + 2;
+            repaint (px, py, pw, ph);
+        }
+        else
+        {
+            repaint();
+        }
+    }
 }
 
 void RTADisplay::mouseExit (const juce::MouseEvent&)
@@ -1265,6 +1473,13 @@ void RTADisplay::mouseExit (const juce::MouseEvent&)
     if (hoveredBandIndex >= 0)
     {
         hoveredBandIndex = -1;
+        needsRepaint = true;
+    }
+    if (fftHoverActive_)
+    {
+        fftHoverActive_ = false;
+        hoverDbHasValue_ = false;
+        hoverLastSmoothTimeSec_ = 0.0;
         needsRepaint = true;
     }
     if (freqHover_.deactivate() || dbHover_.deactivate())
@@ -1276,8 +1491,21 @@ void RTADisplay::mouseExit (const juce::MouseEvent&)
         needsRepaint = true;
     }
     if (needsRepaint)
-        repaint();
+    {
+        if (state.viewMode == 0)
+        {
+            const int px = static_cast<int> (plotAreaLeft);
+            const int py = static_cast<int> (plotAreaTop);
+            const int pw = static_cast<int> (plotAreaWidth) + 2;
+            const int ph = static_cast<int> (plotAreaHeight) + 2;
+            repaint (px, py, pw, ph);
+        }
+        else
+        {
+            repaint();
+        }
     }
+}
 
 void RTADisplay::mouseDown (const juce::MouseEvent& e)
 {
@@ -1301,6 +1529,88 @@ void RTADisplay::mouseDown (const juce::MouseEvent& e)
 
 void RTADisplay::mouseDrag (const juce::MouseEvent& e)
 {
+    if (state.viewMode == 0 && state.sampleRate > 0.0 && state.fftSize > 0 && !state.fftDb.empty())
+    {
+        const float x = static_cast<float> (e.x);
+        const float y = static_cast<float> (e.y);
+        const bool inPlot = (x >= plotAreaLeft && x <= plotAreaLeft + plotAreaWidth &&
+                            y >= plotAreaTop && y <= plotAreaTop + plotAreaHeight);
+        if (inPlot)
+        {
+            const int numBins = state.fftSize / 2 + 1;
+            if (numBins > 0)
+            {
+                const float binHz = static_cast<float> (state.sampleRate) / static_cast<float> (state.fftSize);
+                const float freq = mapXToFreqFFT (x, state);
+                const float clampedFreq = juce::jlimit (state.minHz, state.getEffectiveMaxHz(), freq);
+                const int binIdx = mapFreqToBinIndex (clampedFreq, state);
+                if (binIdx != fftHoverBinIndex_ || !fftHoverActive_)
+                {
+                    const float snappedFreqHz = (binIdx >= 0) ? (static_cast<float> (binIdx) * binHz) : clampedFreq;
+                    const float snappedXpx = freqToX (snappedFreqHz, state);
+                    const float dbVal = (binIdx >= 0) ? getActiveTraceDbAtBin (binIdx, state) : -200.0f;
+                    const bool dbValid = std::isfinite (dbVal) && dbVal > -199.0f;
+                    const float clampedDb = juce::jlimit (state.bottomDb, state.topDb + 18.0f, dbVal);
+                    const float snappedYpx = dbValid ? dbToY (clampedDb, state) : (plotAreaTop + plotAreaHeight * 0.5f);
+
+                    fftHoverActive_ = true;
+                    fftHoverBinIndex_ = binIdx;
+                    fftHoverSnappedXpx_ = snappedXpx;
+                    fftHoverSnappedYpx_ = snappedYpx;
+                    fftHoverSnappedFreq_ = snappedFreqHz;
+                    fftHoverSnappedDb_ = dbVal;
+                    fftHoverDbValid_ = dbValid;
+                    if (dbValid)
+                    {
+                        hoverDbTarget_ = clampedDb;
+                        if (!hoverDbHasValue_)
+                        {
+                            hoverDbSmooth_ = hoverDbTarget_;
+                            hoverDbHasValue_ = true;
+                            hoverYSmoothPx_ = dbToY (hoverDbSmooth_, state);
+                            hoverLastSmoothTimeSec_ = juce::Time::getMillisecondCounterHiRes() * 0.001;
+                        }
+                    }
+
+                    if (snappedFreqHz >= 1000.0f)
+                        fftHoverFreqText_ = juce::String (snappedFreqHz / 1000.0f, 2) + " kHz";
+                    else
+                        fftHoverFreqText_ = juce::String (static_cast<int> (snappedFreqHz)) + " Hz";
+                    if (hoverDbHasValue_)
+                        fftHoverReadoutText_ = fftHoverFreqText_ + "  " + juce::String (hoverDbTarget_, 1) + " dB";
+                    else
+                        fftHoverReadoutText_ = fftHoverFreqText_ + "  \u2014";
+                    {
+                        juce::GlyphArrangement ga;
+                        ga.addFittedText (juce::FontOptions().withHeight (10.0f), fftHoverReadoutText_,
+                                          0.0f, 0.0f, 10000.0f, 10.0f, juce::Justification::left, 1);
+                        fftHoverReadoutWidth_ = ga.getBoundingBox (0, -1, true).getWidth();
+                    }
+
+                    const int px = static_cast<int> (plotAreaLeft);
+                    const int py = static_cast<int> (plotAreaTop);
+                    const int pw = static_cast<int> (plotAreaWidth) + 2;
+                    const int ph = static_cast<int> (plotAreaHeight) + 2;
+                    repaint (px, py, pw, ph);
+                }
+            }
+        }
+        else
+        {
+            if (fftHoverActive_)
+            {
+                fftHoverActive_ = false;
+                hoverDbHasValue_ = false;
+                hoverLastSmoothTimeSec_ = 0.0;
+                const int px = static_cast<int> (plotAreaLeft);
+                const int py = static_cast<int> (plotAreaTop);
+                const int pw = static_cast<int> (plotAreaWidth) + 2;
+                const int ph = static_cast<int> (plotAreaHeight) + 2;
+                repaint (px, py, pw, ph);
+            }
+        }
+    }
+
     if (selectionActive_)
     {
         // Update selection rect
@@ -2453,6 +2763,46 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
              g.setColour (theme.seriesPeak.brighter(0.3f));
              g.drawLine (x, y - 4.0f, x, y + 4.0f, 2.0f);
              g.fillEllipse (x - 2.0f, y - 2.0f, 4.0f, 4.0f);
+        }
+    }
+
+    // 5. FFT crosshair and readout (X = snappedXpx, Y = hoverYSmoothPx_ when valid)
+    if (fftHoverActive_ && std::isfinite (fftHoverSnappedXpx_))
+    {
+        const juce::Colour crosshairCol = theme.text.withAlpha (0.45f);
+        g.setColour (crosshairCol);
+        g.drawVerticalLine (static_cast<int> (fftHoverSnappedXpx_), plotAreaTop, plotAreaTop + plotAreaHeight);
+        if (hoverDbHasValue_ && std::isfinite (hoverYSmoothPx_))
+        {
+            g.drawHorizontalLine (static_cast<int> (hoverYSmoothPx_), plotAreaLeft, plotAreaLeft + plotAreaWidth);
+            g.fillEllipse (fftHoverSnappedXpx_ - 2.5f, hoverYSmoothPx_ - 2.5f, 5.0f, 5.0f);
+        }
+
+        if (fftHoverReadoutText_.isNotEmpty() && fftHoverReadoutWidth_ > 0.0f)
+        {
+            const float pad = 6.0f;
+            const float fontH = 10.0f;
+            g.setFont (juce::FontOptions().withHeight (fontH));
+            const float tw = fftHoverReadoutWidth_;
+            const float th = fontH + 4.0f;
+            const float anchorY = hoverDbHasValue_ && std::isfinite (hoverYSmoothPx_) ? hoverYSmoothPx_ : fftHoverSnappedYpx_;
+            float rx = fftHoverSnappedXpx_ + 8.0f;
+            float ry = anchorY - th - 4.0f;
+            if (rx + tw + pad > plotAreaLeft + plotAreaWidth)
+                rx = fftHoverSnappedXpx_ - tw - pad - 8.0f;
+            if (ry < plotAreaTop)
+                ry = anchorY + 6.0f;
+            if (ry + th > plotAreaTop + plotAreaHeight)
+                ry = plotAreaTop + plotAreaHeight - th - 4.0f;
+            if (rx < plotAreaLeft + 2.0f)
+                rx = plotAreaLeft + 2.0f;
+            const juce::Rectangle<float> readoutRect (rx, ry, tw + pad * 2.0f, th);
+            g.setColour (theme.background.withAlpha (0.92f));
+            g.fillRoundedRectangle (readoutRect, 3.0f);
+            g.setColour (theme.text.withAlpha (0.9f));
+            g.drawRoundedRectangle (readoutRect, 3.0f, 1.0f);
+            g.setColour (theme.text);
+            g.drawText (fftHoverReadoutText_, readoutRect.reduced (pad, 2.0f), juce::Justification::centredLeft, true);
         }
     }
 

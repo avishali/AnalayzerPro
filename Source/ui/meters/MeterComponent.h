@@ -4,7 +4,8 @@
 #include <mdsp_ui/UiContext.h>
 #include <atomic>
 
-class MeterComponent : public juce::Component
+class MeterComponent : public juce::Component,
+                      private juce::Timer
 {
 public:
     enum class DisplayMode
@@ -13,11 +14,19 @@ public:
         Peak = 1
     };
 
+    enum class ScaleMode
+    {
+        FullRange = 0,  // -120 dB to +6 dB (as now)
+        Top24Db   = 1,  // -18 dB to +6 dB (focus on top 24 dB)
+        Top12Db   = 2   // -6 dB to +6 dB (focus on top 12 dB)
+    };
+
     MeterComponent (mdsp_ui::UiContext& ui,
                     const std::atomic<float>* peakDb,
                     const std::atomic<float>* rmsDb,
                     const std::atomic<bool>* clipLatched,
                     juce::String labelText);
+    ~MeterComponent() override;
 
     void setLabelText (juce::String labelText);
     void setBypassed (bool bypassed);
@@ -27,6 +36,9 @@ public:
 
     void setDisplayMode (DisplayMode mode);
     DisplayMode getDisplayMode() const noexcept { return displayMode_; }
+
+    void setScaleMode (ScaleMode mode);
+    ScaleMode getScaleMode() const noexcept { return scaleMode_; }
 
     // Pull latest values from atomics (safe on message thread).
     void updateFromAtomics();
@@ -45,9 +57,13 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    void timerCallback() override;
+
 private:
-    static float clampForRenderDb (float db) noexcept;
-    static float dbToNorm (float db) noexcept;
+    float getScaleMinDb() const noexcept;
+    float getScaleMaxDb() const noexcept;
+    float clampForRenderDb (float db) const noexcept;
+    float dbToNorm (float db) const noexcept;
 
     mdsp_ui::UiContext& ui_;
 
@@ -73,7 +89,11 @@ private:
     float maxRmsDb_  = -120.0f;
 
     DisplayMode displayMode_ = DisplayMode::RMS;
+    ScaleMode scaleMode_ = ScaleMode::FullRange;
     bool holdEnabled_ = false; // True-freeze peak hold
+
+    // Peak hold decay: time when peak last met or exceeded max (ms)
+    juce::int64 lastTimePeakAtOrAboveMax_ = 0;
 
     juce::Rectangle<int> labelArea_;
     juce::Rectangle<int> ledArea_;

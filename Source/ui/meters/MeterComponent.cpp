@@ -1,13 +1,16 @@
 #include "MeterComponent.h"
+#include <juce_core/juce_core.h>
 #include <mdsp_ui/UiContext.h>
 #include <cmath>
-#include <cstdint>
 #include <utility>
 
 namespace
 {
-    constexpr float kMeterMinDb = -120.0f;
-    constexpr float kMeterMaxDb = 6.0f;
+    constexpr float kFullRangeMinDb = -120.0f;
+    constexpr float kFullRangeMaxDb = 6.0f;
+    constexpr juce::int64 kPeakHoldTimeMs = 1500;
+    constexpr float kPeakDecayDbPerSec = 12.0f;
+    constexpr int kPeakDecayTimerHz = 25;
 }
 
 MeterComponent::MeterComponent (mdsp_ui::UiContext& ui,
@@ -24,6 +27,13 @@ MeterComponent::MeterComponent (mdsp_ui::UiContext& ui,
     numericTextPeak_ = "-inf";
     numericTextRms_  = "-inf";
     setOpaque (false);
+    lastTimePeakAtOrAboveMax_ = juce::Time::getMillisecondCounter();
+    startTimer (1000 / kPeakDecayTimerHz);
+}
+
+MeterComponent::~MeterComponent()
+{
+    stopTimer();
 }
 
 void MeterComponent::setLabelText (juce::String labelText)
@@ -63,6 +73,8 @@ void MeterComponent::setLevels (float peakDb, float rmsDb, bool clipped)
         if (cachedPeakDb_ > maxPeakDb_) maxPeakDb_ = cachedPeakDb_;
         if (cachedRmsDb_ > maxRmsDb_)   maxRmsDb_  = cachedRmsDb_;
     }
+    if (cachedPeakDb_ >= maxPeakDb_)
+        lastTimePeakAtOrAboveMax_ = juce::Time::getMillisecondCounter();
     
     // Convert for rendering
     cachedPeakNorm_ = dbToNorm (cachedPeakDb_);
@@ -92,17 +104,59 @@ void MeterComponent::setDisplayMode (DisplayMode mode)
     repaint();
 }
 
-float MeterComponent::clampForRenderDb (float db) noexcept
+void MeterComponent::setScaleMode (ScaleMode mode)
 {
-    if (! std::isfinite (db))
-        return kMeterMinDb;
-    return juce::jlimit (kMeterMinDb, kMeterMaxDb, db);
+    if (scaleMode_ == mode)
+        return;
+    scaleMode_ = mode;
+    cachedPeakNorm_ = dbToNorm (cachedPeakDb_);
+    cachedRmsNorm_  = dbToNorm (cachedRmsDb_);
+    maxPeakNorm_    = dbToNorm (maxPeakDb_);
+    repaint();
 }
 
-float MeterComponent::dbToNorm (float db) noexcept
+float MeterComponent::getScaleMinDb() const noexcept
 {
+    switch (scaleMode_)
+    {
+        case ScaleMode::FullRange: return kFullRangeMinDb;
+        case ScaleMode::Top24Db:   return -18.0f;
+        case ScaleMode::Top12Db:   return -6.0f;
+    }
+    return kFullRangeMinDb;
+}
+
+float MeterComponent::getScaleMaxDb() const noexcept
+{
+    switch (scaleMode_)
+    {
+        case ScaleMode::FullRange: return kFullRangeMaxDb; // +6 dB
+        case ScaleMode::Top24Db:
+        case ScaleMode::Top12Db:   return 0.0f;            // zoom until 0 dBFS
+    }
+    return kFullRangeMaxDb;
+}
+
+float MeterComponent::clampForRenderDb (float db) const noexcept
+{
+    if (! std::isfinite (db))
+        return getScaleMinDb();
+    return juce::jlimit (getScaleMinDb(), kFullRangeMaxDb, db);
+}
+
+float MeterComponent::dbToNorm (float db) const noexcept
+{
+    const float minDb = getScaleMinDb();
     const float clamped = clampForRenderDb (db);
-    return (clamped - kMeterMinDb) / (kMeterMaxDb - kMeterMinDb);
+    if (scaleMode_ == ScaleMode::FullRange)
+    {
+        return (clamped - minDb) / (kFullRangeMaxDb - minDb);
+    }
+    // Zoomed modes: scale ends at 0 dBFS; top 10% reserved for over (0 to +6 dB)
+    const float scaleEndDb = 0.0f;
+    if (clamped <= scaleEndDb)
+        return 0.9f * (clamped - minDb) / (scaleEndDb - minDb);
+    return 0.9f + 0.1f * (juce::jmin (clamped, kFullRangeMaxDb) / kFullRangeMaxDb);
 }
 
 void MeterComponent::updateFromAtomics()
@@ -136,6 +190,8 @@ void MeterComponent::updateFromAtomics()
     // Update Max Holds
     if (peakDb > maxPeakDb_) maxPeakDb_ = peakDb;
     if (rmsDb > maxRmsDb_)   maxRmsDb_  = rmsDb;
+    if (peakDbClamped >= maxPeakDb_)
+        lastTimePeakAtOrAboveMax_ = juce::Time::getMillisecondCounter();
 
     // Formatting helper
     auto formatDb = [] (float val) -> juce::String
@@ -150,12 +206,45 @@ void MeterComponent::updateFromAtomics()
     repaint();
 }
 
+void MeterComponent::timerCallback()
+{
+    if (holdEnabled_)
+        return;
+    const juce::int64 now = juce::Time::getMillisecondCounter();
+    if (cachedPeakDb_ >= maxPeakDb_)
+    {
+        lastTimePeakAtOrAboveMax_ = now;
+        return;
+    }
+    if ((now - lastTimePeakAtOrAboveMax_) < kPeakHoldTimeMs)
+        return;
+    const float decayPerFrame = kPeakDecayDbPerSec / static_cast<float> (kPeakDecayTimerHz);
+    const bool peakDecayed = maxPeakDb_ > cachedPeakDb_;
+    const bool rmsDecayed  = maxRmsDb_ > cachedRmsDb_;
+    if (peakDecayed)
+        maxPeakDb_ = juce::jmax (cachedPeakDb_, maxPeakDb_ - decayPerFrame);
+    if (rmsDecayed)
+        maxRmsDb_  = juce::jmax (cachedRmsDb_,  maxRmsDb_  - decayPerFrame);
+    if (!peakDecayed && !rmsDecayed)
+        return;
+    maxPeakNorm_ = dbToNorm (maxPeakDb_);
+    auto formatDb = [] (float val) -> juce::String
+    {
+        if (!std::isfinite (val) || val <= -100.0f) return "-inf";
+        return juce::String (val, 1) + " dB";
+    };
+    numericTextPeak_ = formatDb (maxPeakDb_);
+    numericTextRms_  = formatDb (maxRmsDb_);
+    repaint();
+}
+
 void MeterComponent::resetPeakHold()
 {
     // Reset max hold to current instantaneous values
     maxPeakDb_ = cachedPeakDb_;
     maxRmsDb_  = cachedRmsDb_;
     maxPeakNorm_ = cachedPeakNorm_;
+    lastTimePeakAtOrAboveMax_ = juce::Time::getMillisecondCounter();
     
     // Update numeric text
     auto formatDb = [] (float val) -> juce::String
@@ -240,65 +329,12 @@ void MeterComponent::paint (juce::Graphics& g)
 
     g.setColour (theme.background.withAlpha (0.65f));
     g.drawRoundedRectangle (meterArea_.toFloat(), m.rSmall, m.strokeThin);
-    
-    // Draw dB Scale
-    g.setColour (theme.textMuted.withAlpha (0.5f));
-    g.setFont (ui_.type().labelFont().withHeight (8.0f)); // Smaller font for dense scale
-    
-    constexpr float dbTicks[] = { 6.0f, 0.0f, -6.0f, -12.0f, -24.0f, -48.0f, -72.0f, -96.0f, -120.0f };
+
     const float yMax = static_cast<float> (meterArea_.getBottom());
     const float h    = static_cast<float> (meterArea_.getHeight());
     const float xLeft = static_cast<float> (meterArea_.getX());
     const float xRight = static_cast<float> (meterArea_.getRight());
     const float width = static_cast<float> (meterArea_.getWidth());
-    
-    for (float db : dbTicks)
-    {
-        const float norm = dbToNorm (db);
-        const float y = yMax - (norm * h);
-        
-        // Tick mark
-        if (std::abs(db) < 0.001f)
-        {
-            // 0 dB Line - Emphasized
-            g.setColour (theme.text.withAlpha (0.6f));
-            g.drawLine (xLeft, y, xRight, y, 1.0f);
-        }
-        else if (db > 0.0f)
-        {
-            // Positive ticks - Warmer
-            g.setColour (theme.danger.withAlpha (0.4f));
-            g.drawLine (xLeft, y, xRight, y, 1.0f);
-        }
-        else
-        {
-            // Negative ticks
-            g.setColour (theme.textMuted.withAlpha (0.3f));
-            g.drawLine (xLeft, y, xRight, y, 1.0f);
-        }
-
-        // Labels (if space allows)
-        // Draw centered small numbers
-        // Only draw labels for specific dB tick values to keep the meter uncluttered.
-        // Uses epsilon-based proximity check to avoid -Wfloat-equal (no == or != with floats).
-        constexpr float kLabelEps = 0.001f;
-        auto nearTick = [] (float val, float target) noexcept {
-            return std::abs (val - target) < kLabelEps;
-        };
-        const bool shouldLabel = nearTick (db, 6.0f) || nearTick (db, 0.0f)
-            || nearTick (db, -12.0f) || nearTick (db, -24.0f)
-            || nearTick (db, -48.0f) || nearTick (db, -96.0f);
-        if (shouldLabel)
-        {
-            // Use 0–255 alpha to avoid -Wfloat-conversion (JUCE has withAlpha(float) and withAlpha(uint8))
-            constexpr std::uint8_t kLabelAlpha255 = 204; // 0.8f
-            g.setColour (db >= 0.0f ? theme.danger.withAlpha (kLabelAlpha255) : theme.textMuted.withAlpha (kLabelAlpha255));
-            const int dbInt = static_cast<int> (std::lround (static_cast<double> (db)));
-            juce::String label = juce::String (dbInt);
-            if (db > 0.0f) label = "+" + label;
-            g.drawText (label, juce::Rectangle<float> (xLeft, y - 4.0f, width, 8.0f), juce::Justification::centred);
-        }
-    }
 
     // Determine Main Bar Level based on mode
     float mainNorm = 0.0f;
@@ -364,6 +400,103 @@ void MeterComponent::paint (juce::Graphics& g)
                     xRight - 1.0f,
                     maxPeakY,
                     1.5f);
+    }
+
+    // Draw dB scale on top so it is visible at all times (scale-dependent ticks)
+    constexpr float kDbScaleFontHeight = 10.0f;
+    constexpr float kDbScaleLineThin = 1.25f;
+    constexpr float kDbScaleLine0Db = 1.75f;
+    constexpr float kDbScaleLineDense = 0.75f;  // thinner for dense zoom ticks
+    g.setFont (ui_.type().labelFont().withHeight (kDbScaleFontHeight));
+    constexpr float kLabelEps = 0.001f;
+    auto nearTick = [] (float val, float target) noexcept {
+        return std::abs (val - target) < kLabelEps;
+    };
+
+    if (scaleMode_ == ScaleMode::Top24Db)
+    {
+        // 24 scale: mark every 1 dB from 0 to -18; label every 3 dB
+        for (int i = 0; i <= 18; ++i)
+        {
+            const float db = -static_cast<float> (i);
+            const float norm = dbToNorm (db);
+            const float y = yMax - (norm * h);
+            const bool isZero = (i == 0);
+            const float lineW = isZero ? kDbScaleLine0Db : kDbScaleLineDense;
+            g.setColour (isZero ? theme.text.withAlpha (0.95f) : theme.text.withAlpha (0.6f));
+            g.drawLine (xLeft, y, xRight, y, lineW);
+            const bool shouldLabel = (i % 3) == 0;  // 0, -3, -6, -9, -12, -15, -18
+            if (shouldLabel)
+            {
+                g.setColour (theme.text);
+                g.drawText (juce::String (static_cast<int> (db)),
+                            juce::Rectangle<float> (xLeft, y - 5.0f, width, 10.0f),
+                            juce::Justification::centred);
+            }
+        }
+    }
+    else if (scaleMode_ == ScaleMode::Top12Db)
+    {
+        // 12 scale: mark every 0.5 dB from 0 to -6; label every 1 dB
+        for (int i = 0; i <= 12; ++i)
+        {
+            const float db = -i * 0.5f;
+            const float norm = dbToNorm (db);
+            const float y = yMax - (norm * h);
+            const bool isZero = (i == 0);
+            const float lineW = isZero ? kDbScaleLine0Db : kDbScaleLineDense;
+            g.setColour (isZero ? theme.text.withAlpha (0.95f) : theme.text.withAlpha (0.6f));
+            g.drawLine (xLeft, y, xRight, y, lineW);
+            const bool shouldLabel = (i % 2) == 0;  // 0, -1, -2, -3, -4, -5, -6
+            if (shouldLabel)
+            {
+                g.setColour (theme.text);
+                const bool isInteger = std::abs (db - std::floor (db)) < kLabelEps;
+                juce::String label = isInteger ? juce::String (static_cast<int> (db))
+                                               : juce::String (db, 1);
+                g.drawText (label, juce::Rectangle<float> (xLeft, y - 5.0f, width, 10.0f),
+                            juce::Justification::centred);
+            }
+        }
+    }
+    else
+    {
+        // Full range: sparse ticks as before
+        static constexpr float kTicksFull[] = { 6.0f, 0.0f, -6.0f, -12.0f, -24.0f, -48.0f, -72.0f, -96.0f, -120.0f };
+        constexpr int numTicks = 9;
+        for (int i = 0; i < numTicks; ++i)
+        {
+            const float db = kTicksFull[i];
+            const float norm = dbToNorm (db);
+            const float y = yMax - (norm * h);
+            const float lineW = nearTick (db, 0.0f) ? kDbScaleLine0Db : kDbScaleLineThin;
+            if (nearTick (db, 0.0f))
+            {
+                g.setColour (theme.text.withAlpha (0.95f));
+                g.drawLine (xLeft, y, xRight, y, lineW);
+            }
+            else if (db > 0.0f)
+            {
+                g.setColour (theme.danger.withAlpha (0.85f));
+                g.drawLine (xLeft, y, xRight, y, lineW);
+            }
+            else
+            {
+                g.setColour (theme.text.withAlpha (0.75f));
+                g.drawLine (xLeft, y, xRight, y, lineW);
+            }
+            const bool shouldLabel = nearTick (db, 6.0f) || nearTick (db, 0.0f)
+                || nearTick (db, -12.0f) || nearTick (db, -24.0f) || nearTick (db, -18.0f)
+                || nearTick (db, -48.0f) || nearTick (db, -96.0f) || nearTick (db, -6.0f);
+            if (shouldLabel)
+            {
+                g.setColour (db >= 0.0f ? theme.danger : theme.text);
+                const int dbInt = static_cast<int> (std::lround (static_cast<double> (db)));
+                juce::String label = juce::String (dbInt);
+                if (db > 0.0f) label = "+" + label;
+                g.drawText (label, juce::Rectangle<float> (xLeft, y - 5.0f, width, 10.0f), juce::Justification::centred);
+            }
+        }
     }
 
     // Channel label

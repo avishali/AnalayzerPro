@@ -7,6 +7,7 @@
 #include <mdsp_ui/controls/ChoiceRow.h>
 #include <mdsp_ui/controls/ToggleRow.h>
 #include "DraggableParamValueLabel.h"
+#include "CollapsibleSection.h"
 #include <functional>
 
 //==============================================================================
@@ -28,6 +29,17 @@ public:
     /** Full height required to show all rows (for Viewport content size). */
     int getPreferredHeight() const noexcept;
 
+    /** Callback when section expand/collapse changes preferred height (parent should resized()). */
+    std::function<void()> onPreferredHeightChanged;
+
+    /** Expand the Analysis Mode section (e.g. when HeaderBar "Mode…" is clicked). */
+    void expandAnalysisModeSection();
+
+    /** Mode sync: set from parameter/model. 1=FFT, 2=BAND, 3=LOG. */
+    void setMode (int modeIndex);
+    /** Fired when user changes mode; connect to APVTS like HeaderBar. */
+    std::function<void(int)> onModeChanged;
+
     // Scope Callbacks
     std::function<void(int)> onScopeModeChanged;  // 1=Peak, 2=RMS
     std::function<void(int)> onScopeShapeChanged; // 1=Lissajous, 2=Scatter
@@ -41,6 +53,12 @@ private:
     AnalyzerPro::ControlBinder* controlBinder = nullptr;
 
     void triggerResetPeaks();
+    void setSelectedModeId (int id) // 1=FFT, 2=BAND, 3=LOG
+    {
+        fftButton_.setToggleState (id == 1, juce::dontSendNotification);
+        bandButton_.setToggleState (id == 2, juce::dontSendNotification);
+        logButton_.setToggleState (id == 3, juce::dontSendNotification);
+    }
     std::function<void()> onResetPeaks_;
 
     mdsp_ui::UiContext& ui_;
@@ -67,6 +85,18 @@ private:
     mdsp_ui::SectionHeader analyzerHeader;
     mdsp_ui::SectionHeader displayHeader;
     mdsp_ui::SectionHeader metersHeader;
+
+    // Collapsible sections (Scopes, Traces, Analysis Mode — default collapsed)
+    CollapsibleSection scopesSection_;
+    CollapsibleSection tracesSection_;
+    CollapsibleSection analysisModeSection_;
+
+    // Analysis Mode controls (moved from HeaderBar into rail)
+    juce::TextButton fftButton_;
+    juce::TextButton bandButton_;
+    juce::TextButton logButton_;
+    juce::ComboBox fftSizeCombo_;
+    mdsp_ui::ChoiceRow fftSizeRow_;
     
     // Control rows
     mdsp_ui::ToggleRow holdRow;

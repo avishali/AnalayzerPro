@@ -199,6 +199,10 @@ target_sources(${PLUGIN_NAME}
         Source/ui/meters/MeterComponent.h
         Source/ui/meters/MeterGroupComponent.cpp
         Source/ui/meters/MeterGroupComponent.h
+        Source/ui/meters/StereoScopeComponent.cpp
+        Source/ui/meters/StereoScopeComponent.h
+        Source/ui/meters/PhaseFanScopeComponent.cpp
+        Source/ui/meters/PhaseFanScopeComponent.h
         Source/hardware/PluginHardwareAdapter.cpp
         Source/hardware/PluginHardwareAdapter.h
         Source/hardware/PluginHardwareOutputAdapter.cpp
@@ -214,6 +218,8 @@ target_sources(${PLUGIN_NAME}
         Source/ui/analyzer/rta1_import/RTADisplay.cpp
         Source/ui/layout/HeaderBar.cpp
         Source/ui/layout/ControlRail.cpp
+        Source/ui/layout/CollapsibleSection.cpp
+        Source/ui/layout/CollapsibleArrowComponent.cpp
         Source/ui/layout/DraggableParamValueLabel.cpp
         Source/ui/layout/FooterBar.cpp
         Source/ui/views/AnalyzerGridPlaceholder.cpp

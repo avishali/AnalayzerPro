@@ -78,6 +78,12 @@ struct AnalyzerSnapshot
     bool isHoldOn = false;
     bool multiTraceEnabled = false;
     int weightingMode = 0; // 0=None, 1=A, 2=BS.468 (applied engine-side to power before smoothing)
+    /** True if Engine applied spectral smoothing. UI must bypass its own smoothing when true. */
+    bool engineDidSpectralSmooth = false;
+    /** True when Option A (UISmoothingLogGaussian): smoothing only in UI convertFFTToLog. SmoothingProcessor must bypass. */
+    bool useUILogGaussianOnly = true;
+    /** Smoothing octaves (0=Off, 1/24, 1/12, 1/6, 1/3, 1). Used by UI for single-stage enforcement. */
+    float smoothingOctaves = 0.0f;
 };
 
 //==============================================================================

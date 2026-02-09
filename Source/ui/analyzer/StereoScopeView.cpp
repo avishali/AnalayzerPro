@@ -1,4 +1,10 @@
 #include "StereoScopeView.h"
+#include <cmath>
+
+namespace
+{
+    constexpr int kRenderPadX = 2;   // symmetric padding so rendered scope stays square
+}
 
 StereoScopeView::StereoScopeView (mdsp_ui::UiContext& ui, StereoScopeAnalyzer& analyzer)
     : ui_ (ui), analyzer_ (analyzer)
@@ -17,12 +23,30 @@ StereoScopeView::~StereoScopeView()
 
 void StereoScopeView::resized()
 {
-    // Re-allocate images on resize
     auto area = getLocalBounds();
-    if (area.isEmpty()) return;
-    
-    accumImage_ = juce::Image (juce::Image::ARGB, area.getWidth(), area.getHeight(), true);
-    heldImage_ = juce::Image (juce::Image::ARGB, area.getWidth(), area.getHeight(), true);
+    if (area.isEmpty())
+        return;
+
+    // Enforce square plot inside the view
+    const int side = juce::jmin (area.getWidth(), area.getHeight());
+
+    auto plot = juce::Rectangle<int> (side, side)
+        .withCentre (area.getCentre())
+        .reduced (kRenderPadX); // symmetric padding only
+
+    if (plot.getWidth() <= 0 || plot.getHeight() <= 0)
+        return;
+
+    // Allocate square backing images
+    accumImage_ = juce::Image (juce::Image::ARGB,
+                               plot.getWidth(),
+                               plot.getHeight(),
+                               true);
+
+    heldImage_  = juce::Image (juce::Image::ARGB,
+                               plot.getWidth(),
+                               plot.getHeight(),
+                               true);
 }
 
 void StereoScopeView::timerCallback()
@@ -30,7 +54,8 @@ void StereoScopeView::timerCallback()
     // Fetch latest snapshot
     int numSamples = analyzer_.getSnapshot (lBuffer_, rBuffer_, static_cast<int> (lBuffer_.size()));
     
-    if (numSamples > 0)
+    if (numSamples > 0 && !accumImage_.isNull()
+        && accumImage_.getWidth() > 0 && accumImage_.getHeight() > 0)
     {
         // Decay existing image (only if hold is OFF)
         if (!holdEnabled_)
@@ -38,10 +63,11 @@ void StereoScopeView::timerCallback()
             accumImage_.multiplyAllAlphas (decayFactor_);
         }
         
-        renderScopeToImage(numSamples);
+        renderScopeToImage (numSamples);
         
         // If hold enabled, composite with max logic
-        if (holdEnabled_ && !heldImage_.isNull())
+        if (holdEnabled_ && !heldImage_.isNull()
+            && heldImage_.getWidth() > 0 && heldImage_.getHeight() > 0)
         {
             // Composite: for each pixel, take max alpha (brightest)
             // Simple approach: just overlay new on held
@@ -56,6 +82,7 @@ void StereoScopeView::timerCallback()
 void StereoScopeView::renderScopeToImage(int numSamples)
 {
     if (accumImage_.isNull()) return;
+    if (accumImage_.getWidth() <= 0 || accumImage_.getHeight() <= 0) return;
 
     // Step 6: Safety check for buffer sizes
     // Ensure we don't read beyond buffer bounds
@@ -168,6 +195,10 @@ void StereoScopeView::renderScopeToImage(int numSamples)
             sy = cy - r * radius;
         }
         
+        // Guard against NaN/Inf from bad input (avoids CoreGraphics crash in fillRect)
+        if (!std::isfinite (sx) || !std::isfinite (sy))
+            continue;
+
         if (scopeShape_ == ScopeShape::Lissajous)
         {
             if (first)
@@ -180,9 +211,14 @@ void StereoScopeView::renderScopeToImage(int numSamples)
                 p.lineTo (sx, sy);
             }
         }
-        else // Scatter
+        else // Scatter: clamp rect to image bounds to avoid CoreGraphics RIPLayer crash
         {
-             g.fillRect (sx - 1.0f, sy - 1.0f, 2.0f, 2.0f);
+            const float rx = juce::jlimit (0.0f, w - 1.0f, sx - 1.0f);
+            const float ry = juce::jlimit (0.0f, h - 1.0f, sy - 1.0f);
+            const float rw = juce::jmin (2.0f, w - rx);
+            const float rh = juce::jmin (2.0f, h - ry);
+            if (rw > 0.0f && rh > 0.0f)
+                g.fillRect (rx, ry, rw, rh);
         }
     }
     
@@ -195,57 +231,51 @@ void StereoScopeView::renderScopeToImage(int numSamples)
 void StereoScopeView::paint (juce::Graphics& g)
 {
     const auto& theme = ui_.theme();
-    // Background
     g.fillAll (theme.panel);
-    
-    // Grid / Axes
-    g.setColour (theme.grid);
+
     auto area = getLocalBounds().toFloat();
-    float cx = area.getCentreX();
-    float cy = area.getCentreY();
-    
-    // Diagonal lines (L/R axes)
-    // L axis: y + x = c? No.
-    // L only: R=0 -> M=L/2, S=L/2 -> X=L/2, Y=L/2. Diagonal /
-    // R only: L=0 -> M=R/2, S=-R/2 -> X=-R/2, Y=R/2. Diagonal \
-    
-    // Center cross (Mid/Side axes)
-    g.drawVerticalLine (static_cast<int> (cx), 0.0f, area.getHeight());
-    g.drawHorizontalLine (static_cast<int> (cy), 0.0f, area.getWidth());
-    
-    // Diagonals (L/R)
-    // Not easy to draw infinite diagonal in rect.
-    // Just draw a cross 45 deg?
-    // Let's stick to M/S grid for now (Vertical/Horizontal).
-    
-    // Draw Labels (L, R, M, S)
+
+    const float side = juce::jmin (area.getWidth(), area.getHeight());
+
+    auto plot = juce::Rectangle<float> (side, side)
+        .withCentre (area.getCentre())
+        .reduced (float (kRenderPadX));
+
+    if (plot.getWidth() <= 0 || plot.getHeight() <= 0)
+        return;
+
+    float cx = plot.getCentreX();
+    float cy = plot.getCentreY();
+
+    g.setColour (theme.grid);
+    g.drawVerticalLine (static_cast<int> (cx), plot.getY(), plot.getBottom());
+    g.drawHorizontalLine (static_cast<int> (cy), plot.getX(), plot.getRight());
+
     g.setColour (theme.textMuted);
     g.setFont (ui_.type().labelSmallFont());
-    
-    // Draw Labels based on Mode
+
     if (channelMode_ == ChannelMode::MidSide)
     {
-        g.drawText ("M", juce::Rectangle<float> (cx + 2, 2, 20, 12), juce::Justification::topLeft, false);
-        g.drawText ("S", juce::Rectangle<float> (area.getRight() - 20, cy - 12, 15, 12), juce::Justification::centredRight, false);
+        g.drawText ("M", juce::Rectangle<float> (cx + 2, plot.getY() + 2, 20, 12), juce::Justification::topLeft, false);
+        g.drawText ("S", juce::Rectangle<float> (plot.getRight() - 20, cy - 12, 15, 12), juce::Justification::centredRight, false);
     }
     else
     {
-        // Stereo Mode Labels: Y-axis is R, X-axis is L
-        g.drawText ("R", juce::Rectangle<float> (cx + 2, 2, 20, 12), juce::Justification::topLeft, false);
-        g.drawText ("L", juce::Rectangle<float> (area.getRight() - 20, cy - 12, 15, 12), juce::Justification::centredRight, false);
+        g.drawText ("R", juce::Rectangle<float> (cx + 2, plot.getY() + 2, 20, 12), juce::Justification::topLeft, false);
+        g.drawText ("L", juce::Rectangle<float> (plot.getRight() - 20, cy - 12, 15, 12), juce::Justification::centredRight, false);
     }
-    
-    // Draw Accumulation Buffer (or held if holding)
+
+    auto plotInt = plot.toNearestInt();
+    g.saveState();
+    g.reduceClipRegion (plotInt);
+
     if (holdEnabled_ && !heldImage_.isNull())
-    {
-        g.drawImageAt (heldImage_, 0, 0);
-    }
+        g.drawImageAt (heldImage_, plotInt.getX(), plotInt.getY());
     else if (!accumImage_.isNull())
-    {
-        g.drawImageAt (accumImage_, 0, 0);
-    }
-    
-    // Border
+        g.drawImageAt (accumImage_, plotInt.getX(), plotInt.getY());
+
+    g.restoreState();
+
     g.setColour (theme.borderDivider);
     g.drawRect (area, 1.0f);
 }
