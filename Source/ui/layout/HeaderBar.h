@@ -27,6 +27,9 @@ public:
     std::function<void (int)> onPeakRangeChanged;
     void setPeakRangeSelectedId (int id);
 
+    // Control Rail Toggle
+    std::function<void()> onRailToggleClicked;
+
     // State Management
     void setManagers (AnalyzerPro::presets::PresetManager* pm, AnalyzerPro::presets::ABStateManager* sm);
     
@@ -48,6 +51,7 @@ private:
     juce::TextButton slotAButton;
     juce::TextButton slotBButton;
     juce::ToggleButton bypassButton; // Bound to param
+    juce::ToggleButton railToggleButton; // Toggle control rail visibility
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HeaderBar)
 };
