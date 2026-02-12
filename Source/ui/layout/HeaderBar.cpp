@@ -94,7 +94,7 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     addAndMakeVisible (bypassButton);
 
     // Control Rail Toggle
-    railToggleButton.setButtonText ("☰");
+    railToggleButton.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x98\xb0")));  // ☰ hamburger
     railToggleButton.setClickingTogglesState (true);
     railToggleButton.setToggleState (true, juce::dontSendNotification); // Default: rail is open
     railToggleButton.setColour (juce::ToggleButton::tickColourId, theme.accent);

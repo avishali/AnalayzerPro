@@ -1,4 +1,6 @@
 #include "CollapsibleArrowComponent.h"
+#include <mdsp_ui/IconCache.h>
+#include <mdsp_ui/IconIds.generated.h>
 
 //==============================================================================
 CollapsibleArrowComponent::CollapsibleArrowComponent (mdsp_ui::UiContext& ui)
@@ -34,13 +36,24 @@ void CollapsibleArrowComponent::paint (juce::Graphics& g)
     const float cx = w * 0.5f;
     const float cy = h * 0.5f;
     const int size = juce::jmin (juce::jmin (w, h) - 4, 14);
-    const float s2 = size * 0.5f;
 
-    // Base shape: right-pointing triangle (▶) centered at origin
-    juce::Path p;
-    p.addTriangle (-s2, -s2, -s2, s2, s2, 0.0f);
-
-    g.setColour (theme.lightGrey);
-    g.addTransform (juce::AffineTransform::translation (cx, cy).rotated (arrowAngle_));
-    g.fillPath (p);
+    // Get SVG icon from cache instead of manual triangle drawing
+    const juce::Drawable* iconDrawable = ui_.icons().get (mdsp_ui::IconId::chevron_down);
+    if (iconDrawable != nullptr)
+    {
+        // Create a tinted copy for this component
+        auto tintedIcon = ui_.icons().makeTinted (mdsp_ui::IconId::chevron_down, theme.lightGrey);
+        if (tintedIcon != nullptr)
+        {
+            // Calculate bounds centered in component
+            juce::Rectangle<float> iconBounds (cx - size * 0.5f, cy - size * 0.5f, size, size);
+            
+            // Apply rotation transform
+            g.addTransform (juce::AffineTransform::translation (cx, cy)
+                                              .rotated (arrowAngle_)
+                                              .translated (-cx, -cy));
+            
+            tintedIcon->drawWithin (g, iconBounds, juce::RectanglePlacement::centred, 1.0f);
+        }
+    }
 }
