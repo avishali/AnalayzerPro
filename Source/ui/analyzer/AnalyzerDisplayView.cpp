@@ -702,7 +702,6 @@ void AnalyzerDisplayView::timerCallback()
         }();
         specSettings.rangeMinDb = dbRangeToMinDb (dbRange_) + displayGainDb;
         specSettings.rangeMaxDb = 0.0f + displayGainDb;
-        specSettings.fftOrder = mdsp::gui::SpectrumComponent::fftOrder;
         auto* pFftSize = apvts.getRawParameterValue ("FftSize");
         if (pFftSize != nullptr)
         {

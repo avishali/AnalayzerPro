@@ -1,36 +1,56 @@
-Paste-ready Implementer prompt (Cursor)
+Return only the final prompt content.
+No markdown.
+No explanation.
 
-Return only the final modified content for the touched files. No markdown. No explanation.
+You are Cursor inside the AnalyzerPro JUCE project.
 
-Goal:
-	•	Option A stays: Gaussian smoothing happens ONLY in UI log domain (256 log bins) in LINEAR POWER.
-	•	Engine never performs spectral smoothing when Option A is active.
-	•	“engineDidSpectralSmooth” flag is correctly produced by Engine and consumed by UI (single source of truth).
-	•	Remove any possibility of double-smoothing (Engine + UI, or UI SmoothingProcessor + UI Gaussian).
-	•	Remove ALL heap allocations from the audio thread (multi-trace included).
+PROBLEM
+Top bar buttons (Preset/Save/A/B/BYPASS) visually appear doubled. This is NOT text duplication. It is background overdraw: two rounded-rectangle button faces are being painted (likely parent + LookAndFeel or ButtonPaint).
 
-Tasks:
-	1.	AnalyzerEngine.cpp
-	•	Remove / disable the prefix-sum spectral smoothing path cleanly (do not leave a hardcoded engineWillSmooth=false inside the loop).
-	•	Add a clear config point: spectralSmoothingStage = UISmoothingLogGaussian (or similar) and set snapshot.engineDidSpectralSmooth = false when Option A is used.
-	•	Fix multi-trace: eliminate std::vector allocations in the audio thread. Preallocate member buffers sized to numBins in prepareToPlay / on FFT size change.
-	2.	AnalyzerSnapshot (where defined)
-	•	Ensure it has bool engineDidSpectralSmooth = false; (or equivalent) and it is set every publish.
-	3.	AnalyzerDisplayView.cpp
-	•	In convertFFTToLog:
-	•	Build logPower[256] in linear power (already done via db->power conversion).
-	•	Apply LogGaussianSmoother ONLY when octaves > 0 AND snapshot.engineDidSpectralSmooth == false.
-	•	After smoothing, convert smoothedPower -> dB for logDb.
-	•	Ensure UI SmoothingProcessor is not applied on the same data path (either remove from FFT path or force bypass always for FFT mode when Option A is in use).
+GOAL
+Eliminate background double-paint so each button background is rendered exactly once.
 
-Constraints:
-	•	Real-time safe: no allocations or resizes in audio processing callbacks.
-	•	UI smoothing config (1/24..1 Oct) maps to gaussian sigma in log-bin space consistently.
-	•	Peak trace remains independent.
+TASKS
+	1.	Locate ALL rounded-rectangle drawing related to top bar buttons:
 
-Files likely touched:
-	•	Source/analyzer/AnalyzerEngine.cpp
-	•	Source/analyzer/AnalyzerSnapshot.h (or wherever AnalyzerSnapshot lives)
-	•	Source/ui/analyzer/AnalyzerDisplayView.cpp
+	•	Search for fillRoundedRectangle / drawRoundedRectangle in:
+	•	HeaderBar.cpp
+	•	TopBar.cpp
+	•	MainView.cpp
+	•	LookAndFeel.cpp
+	•	ButtonPaint.cpp
 
-⸻
+	2.	Identify if a parent component paints button-like shapes behind real Button components.
+
+	•	If yes: remove per-button background painting from parent.
+	•	Parent should paint only the bar background, NOT individual button pills.
+
+	3.	Ensure the only place button backgrounds are painted is:
+
+	•	LookAndFeel::drawButtonBackground()
+OR
+	•	paintTextButton() (but not both if both exist).
+
+	4.	Verify no base class calls re-draw backgrounds.
+
+	•	If paintTextButton() draws background, ensure drawButtonBackground() is not also drawing one.
+	•	There must be ONE background path only.
+
+	5.	Specifically inspect top bar button construction:
+
+	•	Confirm each button is added once.
+	•	Confirm no “background helper component” exists behind them.
+
+	6.	After fix:
+
+	•	Each button must render:
+	•	Background (once)
+	•	Text (once, already centralized)
+	•	No shadow ghost behind
+
+DELIVERABLES
+	•	FILES CHANGED
+	•	Exact root cause (parent paint OR double LAF background)
+	•	Unified diffs
+
+START WITH HeaderBar / TopBar FIRST.

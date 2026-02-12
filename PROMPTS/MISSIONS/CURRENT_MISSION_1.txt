@@ -1,71 +1,67 @@
-Obey 00_SYSTEM_RULES.txt.
-You are the IMPLEMENTER.
+Return only the final prompt content.
+No markdown.
+No explanation.
 
-Mission: MULTI_TRACE_DUALFFT_V1 — PHASE 3 (Option B: L/R only)
+You are Cursor inside the AnalyzerPro JUCE project.
 
-Goal:
-Visually validate dual FFT by rendering an L trace (and optionally R) in addition to existing Peak (yellow) and RMS (blue).
-Do NOT implement Mono/Mid/Side yet.
+GOAL
+Lock in the “no double drawing” button rendering architecture and prevent regressions:
+	•	Ensure no LookAndFeel function draws text twice (TextButton and ToggleButton).
+	•	Ensure icon-only buttons never have visible text (must be setButtonText(””)).
+	•	Ensure SVG icons are not drawn twice via state images (normal/over/down) layering.
+	•	Add lightweight debug assertions (JUCE_DEBUG only) to catch violations early.
 
-Hard constraints:
-- Minimal diffs (~85 lines target).
-- No allocations in paint().
-- No audio-thread changes.
-- Do NOT modify computeFFT().
-- STOP after each step and report.
+HARD REQUIREMENTS
+	•	No layout changes.
+	•	No DSP/audio changes.
+	•	Must build warning-clean on macOS.
+	•	Debug checks must compile out in release.
 
-Scope (ONLY):
-- Source/ui/analyzer/AnalyzerDisplayView.cpp
-- Source/ui/analyzer/RTADisplay.h
-- Source/ui/analyzer/RTADisplay.cpp
+TASKS
+	1.	LookAndFeel: enforce single-text-path invariant
 
-Design (LOCKED):
-- Use existing snapshot.powerL / snapshot.powerR.
-- Convert to dB using the same scale/mapping as current peak/RMS.
-- Colors:
-  - Peak: existing yellow (unchanged)
-  - RMS: existing blue (unchanged)
-  - L trace: green (e.g., 0xff00c853)
-  - R trace (optional): magenta (e.g., 0xffd81b60)
-- Traces controlled by existing toggles:
-  - showL → L trace
-  - showR → R trace
+	•	Search for any overrides or calls that might double-render text:
+	•	drawTextButton
+	•	drawButtonText
+	•	drawToggleButton
+	•	LookAndFeel_V4::drawToggleButton
+	•	LookAndFeel_V4::drawButtonText
+	•	Ensure:
+	•	TextButton: only drawButtonText draws the text (and it returns early if text empty).
+	•	ToggleButton: only drawToggleButton draws the toggle text once (and returns early if text empty).
+	•	If any base calls would draw text, remove them or replace with background-only helper.
 
-Execution:
+	2.	Icon-only buttons: enforce empty text at construction
 
-STEP 3B.1 — Pass L/R data into RTADisplay
-- In AnalyzerDisplayView.cpp, where snapshot is applied:
-  - Add calls like:
-      rtaDisplay.setLData(snapshot.powerL)
-      rtaDisplay.setRData(snapshot.powerR)
-- Feature-flagged by enableMultiTrace_ if necessary.
-STOP and report.
+	•	Find all buttons intended to be icon-only (top bar buttons, collapsible arrows, small utility buttons).
+	•	Ensure each such button explicitly calls setButtonText(””).
+	•	If any icon-only buttons currently rely on text for tooltip/accessibility:
+	•	Keep tooltip/accessibility name, but button text must remain empty.
 
-STEP 3B.2 — Extend RTADisplay API
-- In RTADisplay.h:
-  - Add members to store L/R power spans or references.
-  - Add setters: setLData(...), setRData(...).
-STOP and report.
+	3.	SVG state images: prevent double icon compositing
 
-STEP 3B.3 — Render L/R traces
-- In RTADisplay::paint():
-  - After Peak/RMS rendering, check:
-      if (traceConfig.showL) → render L trace
-      if (traceConfig.showR) → render R trace
-  - Use the same decimation + path stroke pipeline as peak/RMS.
-  - No allocations.
-STOP and report.
+	•	Inspect SvgIconButton / DrawableButton usage (setImages / setImage / setImages with multiple drawables).
+	•	Confirm we are not accidentally stacking multiple Drawables at the same time:
+	•	Do not set both “normal image” and also paint an icon manually.
+	•	For state images, ensure only one drawable is used per state (normal OR over OR down), not “normal + over simultaneously”.
+	•	If the current helper uses the same Drawable pointer mutated/tinted for multiple states, fix it so each state uses its own immutable Drawable instance (no shared mutation that could render twice).
 
-STEP 3B.4 — Visual sanity test
-Test signals:
-A) Left-only sine:
-   - L trace strong
-   - R trace near floor
-B) Right-only sine:
-   - Opposite
-C) Stereo identical:
-   - L and R traces overlap
-Deliverable:
-- Files changed
-- Test results
-STOP.
+	4.	Add JUCE_DEBUG-only regression checks
+
+	•	For TextButton: in drawButtonText(), add a debug check that paintTextButton did not draw text.
+	•	Implement as a simple global/thread-local “currentlyDrawingButtonText” guard:
+	•	Set flag at start of drawButtonText and clear at end.
+	•	In ButtonPaint.cpp (paintTextButton / paintToggleButton), assert that the flag is false and that these functions never call drawText/drawFittedText (they shouldn’t exist anymore, but guard anyway).
+	•	For icon-only buttons: in their setup code (where icons are assigned), DBG()/jassert that getButtonText().isEmpty().
+
+	5.	Verification
+
+	•	Confirm ripgrep shows no drawText/drawFittedText in ButtonPaint.cpp.
+	•	Confirm no LookAndFeel base calls that draw text remain.
+	•	Confirm icon-only buttons setButtonText(””).
+	•	Confirm no doubled icons/text in UI.
+
+DELIVERABLES
+	•	FILES CHANGED
+	•	SUMMARY of what invariants are enforced and where
+	•	Unified diffs for all changed files
