@@ -7,7 +7,7 @@
 #include <mdsp_ui/controls/ChoiceRow.h>
 #include <mdsp_ui/controls/ToggleRow.h>
 #include "DraggableParamValueLabel.h"
-#include "CollapsibleSection.h"
+#include <mdsp_ui/controls/CollapsibleSection.h>
 #include <functional>
 
 //==============================================================================
@@ -87,9 +87,9 @@ private:
     mdsp_ui::SectionHeader metersHeader;
 
     // Collapsible sections (Scopes, Traces, Analysis Mode — default collapsed)
-    CollapsibleSection scopesSection_;
-    CollapsibleSection tracesSection_;
-    CollapsibleSection analysisModeSection_;
+    mdsp_ui::CollapsibleSection scopesSection_;
+    mdsp_ui::CollapsibleSection tracesSection_;
+    mdsp_ui::CollapsibleSection analysisModeSection_;
 
     // Analysis Mode controls (moved from HeaderBar into rail)
     juce::TextButton fftButton_;
