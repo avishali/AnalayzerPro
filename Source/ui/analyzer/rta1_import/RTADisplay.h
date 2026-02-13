@@ -278,6 +278,8 @@ private:
     int mapFreqToBinIndex (float freqHz, const RenderState& s) const;
     // FFT crosshair: get dB at bin for active trace (peak if enabled, else main); returns -200.0f if invalid
     float getActiveTraceDbAtBin (int binIndex, const RenderState& s) const;
+    // FFT crosshair: get interpolated dB at pixel X (matches trace rendering, smooth tracking)
+    float getDbAtPixelX (float xPx, const RenderState& s) const;
 
     // B1: RTADisplay owns one RenderState state
     RenderState state;
@@ -299,10 +301,11 @@ private:
     // Hover state
     int hoveredBandIndex = -1;
 
-    // FFT crosshair hover state (snapped to bin: X = freqToX(snappedFreq), Y = dbToY(snappedDb))
+    // FFT crosshair hover state
     bool fftHoverActive_ = false;
     int fftHoverBinIndex_ = -1;
-    float fftHoverSnappedXpx_ = 0.0f;
+    float fftHoverMouseXpx_ = 0.0f;   // Actual mouse X for smooth vertical line
+    float fftHoverSnappedXpx_ = 0.0f; // Bin center X (fallback)
     float fftHoverSnappedYpx_ = 0.0f;
     float fftHoverSnappedFreq_ = 0.0f;
     float fftHoverSnappedDb_ = 0.0f;
