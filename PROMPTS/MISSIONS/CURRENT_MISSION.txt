@@ -4,53 +4,47 @@ No explanation.
 
 You are Cursor inside the AnalyzerPro JUCE project.
 
-PROBLEM
-Top bar buttons (Preset/Save/A/B/BYPASS) visually appear doubled. This is NOT text duplication. It is background overdraw: two rounded-rectangle button faces are being painted (likely parent + LookAndFeel or ButtonPaint).
-
 GOAL
-Eliminate background double-paint so each button background is rendered exactly once.
+Harden the new top-bar pixel-snapping + inside-stroke implementation against edge cases:
+	•	Prevent negative corner radii after inside-stroke adjustment
+	•	Ensure fill/stroke rects share the exact same snapped basis (no drift)
+	•	Ensure row layout snapping does not accumulate rounding error across multiple buttons
+
+HARD REQUIREMENTS
+	•	No visual redesign; keep the same look.
+	•	No layout changes except micro-adjustments needed for deterministic snapping.
+	•	No DSP/audio changes.
+	•	macOS warning-clean.
 
 TASKS
-	1.	Locate ALL rounded-rectangle drawing related to top bar buttons:
+	1.	Clamp stroke radius safely
+In HeaderBarLookAndFeel (or wherever strokeRadius is computed):
 
-	•	Search for fillRoundedRectangle / drawRoundedRectangle in:
-	•	HeaderBar.cpp
-	•	TopBar.cpp
-	•	MainView.cpp
-	•	LookAndFeel.cpp
-	•	ButtonPaint.cpp
+	•	If strokeRadius = radius - 0.5f, clamp:
+strokeRadius = juce::jmax(0.0f, radius - 0.5f);
+	•	If any snapRadius helper exists, ensure the clamped value is snapped after clamp (or snap then clamp, but be consistent).
 
-	2.	Identify if a parent component paints button-like shapes behind real Button components.
+	2.	Derive inside-stroke rect from snapped fill rect
 
-	•	If yes: remove per-button background painting from parent.
-	•	Parent should paint only the bar background, NOT individual button pills.
+	•	Ensure fill rect is snapped once:
+fillR = PixelSnap::snapRectToPixels(bounds.toFloat())
+	•	Compute stroke rect only from fillR:
+strokeR = PixelSnap::insetForInsideStroke(fillR, 1.0f)
+	•	Do not recompute from original bounds.
 
-	3.	Ensure the only place button backgrounds are painted is:
+	3.	Prevent cumulative rounding drift in button row layout
+In HeaderBar::resized():
 
-	•	LookAndFeel::drawButtonBackground()
-OR
-	•	paintTextButton() (but not both if both exist).
-
-	4.	Verify no base class calls re-draw backgrounds.
-
-	•	If paintTextButton() draws background, ensure drawButtonBackground() is not also drawing one.
-	•	There must be ONE background path only.
-
-	5.	Specifically inspect top bar button construction:
-
-	•	Confirm each button is added once.
-	•	Confirm no “background helper component” exists behind them.
-
-	6.	After fix:
-
-	•	Each button must render:
-	•	Background (once)
-	•	Text (once, already centralized)
-	•	No shadow ghost behind
+	•	Ensure canonical row is snapped once (int coords).
+	•	Ensure buttonH and y are integer pixels.
+	•	When placing buttons left→right:
+	•	snap x once at start
+	•	snap each width
+	•	gap is integer
+	•	next x = x + w + gap using integer arithmetic
+	•	Ensure last button stays within row (clamp width if needed by 1px rather than overflowing).
 
 DELIVERABLES
 	•	FILES CHANGED
-	•	Exact root cause (parent paint OR double LAF background)
+	•	SUMMARY of the hardening changes
 	•	Unified diffs
-
-START WITH HeaderBar / TopBar FIRST.

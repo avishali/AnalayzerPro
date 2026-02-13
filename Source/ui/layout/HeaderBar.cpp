@@ -1,11 +1,138 @@
 #include "HeaderBar.h"
+#include "PixelSnap.h"
+#include "LayoutConstants.h"
 #include "../../control/ControlIds.h"
 #include "../../control/ControlBinder.h"
+#include <mdsp_ui/ButtonStyle.h>
+#include <mdsp_ui/UiContext.h>
+#include <cmath>
+
+using namespace AnalyzerPro::Layout;
+
+namespace
+{
+constexpr float kInsideStrokePx = 1.0f;
+
+static void getStateColours (const juce::Button& b, const mdsp_ui::ButtonStyle& s,
+                             juce::Colour& bg, juce::Colour& border)
+{
+    bg = s.bg;
+    border = s.border;
+    if (! b.isEnabled())
+    {
+        bg = s.bgDisabled;
+        border = s.border.withMultipliedAlpha (0.5f);
+    }
+    else if (b.isDown())
+    {
+        bg = s.bgDown;
+        border = s.borderDown;
+    }
+    else if (b.isOver())
+    {
+        bg = s.bgHover;
+        border = s.borderHover;
+    }
+}
+
+class HeaderBarLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    explicit HeaderBarLookAndFeel (mdsp_ui::UiContext& ui) : ui_ (ui) {}
+
+    void drawButtonBackground (juce::Graphics& g, juce::Button& button,
+                              const juce::Colour&, bool, bool) override
+    {
+        const juce::Rectangle<float> fillR = snapRectToPixels (button.getLocalBounds().toFloat());
+        const float radius = snapRadius (juce::jmin (ui_.metrics().rMed, fillR.getHeight() * 0.5f));
+        const float strokeRadius = snapRadius (juce::jmax (0.0f, radius - 0.5f));
+        const juce::Rectangle<float> strokeR = insetForInsideStroke (fillR, kInsideStrokePx);
+
+        juce::Colour bgColour, borderColour;
+        auto* toggle = dynamic_cast<juce::ToggleButton*> (&button);
+        if (toggle != nullptr)
+        {
+            auto style = mdsp_ui::makeToggleButtonStyle (ui_, toggle->getToggleState(), toggle->isEnabled());
+            getStateColours (button, style, bgColour, borderColour);
+            g.setColour (bgColour);
+            g.fillRoundedRectangle (fillR, radius);
+            g.setColour (borderColour);
+            g.drawRoundedRectangle (strokeR, strokeRadius, kInsideStrokePx);
+            if (toggle->getToggleState())
+            {
+                const float indSize = 6.0f;
+                const float indX = fillR.getX() + radius + 4.0f;
+                const float indY = fillR.getCentreY();
+                g.setColour (toggle->isEnabled() ? style.text : style.textDisabled);
+                g.fillEllipse (indX - indSize * 0.5f, indY - indSize * 0.5f, indSize, indSize);
+            }
+        }
+        else
+        {
+            auto style = mdsp_ui::makePrimaryButtonStyle (ui_, button.isEnabled());
+            getStateColours (button, style, bgColour, borderColour);
+            g.setColour (bgColour);
+            g.fillRoundedRectangle (fillR, radius);
+            g.setColour (borderColour);
+            g.drawRoundedRectangle (strokeR, strokeRadius, kInsideStrokePx);
+        }
+        if (button.hasKeyboardFocus (true))
+        {
+            const float focusPx = ui_.metrics().strokeThin;
+            auto focusBounds = snapRectToPixels (fillR.expanded (focusPx));
+            g.setColour (toggle != nullptr
+                ? mdsp_ui::makeToggleButtonStyle (ui_, static_cast<juce::ToggleButton*>(&button)->getToggleState(), true).focusRing
+                : mdsp_ui::makePrimaryButtonStyle (ui_, true).focusRing);
+            g.drawRoundedRectangle (focusBounds.toFloat(), radius + focusPx, focusPx);
+        }
+    }
+
+    void drawButtonText (juce::Graphics& g, juce::TextButton& button,
+                         bool, bool) override
+    {
+        const juce::Rectangle<float> fillR = snapRectToPixels (button.getLocalBounds().toFloat());
+        auto* toggle = dynamic_cast<juce::ToggleButton*> (&button);
+        if (toggle != nullptr)
+        {
+            auto style = mdsp_ui::makeToggleButtonStyle (ui_, toggle->getToggleState(), toggle->isEnabled());
+            juce::Rectangle<float> textBounds = fillR;
+            const float radius = ui_.metrics().rMed;
+            const float indSize = 6.0f;
+            const float leftMargin = toggle->getToggleState()
+                ? (radius + 4.0f + indSize * 0.5f + 4.0f)
+                : (radius + 4.0f);
+            textBounds.removeFromLeft (leftMargin);
+            g.setColour (toggle->isEnabled() ? style.text : style.textDisabled);
+            g.setFont (ui_.type().labelFont());
+            g.drawFittedText (button.getButtonText(), textBounds.toNearestInt(), juce::Justification::centredLeft, 1);
+        }
+        else
+        {
+            auto style = mdsp_ui::makePrimaryButtonStyle (ui_, button.isEnabled());
+            g.setColour (button.isEnabled() ? style.text : style.textDisabled);
+            g.setFont (ui_.type().labelFont());
+            g.drawFittedText (button.getButtonText(), fillR.toNearestInt(), juce::Justification::centred, 1);
+        }
+    }
+
+private:
+    mdsp_ui::UiContext& ui_;
+};
+} // namespace
 
 //==============================================================================
 HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     : ui_ (ui)
 {
+    headerBarLook_ = std::make_unique<HeaderBarLookAndFeel> (ui_);
+    auto* laf = headerBarLook_.get();
+    presetButton.setLookAndFeel (laf);
+    saveButton.setLookAndFeel (laf);
+    slotAButton.setLookAndFeel (laf);
+    slotBButton.setLookAndFeel (laf);
+    bypassButton.setLookAndFeel (laf);
+    railToggleButton.setLookAndFeel (laf);
+
     const auto& theme = ui_.theme();
     const auto& type = ui_.type();
 
@@ -108,7 +235,15 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     addAndMakeVisible (railToggleButton);
 }
 
-HeaderBar::~HeaderBar() = default;
+HeaderBar::~HeaderBar()
+{
+    presetButton.setLookAndFeel (nullptr);
+    saveButton.setLookAndFeel (nullptr);
+    slotAButton.setLookAndFeel (nullptr);
+    slotBButton.setLookAndFeel (nullptr);
+    bypassButton.setLookAndFeel (nullptr);
+    railToggleButton.setLookAndFeel (nullptr);
+}
 
 void HeaderBar::paint (juce::Graphics& g)
 {
@@ -122,61 +257,54 @@ void HeaderBar::paint (juce::Graphics& g)
 
 void HeaderBar::resized()
 {
-    // Layout constants (normalized)
-    static constexpr int headerPadX = 12;
-    static constexpr int headerGap = 8;
-    static constexpr int controlH = 22;
-    static constexpr int comboW = 112;
-    static constexpr int smallBtnW = 22;
-    
     const auto& m = ui_.metrics();
-    auto area = getLocalBounds().reduced (headerPadX, 0);
-    const int centerY = area.getCentreY();
-    const int controlTop = centerY - controlH / 2;
-    const int buttonTop = centerY - controlH / 2;
+    const int paddingX = 12;
+    const int paddingY = 4;
+    const int gapX = 8;
+    const int comboW = 112;
+    const int smallBtnW = 22;
+    const int presetW = juce::jlimit (1, 999, m.headerButtonW);
+    const int bypassW = juce::jlimit (1, 999, m.headerButtonW);
 
-    // Right zone: Peak Range + Preset/Save + A/B + Bypass + Rail Toggle
-    const int rightZoneWidth = comboW
-                              + headerGap
-                              + m.headerButtonW * 2  // Preset/Save
-                              + headerGap
-                              + smallBtnW * 2         // A/B
-                              + headerGap
-                              + m.headerButtonW        // Bypass
-                              + headerGap
-                              + smallBtnW;             // Rail Toggle
+    const int rowHeightTarget = juce::jmin (m.headerButtonH, getHeight() - 2 * paddingY);
+    const int buttonH = juce::jlimit (1, getHeight() - 2 * paddingY, static_cast<int> (std::round (static_cast<float> (rowHeightTarget))));
 
-    auto rightZone = area.removeFromRight (rightZoneWidth);
+    auto barArea = getLocalBounds();
+    const juce::Rectangle<int> row = snapRectToPixels (barArea.reduced (paddingX, paddingY).toNearestInt());
+    const int rowCentreY = row.getCentreY();
+    const int y = static_cast<int> (std::round (static_cast<float> (rowCentreY) - buttonH * 0.5f));
 
-    // Rail Toggle
-    railToggleButton.setBounds (rightZone.removeFromRight (smallBtnW).getX(), controlTop, smallBtnW, controlH);
-    rightZone.removeFromRight (headerGap);
+    const int rightZoneWidth = comboW + gapX + presetW + gapX + smallBtnW + gapX + smallBtnW + gapX + bypassW + gapX + smallBtnW;
+    const juce::Rectangle<int> rightZone (row.getRight() - rightZoneWidth, row.getY(), rightZoneWidth, row.getHeight());
+    int x = rightZone.getX();
 
-    // Bypass
-    auto buttonArea = rightZone.removeFromRight (m.headerButtonW);
-    bypassButton.setBounds (buttonArea.getX(), controlTop, m.headerButtonW, controlH);
-    rightZone.removeFromRight (headerGap);
+    peakRangeBox_.setBounds (x, y, comboW, buttonH);
+    x += comboW + gapX;
 
-    // A/B
-    slotBButton.setBounds (rightZone.removeFromRight (smallBtnW).getX(), controlTop, smallBtnW, controlH);
-    slotAButton.setBounds (rightZone.removeFromRight (smallBtnW).getX(), controlTop, smallBtnW, controlH);
-    rightZone.removeFromRight (headerGap);
-    
-    // Save/Preset
-    buttonArea = rightZone.removeFromRight (m.headerButtonW);
-    saveButton.setBounds (buttonArea.getX(), buttonTop, m.headerButtonW, controlH);
-    rightZone.removeFromRight (headerGap);
-    
-    buttonArea = rightZone.removeFromRight (m.headerButtonW);
-    presetButton.setBounds (buttonArea.getX(), buttonTop, m.headerButtonW, controlH);
-    rightZone.removeFromRight (headerGap);
-    
-    peakRangeBox_.setBounds (rightZone.removeFromRight (comboW).getX(), controlTop, comboW, controlH);
+    presetButton.setBounds (x, y, presetW, buttonH);
+    x += presetW + gapX;
 
-    // Center zone: Title (centered, fills remaining space)
-    const int titleTop = centerY - static_cast<int> (ui_.type().titleH / 2.0f);
+    saveButton.setBounds (x, y, presetW, buttonH);
+    x += presetW + gapX;
+
+    slotAButton.setBounds (x, y, smallBtnW, buttonH);
+    x += smallBtnW + gapX;
+
+    slotBButton.setBounds (x, y, smallBtnW, buttonH);
+    x += smallBtnW + gapX;
+
+    bypassButton.setBounds (x, y, bypassW, buttonH);
+    x += bypassW + gapX;
+
+    const int railW = juce::jmin (smallBtnW, rightZone.getRight() - x);
+    railToggleButton.setBounds (x, y, railW, buttonH);
+
+    const juce::Rectangle<int> area (row.getX(), row.getY(), rightZone.getX() - row.getX(), row.getHeight());
+    const int titleCentreY = area.getCentreY();
+    const int titleTop = static_cast<int> (std::round (static_cast<float> (titleCentreY) - ui_.type().titleH * 0.5f));
+    const int titleH = static_cast<int> (std::round (ui_.type().titleH + 6.0f));
     const int titleWidth = juce::jmax (80, area.getWidth());
-    titleLabel.setBounds (area.getX(), titleTop, titleWidth, static_cast<int> (ui_.type().titleH + 6.0f));
+    titleLabel.setBounds (area.getX(), titleTop, titleWidth, titleH);
     titleLabel.setJustificationType (juce::Justification::centred);
 }
 

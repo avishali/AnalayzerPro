@@ -6,6 +6,7 @@
 #include "../../presets/PresetManager.h"
 #include "../../presets/ABStateManager.h"
 #include <functional>
+#include <memory>
 
 namespace AnalyzerPro { class ControlBinder; }
 
@@ -52,6 +53,8 @@ private:
     juce::TextButton slotBButton;
     juce::ToggleButton bypassButton; // Bound to param
     juce::ToggleButton railToggleButton; // Toggle control rail visibility
+
+    std::unique_ptr<juce::LookAndFeel> headerBarLook_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HeaderBar)
 };
