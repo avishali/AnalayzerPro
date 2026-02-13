@@ -218,8 +218,6 @@ target_sources(${PLUGIN_NAME}
         Source/ui/analyzer/rta1_import/RTADisplay.cpp
         Source/ui/layout/HeaderBar.cpp
         Source/ui/layout/ControlRail.cpp
-        Source/ui/layout/CollapsibleSection.cpp
-        Source/ui/layout/CollapsibleArrowComponent.cpp
         Source/ui/layout/DraggableParamValueLabel.cpp
         Source/ui/layout/FooterBar.cpp
         Source/ui/views/AnalyzerGridPlaceholder.cpp
