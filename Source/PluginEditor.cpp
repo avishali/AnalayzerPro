@@ -6,7 +6,7 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
     : AudioProcessorEditor (&p),
       audioProcessor (p),
       analyzerModule (p.getAnalyzerEngine()),  // Initialize reference to analyzer module
-      ui_ (mdsp_ui::ThemeVariant::Dark),  // Default to Dark theme (Phase 1)
+      ui_ (mdsp_ui::ThemeVariant::Custom),
       lnf_ (ui_),
       mainView (ui_, p, &p.getAPVTS())
 {

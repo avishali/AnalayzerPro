@@ -266,7 +266,7 @@ private:
         void paint (juce::Graphics& g) override
         {
             // Debug overlay uses theme-aware colors (variant-aware, defaults to Dark for Phase 1)
-            const mdsp_ui::Theme theme (mdsp_ui::ThemeVariant::Dark);
+            const mdsp_ui::Theme theme (mdsp_ui::ThemeVariant::Custom);
             auto r = getLocalBounds().toFloat();
             g.setColour (theme.background.withAlpha (0.55f));
             g.fillRoundedRectangle (r, 4.0f);
