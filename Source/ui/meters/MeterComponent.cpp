@@ -120,8 +120,8 @@ float MeterComponent::getScaleMinDb() const noexcept
     switch (scaleMode_)
     {
         case ScaleMode::FullRange: return kFullRangeMinDb;
-        case ScaleMode::Top24Db:   return -18.0f;
-        case ScaleMode::Top12Db:   return -6.0f;
+        case ScaleMode::Top24Db:   return -24.0f;
+        case ScaleMode::Top12Db:   return -12.0f;
     }
     return kFullRangeMinDb;
 }

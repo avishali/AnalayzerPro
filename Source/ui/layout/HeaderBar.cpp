@@ -1,9 +1,11 @@
 #include "HeaderBar.h"
 #include "PixelSnap.h"
-#include "LayoutConstants.h"
 #include "../../control/ControlIds.h"
 #include "../../control/ControlBinder.h"
 #include <mdsp_ui/ButtonStyle.h>
+#include <mdsp_ui/IconCache.h>
+#include <mdsp_ui/IconPaint.h>
+#include <mdsp_ui/IconIds.generated.h>
 #include <mdsp_ui/UiContext.h>
 #include <cmath>
 
@@ -44,6 +46,22 @@ public:
                               const juce::Colour&, bool, bool) override
     {
         const juce::Rectangle<float> fillR = snapRectToPixels (button.getLocalBounds().toFloat());
+
+        // Bypass button: draw UI asset (MDSP Toggle Pill) instead of programmatic background
+        if (button.getComponentID() == "bypass")
+        {
+            mdsp_ui::paintIcon (g, ui_, mdsp_ui::IconId::MDSP_Toggle_Pill_M, fillR, juce::Colours::transparentBlack, 1.0f);
+            if (button.hasKeyboardFocus (true))
+            {
+                const float focusPx = ui_.metrics().strokeThin;
+                auto focusBounds = snapRectToPixels (fillR.expanded (focusPx));
+                auto style = mdsp_ui::makeToggleButtonStyle (ui_, button.getToggleState(), true);
+                g.setColour (style.focusRing);
+                g.drawRoundedRectangle (focusBounds.toFloat(), ui_.metrics().rMed + focusPx, focusPx);
+            }
+            return;
+        }
+
         const float radius = snapRadius (juce::jmin (ui_.metrics().rMed, fillR.getHeight() * 0.5f));
         const float strokeRadius = snapRadius (juce::jmax (0.0f, radius - 0.5f));
         const juce::Rectangle<float> strokeR = insetForInsideStroke (fillR, kInsideStrokePx);
@@ -87,9 +105,104 @@ public:
         }
     }
 
+    void drawToggleButton (juce::Graphics& g, juce::ToggleButton& button,
+                          bool, bool) override
+    {
+        const juce::Rectangle<float> fillR = snapRectToPixels (button.getLocalBounds().toFloat());
+
+        // Bypass button: draw UI asset (MDSP Toggle Pill) when available, else pill style
+        if (button.getComponentID() == "bypass")
+        {
+            const juce::Drawable* icon = ui_.icons().get (mdsp_ui::IconId::MDSP_Toggle_Pill_M);
+            if (icon != nullptr)
+            {
+                mdsp_ui::paintIcon (g, ui_, mdsp_ui::IconId::MDSP_Toggle_Pill_M, fillR, juce::Colours::transparentBlack, 1.0f);
+            }
+            else
+            {
+                // Fallback: icon failed to load (BinaryData collision etc), use pill style
+                const float radius = snapRadius (juce::jmin (ui_.metrics().rMed, fillR.getHeight() * 0.5f));
+                const float strokeRadius = snapRadius (juce::jmax (0.0f, radius - 0.5f));
+                const juce::Rectangle<float> strokeR = insetForInsideStroke (fillR, kInsideStrokePx);
+                auto style = mdsp_ui::makeToggleButtonStyle (ui_, button.getToggleState(), button.isEnabled());
+                juce::Colour bgColour, borderColour;
+                getStateColours (button, style, bgColour, borderColour);
+                g.setColour (bgColour);
+                g.fillRoundedRectangle (fillR, radius);
+                g.setColour (borderColour);
+                g.drawRoundedRectangle (strokeR, strokeRadius, kInsideStrokePx);
+                const float indSize = 6.0f;
+                const float indX = fillR.getX() + radius + 4.0f;
+                const float indY = fillR.getCentreY();
+                if (button.getToggleState())
+                {
+                    g.setColour (button.isEnabled() ? style.text : style.textDisabled);
+                    g.fillEllipse (indX - indSize * 0.5f, indY - indSize * 0.5f, indSize, indSize);
+                }
+                juce::Rectangle<float> textBounds = fillR;
+                const float leftMargin = button.getToggleState()
+                    ? (indX + indSize * 0.5f + 4.0f - fillR.getX())
+                    : (radius + 4.0f);
+                textBounds.removeFromLeft (leftMargin);
+                g.setColour (button.isEnabled() ? style.text : style.textDisabled);
+                g.setFont (ui_.type().labelFont());
+                g.drawFittedText ("BYPASS", textBounds.toNearestInt(), juce::Justification::centredLeft, 1);
+            }
+            if (button.hasKeyboardFocus (true))
+            {
+                const float focusPx = ui_.metrics().strokeThin;
+                auto focusBounds = snapRectToPixels (fillR.expanded (focusPx));
+                auto style = mdsp_ui::makeToggleButtonStyle (ui_, button.getToggleState(), true);
+                g.setColour (style.focusRing);
+                g.drawRoundedRectangle (focusBounds.toFloat(), ui_.metrics().rMed + focusPx, focusPx);
+            }
+            return;
+        }
+
+        // Other toggle buttons (rail, etc.): use pill style from drawButtonBackground
+        const float radius = snapRadius (juce::jmin (ui_.metrics().rMed, fillR.getHeight() * 0.5f));
+        const float strokeRadius = snapRadius (juce::jmax (0.0f, radius - 0.5f));
+        const juce::Rectangle<float> strokeR = insetForInsideStroke (fillR, kInsideStrokePx);
+        auto style = mdsp_ui::makeToggleButtonStyle (ui_, button.getToggleState(), button.isEnabled());
+        juce::Colour bgColour, borderColour;
+        getStateColours (button, style, bgColour, borderColour);
+        g.setColour (bgColour);
+        g.fillRoundedRectangle (fillR, radius);
+        g.setColour (borderColour);
+        g.drawRoundedRectangle (strokeR, strokeRadius, kInsideStrokePx);
+        if (button.getToggleState())
+        {
+            const float indSize = 6.0f;
+            const float indX = fillR.getX() + radius + 4.0f;
+            const float indY = fillR.getCentreY();
+            g.setColour (button.isEnabled() ? style.text : style.textDisabled);
+            g.fillEllipse (indX - indSize * 0.5f, indY - indSize * 0.5f, indSize, indSize);
+        }
+        if (button.hasKeyboardFocus (true))
+        {
+            const float focusPx = ui_.metrics().strokeThin;
+            auto focusBounds = snapRectToPixels (fillR.expanded (focusPx));
+            g.setColour (style.focusRing);
+            g.drawRoundedRectangle (focusBounds.toFloat(), radius + focusPx, focusPx);
+        }
+        juce::Rectangle<float> textBounds = fillR;
+        const float indSize = 6.0f;
+        const float leftMargin = button.getToggleState()
+            ? (radius + 4.0f + indSize * 0.5f + 4.0f)
+            : (radius + 4.0f);
+        textBounds.removeFromLeft (leftMargin);
+        g.setColour (button.isEnabled() ? style.text : style.textDisabled);
+        g.setFont (ui_.type().labelFont());
+        g.drawFittedText (button.getButtonText(), textBounds.toNearestInt(), juce::Justification::centredLeft, 1);
+    }
+
     void drawButtonText (juce::Graphics& g, juce::TextButton& button,
                          bool, bool) override
     {
+        // Bypass button: icon-only (handled in drawToggleButton)
+        if (button.getComponentID() == "bypass")
+            return;
+
         const juce::Rectangle<float> fillR = snapRectToPixels (button.getLocalBounds().toFloat());
         auto* toggle = dynamic_cast<juce::ToggleButton*> (&button);
         if (toggle != nullptr)
@@ -212,8 +325,9 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     slotAButton.setTooltip ("Compare state A");
     slotBButton.setTooltip ("Compare state B");
 
-    // Bypass
-    bypassButton.setButtonText ("BYPASS");
+    // Bypass (uses MDSP Toggle Pill icon from ui_assets)
+    bypassButton.setComponentID ("bypass");
+    bypassButton.setButtonText ({});
     bypassButton.setClickingTogglesState (true);
     bypassButton.setColour (juce::ToggleButton::tickColourId, theme.accent); 
     bypassButton.setColour (juce::TextButton::buttonColourId, theme.panel); // If using TextButton vs ToggleButton logic
@@ -270,7 +384,8 @@ void HeaderBar::resized()
     const int buttonH = juce::jlimit (1, getHeight() - 2 * paddingY, static_cast<int> (std::round (static_cast<float> (rowHeightTarget))));
 
     auto barArea = getLocalBounds();
-    const juce::Rectangle<int> row = snapRectToPixels (barArea.reduced (paddingX, paddingY).toNearestInt());
+    const int rightMargin = 48;  // extra margin so bypass/rail aren't clipped by host/window
+    const juce::Rectangle<int> row = snapRectToPixels (barArea.reduced (paddingX, paddingY).withTrimmedRight (rightMargin).toNearestInt());
     const int rowCentreY = row.getCentreY();
     const int y = static_cast<int> (std::round (static_cast<float> (rowCentreY) - buttonH * 0.5f));
 

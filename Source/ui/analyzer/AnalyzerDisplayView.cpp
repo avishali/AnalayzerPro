@@ -231,7 +231,7 @@ void AnalyzerDisplayView::paintOverChildren (juce::Graphics& g)
     // Bypass Overlay
     if (audioProcessor.getBypassState())
     {
-        const mdsp_ui::Theme theme (mdsp_ui::ThemeVariant::Dark); // Stick to Dark for now
+        const mdsp_ui::Theme theme (mdsp_ui::ThemeVariant::Custom);
         g.setColour (theme.background.withAlpha (0.6f));
         g.fillAll();
         
@@ -240,9 +240,8 @@ void AnalyzerDisplayView::paintOverChildren (juce::Graphics& g)
         g.drawText ("BYPASS", getLocalBounds(), juce::Justification::centred);
     }
 
-    // Default theme (Dark variant) for debug overlays
-    // Note: AnalyzerDisplayView doesn't use UiContext yet (Phase 2 may add it)
-    const mdsp_ui::Theme theme (mdsp_ui::ThemeVariant::Dark);
+    // Theme for debug overlays (matches plugin theme variant)
+    const mdsp_ui::Theme theme (mdsp_ui::ThemeVariant::Custom);
 #if JUCE_DEBUG
     // Debug overlay: mode, sequence, bins, fftSize, meta, drop reason (top-left)
     g.setFont (juce::Font (juce::FontOptions().withHeight (10.0f)));
