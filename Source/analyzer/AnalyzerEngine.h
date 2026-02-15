@@ -12,6 +12,7 @@
     Runs on audio thread, produces snapshots for UI consumption.
 */
 #include "StereoScopeAnalyzer.h"
+#include <mdsp_dsp/MeterBallistics.h>
 
 class AnalyzerEngine
 {
@@ -122,9 +123,13 @@ private:
     bool prepared = false;
     
     
-    // Smoothing buffers (Power domain) - Legacy single-channel
-    std::vector<float> smoothedMagnitude; // RMS State
-    std::vector<float> smoothedPeak;      // Peak State (ballistics for peak trace)
+    // Smoothing buffers (Power domain) - Output of ballistics each frame, used by convertToDb
+    std::vector<float> smoothedMagnitude; // RMS (filled from rmsBallistics_.process)
+    std::vector<float> smoothedPeak;      // Peak (filled from peakBallistics_.process)
+
+    // Attack/release ballistics state (shared mdsp_dsp implementation)
+    std::vector<mdsp_dsp::MeterBallistics> rmsBallistics_;
+    std::vector<mdsp_dsp::MeterBallistics> peakBallistics_;
 
     // Multi-trace complex bin storage (for L/R channels)
     std::vector<float> fftOutputL;  // Complex FFT output for Left channel
@@ -144,12 +149,18 @@ private:
     std::vector<float> smoothedMid_;
     std::vector<float> smoothedSide_;
 
-    // RMS ballistics state for multi-trace (audio thread)
-    std::vector<float> smoothedLRms_;      // RMS ballistics state for L
-    std::vector<float> smoothedRRms_;      // RMS ballistics state for R
-    std::vector<float> smoothedMidRms_;    // RMS ballistics state for Mid
-    std::vector<float> smoothedSideRms_;   // RMS ballistics state for Side
-    std::vector<float> smoothedMonoRms_;   // RMS ballistics state for Mono
+    // Multi-trace RMS ballistics state (shared mdsp_dsp)
+    std::vector<mdsp_dsp::MeterBallistics> lRmsBallistics_;
+    std::vector<mdsp_dsp::MeterBallistics> rRmsBallistics_;
+    std::vector<mdsp_dsp::MeterBallistics> midRmsBallistics_;
+    std::vector<mdsp_dsp::MeterBallistics> sideRmsBallistics_;
+    std::vector<mdsp_dsp::MeterBallistics> monoRmsBallistics_;
+    // Output buffers for convertToDb (filled each frame from ballistics)
+    std::vector<float> smoothedLRms_;
+    std::vector<float> smoothedRRms_;
+    std::vector<float> smoothedMidRms_;
+    std::vector<float> smoothedSideRms_;
+    std::vector<float> smoothedMonoRms_;
 
     // Multi-trace peak hold
     std::vector<float> peakL_;
@@ -222,7 +233,7 @@ private:
     int samplesCollectedR_ = 0;
     
     void initializeFFT (int fftSize);
-    // void updateSmoothingCoeff (float averagingMs, double sampleRate); // Removed in favor of Attack/Release ballistics
+    void updateBallisticsRates();
     void updateSmoothingBounds();
     
     void computeFFT();
