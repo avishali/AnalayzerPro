@@ -5,7 +5,6 @@
 #include <mdsp_ui/UiContext.h>
 #include <mdsp_ui/ThemeVariant.h>
 #include <mdsp_ui/LookAndFeel.h>
-#include <ui_core/UiCore.h>
 #include <memory>
 
 

@@ -7,7 +7,7 @@
 #include <mdsp_ui/ThemeVariant.h>
 #include <array>
 #include <vector>
-#include "rta1_import/RTADisplay.h"
+#include "RTADisplay.h"
 #include "../../analyzer/AnalyzerSnapshot.h"
 #include "../../PluginProcessor.h"
 

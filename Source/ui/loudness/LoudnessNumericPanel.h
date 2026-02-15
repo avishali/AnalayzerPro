@@ -13,7 +13,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <mdsp_ui/UiContext.h>
 #include "../../PluginProcessor.h"
-#include "../../dsp/loudness/LoudnessAnalyzer.h"
+#include "../../loudness/LoudnessAnalyzer.h"
 
 class LoudnessNumericPanel : public juce::Component,
                              public juce::Timer

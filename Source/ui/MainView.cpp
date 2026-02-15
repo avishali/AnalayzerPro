@@ -1,7 +1,7 @@
 #include "MainView.h"
 #include "layout/LayoutConstants.h"
 #include "../PluginProcessor.h"
-#include "analyzer/rta1_import/RTADisplay.h"
+#include "analyzer/RTADisplay.h"
 #include <mdsp_ui/UiContext.h>
 
 using namespace AnalyzerPro::Layout;

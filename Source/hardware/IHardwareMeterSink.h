@@ -1,7 +1,5 @@
 #pragma once
 
-#include <cstdint>
-
 // Hardware-facing meter payloads (UI-independent, stable contract).
 struct HardwareMeterChannelLevels
 {

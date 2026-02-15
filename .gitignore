@@ -37,3 +37,7 @@ compile_commands.json
 # Logs
 *.log
 
+# Scripts / Node
+scripts/node_modules/
+scripts/.env
+!scripts/.env.example

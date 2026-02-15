@@ -9,7 +9,7 @@
 #include "hardware/SoftwareMeterSink.h"
 #include "presets/PresetManager.h"
 #include "presets/ABStateManager.h"
-#include "dsp/loudness/LoudnessAnalyzer.h"
+#include "loudness/LoudnessAnalyzer.h"
 #include <mdsp_core/containers/AudioBufferQueue.h>
 #include <limits>
 

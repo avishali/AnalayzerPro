@@ -1,4 +1,5 @@
 #include "AnalyzerProControlContext.h"
+#include "AnalyzerProParamIdMap.h"
 
 namespace AnalyzerPro
 {

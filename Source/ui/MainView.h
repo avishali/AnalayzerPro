@@ -5,9 +5,6 @@
 #include <mdsp_ui/UiContext.h>
 #include "ui/tooltips/TooltipManager.h" // Added include
 #include "../PluginProcessor.h"
-#include <ui_core/UiCore.h>
-#include "hardware/PluginHardwareAdapter.h"
-#include "hardware/PluginHardwareOutputAdapter.h"
 #include "../control/AnalyzerProControlContext.h"
 #include "layout/LayoutConstants.h"
 #include "layout/HeaderBar.h"
@@ -18,10 +15,6 @@
 #include "meters/MeterGroupComponent.h"
 #include "meters/PhaseFanScopeComponent.h"
 #include "loudness/LoudnessNumericPanel.h"
-#include <memory>
-#if JUCE_DEBUG
-#include <set>
-#endif
 
 //==============================================================================
 /**

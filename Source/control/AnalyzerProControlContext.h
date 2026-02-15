@@ -1,9 +1,7 @@
 #pragma once
 
 #include "ControlBinder.h"
-#include "AnalyzerProParamIdMap.h"
 #include <juce_audio_processors/juce_audio_processors.h>
-#include <memory>
 
 namespace AnalyzerPro
 {

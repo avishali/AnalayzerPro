@@ -284,6 +284,7 @@ void RTADisplay::setFFTData (const std::vector<float>& fftBinsDb,
         state.fftPeakHoldDb.clear();
 
     // FFT No Data Guard: Latch valid frame if signal > threshold (+6dB above noise floor)
+    // Must explicitly clear when below threshold so plugin load (before first signal) never treats floor as valid
     if (state.fftDb.empty())
     {
          // No-op for empty data
@@ -296,23 +297,23 @@ void RTADisplay::setFFTData (const std::vector<float>& fftBinsDb,
             if (db > maxDb) maxDb = db;
         
         if (std::isfinite(maxDb) && maxDb > (state.bottomDb + 6.0f))
-        {
             state.hasValidSpectrumFrame = true;
-        }
+        else
+            state.hasValidSpectrumFrame = false;  // Clear when no signal so crosshair stays at center on load
     }
 
     state.status = DataStatus::Ok;
     if (fftHoverActive_ && fftHoverBinIndex_ >= 0 && static_cast<size_t> (fftHoverBinIndex_) < state.fftDb.size())
     {
         const float dbVal = getDbAtPixelX (fftHoverMouseXpx_, state);  // Interpolated at mouse X to match trace
-        const bool dbValid = std::isfinite (dbVal) && dbVal > -200.0f;  // Accept any value above floor (-200 = no signal)
+        const bool dbValid = state.hasValidSpectrumFrame && std::isfinite (dbVal) && dbVal > -200.0f;  // When no signal, spectrum holds floor/noise -> don't use
         const float clampedDb = juce::jlimit (state.bottomDb, state.topDb + 18.0f, dbValid ? dbVal : state.bottomDb);
-        fftHoverSnappedYpx_ = dbToY (clampedDb, state);  // Always update Y (including when peak drops) so crosshair never disappears
-        hoverDbTarget_ = clampedDb;
-        hoverDbSmooth_ = clampedDb;
-        hoverYSmoothPx_ = fftHoverSnappedYpx_;
+        fftHoverSnappedYpx_ = dbValid ? dbToY (clampedDb, state) : (plotAreaTop + plotAreaHeight * 0.5f);  // Center when no valid signal
         if (dbValid)
         {
+            hoverDbTarget_ = clampedDb;
+            hoverDbSmooth_ = clampedDb;
+            hoverYSmoothPx_ = fftHoverSnappedYpx_;
             fftHoverReadoutText_ = fftHoverFreqText_ + "  " + juce::String (clampedDb, 1) + " dB";
             {
                 juce::GlyphArrangement ga;
@@ -320,9 +321,12 @@ void RTADisplay::setFFTData (const std::vector<float>& fftBinsDb,
                                   0.0f, 0.0f, 10000.0f, 10.0f, juce::Justification::left, 1);
                 fftHoverReadoutWidth_ = ga.getBoundingBox (0, -1, true).getWidth();
             }
-        }
-        if (!hoverDbHasValue_)
             hoverDbHasValue_ = true;
+        }
+        else
+        {
+            hoverDbHasValue_ = false;  // No valid dB when no signal -> readout shows "—"
+        }
     }
     invalidatePaths(); // New data -> new paths
     repaint();
@@ -363,7 +367,7 @@ void RTADisplay::setLogCenters (const std::vector<float>&)
 void RTADisplay::setFftMeta (double sampleRate, int fftSize)
 {
     // B1: Every setter updates state
-    const bool metaChanged = (state.sampleRate != sampleRate || state.fftSize != fftSize);
+    const bool metaChanged = (std::abs (state.sampleRate - sampleRate) > 1e-5 || state.fftSize != fftSize);
     state.sampleRate = sampleRate;
     state.fftSize = fftSize;
     if (fftSize <= 0 || sampleRate <= 0.0)
@@ -590,6 +594,7 @@ float RTADisplay::computeTiltDb (float freqHz) const
 
 float RTADisplay::dbToYWithCompensation (float db, float freqHz, const RenderState& s) const
 {
+    (void) freqHz; // Used when tilt/weighting are re-enabled
     // TEMPORARILY DISABLED - Testing if double-weighting/tilt causes flat line issue
     // Apply display gain and tilt compensation
     // const float tiltDb = computeTiltDb (freqHz);
@@ -1446,9 +1451,10 @@ void RTADisplay::mouseMove (const juce::MouseEvent& e)
                 const int binIdx = mapFreqToBinIndex (clampedFreq, state);
 
                 // Use actual mouse X for smooth vertical line; interpolated dB to match trace
+                // When no signal (hasValidSpectrumFrame false), do NOT use spectrum dB - it contains floor/noise and causes horizontal line to jump to -60 on every mouse move
                 const float dbVal = getDbAtPixelX (x, state);
-                const bool dbValid = std::isfinite (dbVal) && dbVal > -200.0f;
-                const float clampedDb = juce::jlimit (state.bottomDb, state.topDb + 18.0f, dbVal);
+                const bool dbValid = state.hasValidSpectrumFrame && std::isfinite (dbVal) && dbVal > -200.0f;
+                const float clampedDb = juce::jlimit (state.bottomDb, state.topDb + 18.0f, dbValid ? dbVal : state.bottomDb);
                 const float snappedYpx = dbValid ? dbToY (clampedDb, state) : (plotAreaTop + plotAreaHeight * 0.5f);
 
                 {
@@ -1472,6 +1478,10 @@ void RTADisplay::mouseMove (const juce::MouseEvent& e)
                             hoverYSmoothPx_ = dbToY (hoverDbSmooth_, state);
                             hoverLastSmoothTimeSec_ = juce::Time::getMillisecondCounterHiRes() * 0.001;
                         }
+                    }
+                    else
+                    {
+                        hoverDbHasValue_ = false;  // No valid dB when no signal
                     }
 
                     if (clampedFreq >= 1000.0f)
@@ -1612,8 +1622,8 @@ void RTADisplay::mouseDrag (const juce::MouseEvent& e)
                 const int binIdx = mapFreqToBinIndex (clampedFreq, state);
 
                 const float dbVal = getDbAtPixelX (x, state);
-                const bool dbValid = std::isfinite (dbVal) && dbVal > -200.0f;
-                const float clampedDb = juce::jlimit (state.bottomDb, state.topDb + 18.0f, dbVal);
+                const bool dbValid = state.hasValidSpectrumFrame && std::isfinite (dbVal) && dbVal > -200.0f;
+                const float clampedDb = juce::jlimit (state.bottomDb, state.topDb + 18.0f, dbValid ? dbVal : state.bottomDb);
                 const float snappedYpx = dbValid ? dbToY (clampedDb, state) : (plotAreaTop + plotAreaHeight * 0.5f);
                 const float snappedFreqHz = (binIdx >= 0) ? (static_cast<float> (binIdx) * binHz) : clampedFreq;
 
@@ -1636,6 +1646,10 @@ void RTADisplay::mouseDrag (const juce::MouseEvent& e)
                             hoverYSmoothPx_ = dbToY (hoverDbSmooth_, state);
                             hoverLastSmoothTimeSec_ = juce::Time::getMillisecondCounterHiRes() * 0.001;
                         }
+                    }
+                    else
+                    {
+                        hoverDbHasValue_ = false;  // No valid dB when no signal
                     }
 
                     if (clampedFreq >= 1000.0f)
@@ -2841,21 +2855,27 @@ void RTADisplay::paintFFTMode (juce::Graphics& g, const RenderState& s, const md
         g.setColour (crosshairCol);
         g.drawVerticalLine (static_cast<int> (crosshairX), plotAreaTop, plotAreaTop + plotAreaHeight);
 
-        // Y position: prefer immediate snap (fftHoverSnappedYpx_) for no flicker, fallback chain
-        float crosshairY = fftHoverSnappedYpx_;
-        if (std::isfinite (crosshairY))
-        { /* use it */ }
-        else if (hoverDbHasValue_ && std::isfinite (hoverYSmoothPx_))
-            crosshairY = hoverYSmoothPx_;
-        else if (hoverDbHasValue_)
+        // Y position: when valid dB use spectrum; when no signal place at bottom (bottomDb e.g. -120)
+        float crosshairY = 0.0f;
+        if (hoverDbHasValue_)
         {
-            const float yFromTarget = dbToY (hoverDbTarget_, state);
-            if (std::isfinite (yFromTarget))
-                crosshairY = yFromTarget;
+            crosshairY = fftHoverSnappedYpx_;
+            if (std::isfinite (crosshairY))
+            { /* use it */ }
+            else if (std::isfinite (hoverYSmoothPx_))
+                crosshairY = hoverYSmoothPx_;
+            else
+            {
+                const float yFromTarget = dbToY (hoverDbTarget_, state);
+                crosshairY = std::isfinite (yFromTarget) ? yFromTarget : (plotAreaTop + plotAreaHeight * 0.5f);
+            }
         }
-        if (!std::isfinite (crosshairY))
-            crosshairY = plotAreaTop + plotAreaHeight * 0.5f;
-
+        else
+        {
+            crosshairY = dbToY (state.bottomDb, state);  // No signal: place at bottom (-120 dB etc.)
+            if (!std::isfinite (crosshairY))
+                crosshairY = plotAreaTop + plotAreaHeight;
+        }
         g.drawHorizontalLine (static_cast<int> (crosshairY), plotAreaLeft, plotAreaLeft + plotAreaWidth);
         g.fillEllipse (crosshairX - 2.5f, crosshairY - 2.5f, 5.0f, 5.0f);
 
