@@ -6,6 +6,10 @@ build-xcode/
 *.xcodeproj/
 *.xcworkspace/
 
+# Installer artifacts & Xcode caches (keep repo small)
+installer/
+.cache/
+
 # CMake
 CMakeCache.txt
 CMakeFiles/
