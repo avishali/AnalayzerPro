@@ -3,7 +3,6 @@
 #include <juce_dsp/juce_dsp.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "AnalyzerSnapshot.h"
-#include <array>
 #include <atomic>
 #include <memory>
 

@@ -296,9 +296,9 @@ void AnalyzerEngine::processBlock (const juce::AudioBuffer<float>& buffer)
                 rebuildWeightingGainTable();
                 if (weightingMode_ != 0 && static_cast<int> (weightingGainTable_.size()) == numBins)
                 {
-                    for (int i = 0; i < numBins; ++i)
+                    for (int b = 0; b < numBins; ++b)
                     {
-                        const auto idx = static_cast<size_t> (i);
+                        const auto idx = static_cast<size_t> (b);
                         powerL_[idx] *= weightingGainTable_[idx];
                         powerR_[idx] *= weightingGainTable_[idx];
                     }

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "ControlIds.h"
-#include <cstdint>
 #include <string_view>
 
 namespace AnalyzerPro

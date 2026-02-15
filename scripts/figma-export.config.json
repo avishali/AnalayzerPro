@@ -1,0 +1,62 @@
+{
+  "figmaFileId": "Ib6iiH7qXjOoWhCYIqTibR",
+  "figmaToken": "${FIGMA_TOKEN}",
+  "assetTypes": {
+    "icons": {
+      "framePrefix": "icon",
+      "exportSettings": {
+        "format": "SVG",
+        "svgOutlineText": false,
+        "svgSimplifyStroke": true
+      },
+      "outputDir": "../third_party/melechdsp-hq/shared/mdsp_ui/ui_assets/icons",
+      "namingConvention": "snake_case",
+      "requireSingleColor": true,
+      "description": "Simple, tintable icons for UI controls (buttons, chevrons, etc.)"
+    },
+    "illustrations": {
+      "framePrefix": "illustration/",
+      "exportSettings": {
+        "format": "SVG",
+        "svgOutlineText": false,
+        "svgSimplifyStroke": false
+      },
+      "outputDir": "../third_party/melechdsp-hq/shared/mdsp_ui/ui_assets/illustrations",
+      "namingConvention": "snake_case",
+      "preserveColors": true,
+      "description": "Complex, multi-color graphics with preserved colors"
+    },
+    "mockups": {
+      "framePrefix": "mockup/",
+      "exportSettings": { "format": "PNG", "scale": 2 },
+      "outputDir": "../docs/design/mockups",
+      "namingConvention": "kebab-case",
+      "description": "Design reference mockups (not embedded in binary)"
+    }
+  },
+  "validation": {
+    "maxFileSizeKB": 50,
+    "maxPathCount": 200,
+    "allowedSvgElements": [
+      "svg",
+      "g",
+      "path",
+      "rect",
+      "circle",
+      "ellipse",
+      "line",
+      "polyline",
+      "polygon",
+      "defs",
+      "use",
+      "linearGradient",
+      "radialGradient",
+      "stop"
+    ]
+  },
+  "output": {
+    "manifestFile": "export-manifest.json",
+    "verbose": true,
+    "coloredOutput": true
+  }
+}

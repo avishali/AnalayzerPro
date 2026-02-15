@@ -1,0 +1,252 @@
+{
+  "exportDate": "2026-02-15T01:22:04.761Z",
+  "figmaFileId": "Ib6iiH7qXjOoWhCYIqTibR",
+  "totalAssets": 10,
+  "assetsByType": {
+    "icons": 10
+  },
+  "assets": [
+    {
+      "nodeId": "4:4",
+      "name": "toggle/pill/d",
+      "originalName": "MDSP/Toggle/Pill/D",
+      "type": "icons",
+      "path": "/Users/avishaylidani/DEV/GitHubRepo/MelechDSP/AnalyzerPro/third_party/melechdsp-hq/shared/mdsp_ui/ui_assets/icons/toggle/pill/d.svg",
+      "format": "svg",
+      "size": 57835,
+      "metadata": {
+        "colors": [
+          "#8A38F5",
+          "#404040",
+          "#F4F4F4",
+          "#555555",
+          "#8B949E",
+          "#1E1E1E",
+          "#181616",
+          "#3B3737"
+        ],
+        "colorCount": 8,
+        "tintable": false,
+        "hasGradients": false,
+        "hasPatterns": false,
+        "pathCount": 20,
+        "fileSizeKB": 56.5
+      }
+    },
+    {
+      "nodeId": "99:12",
+      "name": "toggle/pill/m",
+      "originalName": "MDSP/Toggle/Pill/M",
+      "type": "icons",
+      "path": "/Users/avishaylidani/DEV/GitHubRepo/MelechDSP/AnalyzerPro/third_party/melechdsp-hq/shared/mdsp_ui/ui_assets/icons/toggle/pill/m.svg",
+      "format": "svg",
+      "size": 58194,
+      "metadata": {
+        "colors": [
+          "#8A38F5",
+          "#404040",
+          "#F4F4F4",
+          "#74DA71",
+          "#555555",
+          "#8B949E",
+          "#1E1E1E",
+          "#181616",
+          "#3B3737"
+        ],
+        "colorCount": 9,
+        "tintable": false,
+        "hasGradients": false,
+        "hasPatterns": false,
+        "pathCount": 20,
+        "fileSizeKB": 56.8
+      }
+    },
+    {
+      "nodeId": "12:415",
+      "name": "button/secondary/m",
+      "originalName": "MDSP/Button/Secondary/M",
+      "type": "icons",
+      "path": "/Users/avishaylidani/DEV/GitHubRepo/MelechDSP/AnalyzerPro/third_party/melechdsp-hq/shared/mdsp_ui/ui_assets/icons/button/secondary/m.svg",
+      "format": "svg",
+      "size": 29291,
+      "metadata": {
+        "colors": [
+          "#8A38F5",
+          "#404040",
+          "#F0F0F0",
+          "#555555",
+          "#1E1E1E",
+          "#8B949E",
+          "#0F0F0F",
+          "#3B3737"
+        ],
+        "colorCount": 8,
+        "tintable": false,
+        "hasGradients": false,
+        "hasPatterns": false,
+        "pathCount": 10,
+        "fileSizeKB": 28.6
+      }
+    },
+    {
+      "nodeId": "8:136",
+      "name": "button/primary/m",
+      "originalName": "MDSP/Button/Primary/M",
+      "type": "icons",
+      "path": "/Users/avishaylidani/DEV/GitHubRepo/MelechDSP/AnalyzerPro/third_party/melechdsp-hq/shared/mdsp_ui/ui_assets/icons/button/primary/m.svg",
+      "format": "svg",
+      "size": 25096,
+      "metadata": {
+        "colors": [
+          "#8A38F5",
+          "#555C33",
+          "#B0B4B5",
+          "#373B3C",
+          "#464C29",
+          "#4C532D",
+          "#9EA3AA",
+          "#484D34",
+          "#8B949E"
+        ],
+        "colorCount": 9,
+        "tintable": false,
+        "hasGradients": false,
+        "hasPatterns": false,
+        "pathCount": 7,
+        "fileSizeKB": 24.5
+      }
+    },
+    {
+      "nodeId": "15:526",
+      "name": "button/primary/m",
+      "originalName": "MDSP/Button/Primary/M",
+      "type": "icons",
+      "path": "/Users/avishaylidani/DEV/GitHubRepo/MelechDSP/AnalyzerPro/third_party/melechdsp-hq/shared/mdsp_ui/ui_assets/icons/button/primary/m.svg",
+      "format": "svg",
+      "size": 5079,
+      "metadata": {
+        "colors": [
+          "#555C33",
+          "#B0B4B5"
+        ],
+        "colorCount": 2,
+        "tintable": false,
+        "hasGradients": false,
+        "hasPatterns": false,
+        "pathCount": 2,
+        "fileSizeKB": 5
+      }
+    },
+    {
+      "nodeId": "15:530",
+      "name": "button/secondary/m",
+      "originalName": "MDSP/Button/Secondary/M",
+      "type": "icons",
+      "path": "/Users/avishaylidani/DEV/GitHubRepo/MelechDSP/AnalyzerPro/third_party/melechdsp-hq/shared/mdsp_ui/ui_assets/icons/button/secondary/m.svg",
+      "format": "svg",
+      "size": 5954,
+      "metadata": {
+        "colors": [
+          "#1E1E1E",
+          "#F0F0F0",
+          "#555555"
+        ],
+        "colorCount": 3,
+        "tintable": false,
+        "hasGradients": false,
+        "hasPatterns": false,
+        "pathCount": 2,
+        "fileSizeKB": 5.8
+      }
+    },
+    {
+      "nodeId": "15:533",
+      "name": "toggle/pill/d",
+      "originalName": "MDSP/Toggle/Pill/D",
+      "type": "icons",
+      "path": "/Users/avishaylidani/DEV/GitHubRepo/MelechDSP/AnalyzerPro/third_party/melechdsp-hq/shared/mdsp_ui/ui_assets/icons/toggle/pill/d.svg",
+      "format": "svg",
+      "size": 5902,
+      "metadata": {
+        "colors": [
+          "#1E1E1E",
+          "#F4F4F4",
+          "#555555"
+        ],
+        "colorCount": 3,
+        "tintable": false,
+        "hasGradients": false,
+        "hasPatterns": false,
+        "pathCount": 2,
+        "fileSizeKB": 5.8
+      }
+    },
+    {
+      "nodeId": "15:574",
+      "name": "toggle/pill/d",
+      "originalName": "MDSP/Toggle/Pill/D",
+      "type": "icons",
+      "path": "/Users/avishaylidani/DEV/GitHubRepo/MelechDSP/AnalyzerPro/third_party/melechdsp-hq/shared/mdsp_ui/ui_assets/icons/toggle/pill/d.svg",
+      "format": "svg",
+      "size": 5902,
+      "metadata": {
+        "colors": [
+          "#1E1E1E",
+          "#F4F4F4",
+          "#555555"
+        ],
+        "colorCount": 3,
+        "tintable": false,
+        "hasGradients": false,
+        "hasPatterns": false,
+        "pathCount": 2,
+        "fileSizeKB": 5.8
+      }
+    },
+    {
+      "nodeId": "100:41",
+      "name": "toggle/pill/d",
+      "originalName": "MDSP/Toggle/Pill/D",
+      "type": "icons",
+      "path": "/Users/avishaylidani/DEV/GitHubRepo/MelechDSP/AnalyzerPro/third_party/melechdsp-hq/shared/mdsp_ui/ui_assets/icons/toggle/pill/d.svg",
+      "format": "svg",
+      "size": 5902,
+      "metadata": {
+        "colors": [
+          "#1E1E1E",
+          "#F4F4F4",
+          "#555555"
+        ],
+        "colorCount": 3,
+        "tintable": false,
+        "hasGradients": false,
+        "hasPatterns": false,
+        "pathCount": 2,
+        "fileSizeKB": 5.8
+      }
+    },
+    {
+      "nodeId": "100:91",
+      "name": "toggle/pill/m",
+      "originalName": "MDSP/Toggle/Pill/M",
+      "type": "icons",
+      "path": "/Users/avishaylidani/DEV/GitHubRepo/MelechDSP/AnalyzerPro/third_party/melechdsp-hq/shared/mdsp_ui/ui_assets/icons/toggle/pill/m.svg",
+      "format": "svg",
+      "size": 5898,
+      "metadata": {
+        "colors": [
+          "#1E1E1E",
+          "#F4F4F4",
+          "#555555"
+        ],
+        "colorCount": 3,
+        "tintable": false,
+        "hasGradients": false,
+        "hasPatterns": false,
+        "pathCount": 2,
+        "fileSizeKB": 5.8
+      }
+    }
+  ],
+  "errors": []
+}

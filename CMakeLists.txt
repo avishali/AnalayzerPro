@@ -124,11 +124,6 @@ endif()
 add_subdirectory("${JUCE_PATH}" "${CMAKE_CURRENT_BINARY_DIR}/JUCE" EXCLUDE_FROM_ALL)
 
 # ==============================================================================
-# ui_core (OBJECT library + interface includes)
-# ==============================================================================
-
-add_subdirectory(ui_core)
-# ==============================================================================
 # MelechDSP shared modules (via submodule)
 # ==============================================================================
 
@@ -203,10 +198,6 @@ target_sources(${PLUGIN_NAME}
         Source/ui/meters/StereoScopeComponent.h
         Source/ui/meters/PhaseFanScopeComponent.cpp
         Source/ui/meters/PhaseFanScopeComponent.h
-        Source/hardware/PluginHardwareAdapter.cpp
-        Source/hardware/PluginHardwareAdapter.h
-        Source/hardware/PluginHardwareOutputAdapter.cpp
-        Source/hardware/PluginHardwareOutputAdapter.h
         Source/control/ControlSpecs.cpp
         Source/control/ControlBinder.cpp
         Source/control/AnalyzerProParamIdMap.cpp
@@ -215,31 +206,24 @@ target_sources(${PLUGIN_NAME}
         Source/analyzer/StereoScopeAnalyzer.cpp
         Source/ui/analyzer/AnalyzerDisplayView.cpp
         Source/ui/analyzer/StereoScopeView.cpp
-        Source/ui/analyzer/rta1_import/RTADisplay.cpp
+        Source/ui/analyzer/RTADisplay.cpp
         Source/ui/layout/HeaderBar.cpp
         Source/ui/layout/ControlRail.cpp
         Source/ui/layout/DraggableParamValueLabel.cpp
         Source/ui/layout/FooterBar.cpp
-        Source/ui/views/AnalyzerGridPlaceholder.cpp
-        Source/ui/views/PhaseCorrelationView.cpp
         Source/audio/DeviceRoutingHelper.cpp
         Source/audio/DeviceRoutingHelper.h
         Source/ui/tooltips/TooltipManager.cpp
         Source/ui/tooltips/TooltipOverlayComponent.cpp
         Source/presets/PresetManager.cpp
         Source/presets/ABStateManager.cpp
-        Source/dsp/loudness/LoudnessAnalyzer.cpp
+        Source/loudness/LoudnessAnalyzer.cpp
         Source/ui/loudness/LoudnessNumericPanel.cpp
-        # ui_core OBJECT sources get added below via TARGET_OBJECTS
 )
-
-# Pull ui_core's compiled objects into the plugin (fast iteration)
-# (ui_core_obj is defined in ui_core/CMakeLists.txt below)
-target_sources(${PLUGIN_NAME} PRIVATE $<TARGET_OBJECTS:ui_core_obj>)
 
 # Temporary: make deprecated-declarations an error for RTADisplay.cpp to pinpoint exact callsite
 set_source_files_properties(
-    Source/ui/analyzer/rta1_import/RTADisplay.cpp
+    Source/ui/analyzer/RTADisplay.cpp
     PROPERTIES
         COMPILE_OPTIONS "-Werror=deprecated-declarations"
 )
@@ -263,7 +247,7 @@ target_compile_definitions(${PLUGIN_NAME}
         PLUGIN_DEV_MODE=${PLUGIN_DEV_MODE_VALUE}
 )
 
-# Link JUCE modules + ui_core interface target (includes/defs)
+# Link JUCE modules
 target_link_libraries(${PLUGIN_NAME}
     PRIVATE
         juce::juce_audio_utils
@@ -273,7 +257,6 @@ target_link_libraries(${PLUGIN_NAME}
         mdsp_dsp
         mdsp_gui
     PUBLIC
-        ui_core
         mdsp_core
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
