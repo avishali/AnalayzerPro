@@ -1,14 +1,17 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
-#include <mdsp_ui/AxisInteraction.h>
-#include <mdsp_ui/AxisHoverController.h>
-#include <mdsp_ui/PeakSnapController.h>
+#include <mdsp_ui/analyzer/AnalyzerRenderState.h>
+#include <mdsp_ui/Theme.h>
+#include "../rta/RTAEnums.h"
+#include "../rta/RTAGeometry.h"
+#include "../rta/RTADisplayModel.h"
+#include "../rta/RTADisplayController.h"
+#include "../rta/RTADisplayRenderer.h"
 #include <vector>
 #include <cstdint>
 #include <cmath>
-
-namespace mdsp_ui { struct Theme; }
+#include <functional>
 
 
 //==============================================================================
@@ -68,14 +71,9 @@ public:
     /** Set display gain offset (UI-only, affects display rendering, not DSP) */
     void setDisplayGainDb (float db);
     
-    /** Tilt mode for frequency compensation */
-    enum class TiltMode
-    {
-        Flat = 0,  // 0 dB/oct
-        Pink = 1,  // +3 dB/oct (compensate pink noise downward slope)
-        White = 2  // -3 dB/oct (compensate white noise upward slope)
-    };
-    
+    /** Tilt mode for frequency compensation (defined in rta::RTAEnums.h) */
+    using TiltMode = rta::TiltMode;
+
     /** Set tilt mode (UI-only, affects display rendering, not DSP) */
     void setTiltMode (TiltMode mode);
     
@@ -84,21 +82,9 @@ public:
                             const float* powerMid, const float* powerSide, const float* powerMono,
                             int binCount);
 
-    /** Trace configuration for multi-trace rendering */
-    struct TraceConfig
-    {
-        bool showLR = false;
-        bool showMono = false;
-        bool showL = false;
-        bool showR = false;
-        bool showMid = false;
-        bool showSide = false;
-        bool showRMS = false;  // Blue RMS trace
-        
-        // 0=None, 1=A-Weighting, 2=BS.468-4
-        int weightingMode = 0;
-    };
-    
+    /** Trace configuration for multi-trace rendering (defined in RTADisplayModel) */
+    using TraceConfig = RTADisplayModel::TraceConfig;
+
     /** Set trace configuration (which traces to render) */
     void setTraceConfig (const TraceConfig& config);
 
@@ -121,6 +107,12 @@ public:
     /** Invalidate background cache (call on resize or range change) */
     void invalidateBackground();
 
+    /** When set, paint() uses renderer with state from callback for analyzer plot and overlays. */
+    void setGetRenderState (std::function<mdsp_ui::AnalyzerRenderState()> cb);
+
+    /** Set theme callback. When set, paint() uses this instead of default-constructed theme. */
+    void setGetTheme (std::function<const mdsp_ui::Theme&()> cb);
+
 #if JUCE_DEBUG
     /** Set debug info with structural generation - DEBUG only */
     void setDebugInfo (int viewMode, size_t fftSize, size_t logSize, size_t bandsSize,
@@ -129,210 +121,40 @@ public:
 #endif
 
 private:
-    enum class DataStatus
-    {
-        Ok,
-        NoData
-    };
+    using RenderState = RTADisplayModel::RenderState;
+    using RenderConfigKey = RTADisplayModel::RenderConfigKey;
+    
+    void refreshBackground();
 
-    // Step 3: Strict cache invalidation key (Moved here for dependency reasons)
-    struct RenderConfigKey
-    {
-        int fftSize = 0;
-        double sampleRate = 0.0;
-        float minHz = 0.0f;
-        float maxHz = 0.0f;
-        float plotWidth = 0.0f;
-        bool isLog = true; // FFT mode is always log x-axis here
-
-        bool operator!= (const RenderConfigKey& other) const
-        {
-            return fftSize != other.fftSize ||
-                   std::abs (sampleRate - other.sampleRate) > 1e-5 ||
-                   std::abs (minHz - other.minHz) > 1e-5f ||
-                   std::abs (maxHz - other.maxHz) > 1e-5f ||
-                   std::abs (plotWidth - other.plotWidth) > 0.5f ||
-                   isLog != other.isLog;
-        }
-    };
-    
-    // Cached geometry
-    struct BandGeometry
-    {
-        float xCenter = 0.0f;
-        float xLeft = 0.0f;
-        float xRight = 0.0f;
-    };
-    
-    // B1: RenderState - single state instance owned by RTADisplay
-    struct RenderState
-    {
-        int viewMode = 2;  // 0=FFT, 1=Log, 2=Bands
-        
-        // Ranges
-        float minHz = 20.0f;
-        float maxHz = 20000.0f;
-        float topDb = 0.0f;
-        float bottomDb = -120.0f;
-        
-        // Bands view
-        std::vector<float> bandCentersHz;
-        std::vector<float> bandsDb;
-        std::vector<float> bandsPeakDb;  // empty => no peaks
-        
-        // Log view (no logCentersHz - compute from index on-the-fly)
-        std::vector<float> logDb;
-        std::vector<float> logPeakDb;  // empty => no peaks
-        
-        // FFT view
-        std::vector<float> fftDb;
-        std::vector<float> fftPeakDb;  // empty => no peaks
-        std::vector<float> fftPeakHoldDb; // Peak Hold Trace (M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR)
-        
-        // Multi-trace: L/R power data (converted to dB on store)
-        std::vector<float> lDbL;
-        std::vector<float> lDbR;
-        int lrBinCount = 0;
-        
-        // Derived traces (computed from L/R in setLRPowerData, NOT in paint)
-        std::vector<float> stereoDb; // Max(L, R) combined envelope
-        std::vector<float> monoDb;
-        std::vector<float> midDb;
-        std::vector<float> sideDb;
-        
-        bool hasValidMultiTraceData = false;
-        
-        // Meta (optional)
-        double sampleRate = 48000.0;
-        int fftSize = 2048;
-        
-        // Status
-        DataStatus status = DataStatus::Ok;
-        juce::String noDataReason;
-        bool isHoldOn = false;
-        
-        // Session Marker
-        bool sessionMarkerVisible = false;
-        int sessionMarkerBin = -1;
-        float sessionMarkerDb = 0.0f;
-
-        // FFT No Data Guard (Mission FFT_NO_DATA_GUARD_V1)
-        // Latches true once first valid frame arrives (signal > threshold)
-        bool hasValidSpectrumFrame = false;
-
-        // Unified source of truth for rendering limit
-        float getEffectiveMaxHz() const
-        {
-            const float nyquist = static_cast<float> (sampleRate * 0.5);
-            // If sampleRate is 0 or invalid, callback to maxHz (likely 20k)
-            if (nyquist <= 1.0f) return maxHz;
-            return std::min (maxHz, nyquist);
-        }
-    };
-    
-    // B2: Geometry cache derived only from state + component bounds, never mutated in paint
-    void updateGeometry();  // Called from resized() and setBandCenters(), never from paint
-    float frequencyToX (float freqHz) const;  // For updateGeometry() - uses member variables
-    int findNearestBand (float x) const;  // For Bands mode hover - uses bandGeometry
-    void paintBandsMode (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme);
-    void paintLogMode (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme);
-    void paintFFTMode (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme);
-    void drawGrid (juce::Graphics& g, const RenderState& s, const mdsp_ui::Theme& theme);
-    
-    // Helper: compute log frequency from index (for log mode rendering)
-    float computeLogFreqFromIndex (int index, int numBands, float minHz, float maxHz) const;
-    // Helper: compute x position from frequency (with guardrails)
-    float freqToX (float freqHz, const RenderState& s) const;
-    // Helper: compute y position from dB
-    float dbToY (float db, const RenderState& s) const;
-    
-    // Helper: build frequency axis config (ticks, mapping, snap options, style)
-    struct FreqAxisConfig
-    {
-        juce::Array<mdsp_ui::AxisTick> ticks;
-        mdsp_ui::AxisMapping mapping;
-        mdsp_ui::AxisSnapOptions snap;
-        mdsp_ui::AxisHoverControllerStyle style;
-    };
-    FreqAxisConfig buildFreqAxisConfig (const RenderState& s) const;
-    
-    // Helper: build dB axis config (ticks, mapping, snap options, style)
-    struct DbAxisConfig
-    {
-        juce::Array<mdsp_ui::AxisTick> ticks;
-        mdsp_ui::AxisMapping mapping;
-        mdsp_ui::AxisSnapOptions snap;
-        mdsp_ui::AxisHoverControllerStyle style;
-    };
-    DbAxisConfig buildDbAxisConfig (const RenderState& s) const;
-    // Helper: compute y position from dB with frequency-dependent compensation (for FFT mode)
-    float dbToYWithCompensation (float db, float freqHz, const RenderState& s) const;
     // Helper: compute tilt compensation in dB for a given frequency
     float computeTiltDb (float freqHz) const;
-    // Helper: find nearest log band index from x position
-    int findNearestLogBand (float x, const RenderState& s) const;
-
-    // FFT crosshair: map mouse X to frequency (log axis)
-    float mapXToFreqFFT (float x, const RenderState& s) const;
-    // FFT crosshair: map frequency to bin index (clamped)
-    int mapFreqToBinIndex (float freqHz, const RenderState& s) const;
     // FFT crosshair: get dB at bin for active trace (peak if enabled, else main); returns -200.0f if invalid
     float getActiveTraceDbAtBin (int binIndex, const RenderState& s) const;
-    // FFT crosshair: get interpolated dB at pixel X (matches trace rendering, smooth tracking)
-    float getDbAtPixelX (float xPx, const RenderState& s) const;
+    
+    // Mapping function wrappers (delegate to RTAGeometry)
+    int findNearestBand (float x) const;
+    int findNearestLogBand (float x, const RenderState& s) const;
+    float mapXToFreqFFT (float x, const RenderState& s) const;
+    int mapFreqToBinIndex (float freqHz, const RenderState& s) const;
+    float dbToYWithCompensation (float db, float freqHz, const RenderState& s) const;
 
-    // B1: RTADisplay owns one RenderState state
-    RenderState state;
+    std::function<mdsp_ui::AnalyzerRenderState()> getRenderState_;
+    std::function<const mdsp_ui::Theme&()> getTheme_;
+    mdsp_ui::Theme fallbackTheme_;
 
-    // Cached geometry (BandGeometry struct defined above in private section)
-    std::vector<BandGeometry> bandGeometry;
-    std::vector<BandGeometry> logGeometry;  // Separate geometry for log mode
-    bool geometryValid = false;
+    // Model owns all data and cached paths
+    RTADisplayModel model_;
 
-    // Coordinate mapping factors (cached)
-    float logFreqRange = 0.0f;
-    float logMinFreq = 0.0f;
-    float dbRange = 0.0f;
-    float plotAreaLeft = 0.0f;
-    float plotAreaTop = 0.0f;
-    float plotAreaWidth = 0.0f;
-    float plotAreaHeight = 0.0f;
+    // Geometry and coordinate mapping
+    RTAGeometry geometry_;
 
-    // Hover state
-    int hoveredBandIndex = -1;
+    // Interaction controller (mouse, wheel, hover, drag, timer smoothing)
+    RTADisplayController controller_;
 
-    // FFT crosshair hover state
-    bool fftHoverActive_ = false;
-    int fftHoverBinIndex_ = -1;
-    float fftHoverMouseXpx_ = 0.0f;   // Actual mouse X for smooth vertical line
-    float fftHoverSnappedXpx_ = 0.0f; // Bin center X (fallback)
-    float fftHoverSnappedYpx_ = 0.0f;
-    float fftHoverSnappedFreq_ = 0.0f;
-    float fftHoverSnappedDb_ = 0.0f;
-    bool fftHoverDbValid_ = false;
-    juce::String fftHoverReadoutText_;
-    juce::String fftHoverFreqText_;
-    float fftHoverReadoutWidth_ = 0.0f;
-    // Y smoothing in dB domain: target from snapshot, smoothed then dbToY for drawing
-    float hoverDbTarget_ = 0.0f;
-    float hoverDbSmooth_ = 0.0f;
-    bool hoverDbHasValue_ = false;
-    float hoverYSmoothPx_ = 0.0f;
-    double hoverLastSmoothTimeSec_ = 0.0;
+    // Renderer (all paint logic)
+    RTADisplayRenderer renderer_;
 
     void timerCallback() override;
-    
-    // Axis hover controllers
-    mdsp_ui::AxisHoverController freqHover_;  // Frequency axis (X, for Log/FFT modes)
-    mdsp_ui::AxisHoverController dbHover_;    // dB axis (Y, Left edge)
-    
-    // Peak snap controller (for Log mode sticky peak snap)
-    mdsp_ui::PeakSnapController peakSnap_;
-           
-#if JUCE_DEBUG
-           // Debug-only runtime toggle for envelope decimator (OFF by default)
-           bool useEnvelopeDecimator = false;
-#endif
     
     // Display gain offset (UI-only, affects rendering, not DSP)
     float displayGainDb = 0.0f;
@@ -342,54 +164,6 @@ private:
     
     // Trace configuration (which traces to render)
     TraceConfig traceConfig_;
-    
-    // Structural generation tracking (to detect structural changes)
-    uint32_t lastStructuralGen = 0;
-
-    // SMOOTHING_RENDERING_STABILITY_V2: Path validity gating
-    uint32_t currentTraceDataGen_ = 0;
-    uint32_t currentSmoothingGen_ = 0;
-    uint32_t lastPathTraceDataGen_ = 0;
-    uint32_t lastPathSmoothingGen_ = 0;
-
-    bool pathsValid_ = false;
-    // Mission FFT_TRACE_TOGGLE_ATOMIC_REBUILD_V1: Atomic rebuild counters
-    uint32_t pathGen_ = 0;
-    uint32_t lastBuiltGen_ = 0;
-
-    // Weighting Overlay
-    juce::Path weightingPath_;
-    int lastWeightingMode_ = 0;
-    RenderConfigKey lastWeightingKey_;
-    
-    // Selection/ROI Overlay
-    juce::Rectangle<int> selectionRect_;
-    bool selectionActive_ = false;
-
-    // Optimization: Cached Background (Grid, Axes, Labels)
-    juce::Image cachedBackground_;
-    bool backgroundValid_ = false;
-    void refreshBackground(); // Helper to draw static elements to cache
-
-    // Optimization: Cached Trace Paths
-    juce::Path cachedFftPath_;
-    juce::Path cachedPeakPath_;
-    juce::Path cachedPeakHoldPath_; // M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR
-    // Mission FFT_TRACE_STYLE_UNIFY_V1: Cached paths for other traces
-    juce::Path cachedLPath_;
-    juce::Path cachedRPath_;
-    juce::Path cachedStereoPath_;
-    juce::Path cachedMonoPath_;
-    juce::Path cachedMidPath_;
-    juce::Path cachedSidePath_;
-    void buildFftPaths(); // Helper to build decimated paths from data
-    
-    // Helper to build a single decimated path with quadratic smoothing
-    void buildDecimatedPath(const std::vector<float>& data, juce::Path& path);
-
-    // Data status
-
-    juce::String noDataReason;
 
     // Debug info (DEBUG only)
 #if JUCE_DEBUG
@@ -414,7 +188,7 @@ private:
 
 
 
-    RenderConfigKey lastRenderKey_;
+    RenderConfigKey lastRenderKey_;  // For weighting path cache key
 
     // Step 4 & 5: Per-pixel aggregation buffers
     // These replace the ad-hoc SeriesRenderer decimation for RMS correctness

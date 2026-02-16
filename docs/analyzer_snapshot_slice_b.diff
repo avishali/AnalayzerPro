@@ -1,0 +1,223 @@
+--- AnalyzerPro (Slice B) ---
+
+diff --git a/Source/analyzer/AnalyzerEngine.h b/Source/analyzer/AnalyzerEngine.h
+index 4b715a0..417d81e 100644
+--- a/Source/analyzer/AnalyzerEngine.h
++++ b/Source/analyzer/AnalyzerEngine.h
+@@ -2,7 +2,7 @@
+ 
+ #include <juce_dsp/juce_dsp.h>
+ #include <juce_audio_processors/juce_audio_processors.h>
+-#include "AnalyzerSnapshot.h"
++#include "../dsp_adapters/AnalyzerSnapshotAdapter.h"
+ #include <atomic>
+ #include <memory>
+ 
+diff --git a/Source/ui/analyzer/AnalyzerDisplayView.h b/Source/ui/analyzer/AnalyzerDisplayView.h
+index c3109d8..efb2c1b 100644
+--- a/Source/ui/analyzer/AnalyzerDisplayView.h
++++ b/Source/ui/analyzer/AnalyzerDisplayView.h
+@@ -8,7 +8,7 @@
+ #include <array>
+ #include <vector>
+ #include "RTADisplay.h"
+-#include "../../analyzer/AnalyzerSnapshot.h"
++#include "../../dsp_adapters/AnalyzerSnapshotAdapter.h"
+ #include "../../PluginProcessor.h"
+ 
+ #if !defined(ANALYZERPRO_MODE_DEBUG_OVERLAY)
+
+diff --git a/Source/dsp_adapters/AnalyzerSnapshotAdapter.h b/Source/dsp_adapters/AnalyzerSnapshotAdapter.h
+new file mode 100644
+index 0000000..xxxxxxxx
+--- /dev/null
++++ b/Source/dsp_adapters/AnalyzerSnapshotAdapter.h
+@@ -0,0 +1,8 @@
++#pragma once
++
++#include <mdsp_dsp/analyzer/AnalyzerSnapshot.h>
++
++using mdsp_dsp::AnalyzerSnapshot;
++using mdsp_dsp::PublishedAnalyzerSnapshot;
++
+
+diff --git a/Source/analyzer/AnalyzerSnapshot.h b/Source/analyzer/AnalyzerSnapshot.h
+deleted file mode 100644
+index 32b62a6..0000000
+--- a/Source/analyzer/AnalyzerSnapshot.h
++++ /dev/null
+@@ -1,97 +0,0 @@
+-#pragma once
+-
+-#include <array>
+-#include <atomic>
+-#include <cstdint>
+-
+-//==============================================================================
+-/**
+-    Snapshot of analyzer data for transport from audio thread to UI thread.
+-    Pure data structure (no atomics) - trivially copyable.
+-*/
+-struct AnalyzerSnapshot
+-{
+-    static constexpr int kMaxFFTSize = 8192;
+-    static constexpr int kMaxFFTBins = 8192;  // Headroom for 8192 FFT (4097 bins) + future expansion
+-    
+-    // Multi-trace FFT data (dB values)
+-    // Each trace has its own spectrum for independent rendering
+-    std::array<float, kMaxFFTBins> fftDbL{};      // Left channel
+-    std::array<float, kMaxFFTBins> fftDbR{};      // Right channel
+-    std::array<float, kMaxFFTBins> fftDbMono{};   // Mono (L+R)/2
+-    std::array<float, kMaxFFTBins> fftDbMid{};    // Mid (L+R)/2 (same as Mono, different label)
+-    std::array<float, kMaxFFTBins> fftDbSide{};   // Side (L-R)/2
+-
+-    // Engine-side RMS-processed multi-trace arrays (with audio-thread ballistics)
+-    std::array<float, kMaxFFTBins> fftDbLRms{};    // L channel with RMS ballistics
+-    std::array<float, kMaxFFTBins> fftDbRRms{};    // R channel with RMS ballistics
+-    std::array<float, kMaxFFTBins> fftDbMidRms{};  // Mid with RMS ballistics
+-    std::array<float, kMaxFFTBins> fftDbSideRms{}; // Side with RMS ballistics
+-    std::array<float, kMaxFFTBins> fftDbMonoRms{}; // Mono with RMS ballistics
+-
+-    // Peak hold versions for each trace
+-    std::array<float, kMaxFFTBins> fftPeakDbL{};
+-    std::array<float, kMaxFFTBins> fftPeakDbR{};
+-    std::array<float, kMaxFFTBins> fftPeakDbMono{};
+-    std::array<float, kMaxFFTBins> fftPeakDbMid{};
+-    std::array<float, kMaxFFTBins> fftPeakDbSide{};
+-    
+-    // Peak Hold versions (Maximum envelope, slow/no decay)
+-    std::array<float, kMaxFFTBins> fftPeakHoldDbL{};
+-    std::array<float, kMaxFFTBins> fftPeakHoldDbR{};
+-    std::array<float, kMaxFFTBins> fftPeakHoldDbMono{};
+-    std::array<float, kMaxFFTBins> fftPeakHoldDbMid{};
+-    std::array<float, kMaxFFTBins> fftPeakHoldDbSide{};
+-    
+-    // Legacy/Main Peak Hold (corresponding to fftDb)
+-    std::array<float, kMaxFFTBins> fftPeakHoldDb{};
+-    
+-    // Power domain arrays for UI-side derivation of Mono/Mid/Side
+-    // These are in linear power (NOT dB), enabling proper spectral math
+-    std::array<float, kMaxFFTBins> powerL{};
+-    std::array<float, kMaxFFTBins> powerR{};
+-    
+-    // Legacy single-spectrum arrays (kept for backward compatibility, will be populated with Mono)
+-    std::array<float, kMaxFFTBins> fftDb{};
+-    std::array<float, kMaxFFTBins> fftPeakDb{};
+-
+-    // FFT: authoritative bin count for all spectra
+-    // Contract: fftBinCount == (fftSize / 2 + 1).
+-    int fftBinCount = 0;
+-
+-    // Legacy/compat only:
+-    // Historically this field was also used as the FFT bin count. Going forward, FFT uses fftBinCount
+-    // exclusively. numBins is reserved for non-FFT series (Bands/Log) if/when those are ever stored
+-    // in the snapshot directly.
+-    int numBins = 0;
+-    
+-    // Metadata
+-    double sampleRate = 48000.0;
+-    int fftSize = 2048;
+-    float displayBottomDb = -90.0f;
+-    float displayTopDb = 0.0f;
+-    // Validity flag (set to true after first valid FFT)
+-    bool isValid = false;
+-    
+-    // Debug / Status
+-    bool isHoldOn = false;
+-    bool multiTraceEnabled = false;
+-    int weightingMode = 0; // 0=None, 1=A, 2=BS.468 (applied engine-side to power before smoothing)
+-    /** True if Engine applied spectral smoothing. UI must bypass its own smoothing when true. */
+-    bool engineDidSpectralSmooth = false;
+-    /** True when Option A (UISmoothingLogGaussian): smoothing only in UI convertFFTToLog. SmoothingProcessor must bypass. */
+-    bool useUILogGaussianOnly = true;
+-    /** Smoothing octaves (0=Off, 1/24, 1/12, 1/6, 1/3, 1). Used by UI for single-stage enforcement. */
+-    float smoothingOctaves = 0.0f;
+-};
+-
+-//==============================================================================
+-/**
+-    Published snapshot wrapper with atomic sequence counter for lock-free transport.
+-    Used internally by AnalyzerEngine for thread-safe snapshot publishing.
+-*/
+-struct PublishedAnalyzerSnapshot
+-{
+-    std::atomic<uint32_t> sequence{0};
+-    AnalyzerSnapshot data;
+-};
+
+
+--- melechdsp-hq (Slice B) ---
+
+diff --git a/shared/mdsp_dsp/include/mdsp_dsp/analyzer/AnalyzerSnapshot.h b/shared/mdsp_dsp/include/mdsp_dsp/analyzer/AnalyzerSnapshot.h
+new file mode 100644
+index 0000000..xxxxxxxx
+--- /dev/null
++++ b/shared/mdsp_dsp/include/mdsp_dsp/analyzer/AnalyzerSnapshot.h
+@@ -0,0 +1,104 @@
++#pragma once
++
++#include <array>
++#include <atomic>
++#include <cstdint>
++
++namespace mdsp_dsp
++{
++
++//==============================================================================
++/**
++    Snapshot of analyzer data for transport from audio thread to UI thread.
++    Pure data structure (no atomics) - trivially copyable.
++*/
++struct AnalyzerSnapshot
++{
++    static constexpr int kMaxFFTSize = 8192;
++    static constexpr int kMaxFFTBins = 8192;  // Headroom for 8192 FFT (4097 bins) + future expansion
++
++    // Multi-trace FFT data (dB values)
++    std::array<float, kMaxFFTBins> fftDbL{};
++    std::array<float, kMaxFFTBins> fftDbR{};
++    std::array<float, kMaxFFTBins> fftDbMono{};
++    std::array<float, kMaxFFTBins> fftDbMid{};
++    std::array<float, kMaxFFTBins> fftDbSide{};
++    std::array<float, kMaxFFTBins> fftDbLRms{};
++    std::array<float, kMaxFFTBins> fftDbRRms{};
++    std::array<float, kMaxFFTBins> fftDbMidRms{};
++    std::array<float, kMaxFFTBins> fftDbSideRms{};
++    std::array<float, kMaxFFTBins> fftDbMonoRms{};
++    std::array<float, kMaxFFTBins> fftPeakDbL{};
++    std::array<float, kMaxFFTBins> fftPeakDbR{};
++    std::array<float, kMaxFFTBins> fftPeakDbMono{};
++    std::array<float, kMaxFFTBins> fftPeakDbMid{};
++    std::array<float, kMaxFFTBins> fftPeakDbSide{};
++    std::array<float, kMaxFFTBins> fftPeakHoldDbL{};
++    std::array<float, kMaxFFTBins> fftPeakHoldDbR{};
++    std::array<float, kMaxFFTBins> fftPeakHoldDbMono{};
++    std::array<float, kMaxFFTBins> fftPeakHoldDbMid{};
++    std::array<float, kMaxFFTBins> fftPeakHoldDbSide{};
++    std::array<float, kMaxFFTBins> fftPeakHoldDb{};
++    std::array<float, kMaxFFTBins> powerL{};
++    std::array<float, kMaxFFTBins> powerR{};
++    std::array<float, kMaxFFTBins> fftDb{};
++    std::array<float, kMaxFFTBins> fftPeakDb{};
++    int fftBinCount = 0;
++    int numBins = 0;
++    double sampleRate = 48000.0;
++    int fftSize = 2048;
++    float displayBottomDb = -90.0f;
++    float displayTopDb = 0.0f;
++    bool isValid = false;
++    bool isHoldOn = false;
++    bool multiTraceEnabled = false;
++    int weightingMode = 0;
++    bool engineDidSpectralSmooth = false;
++    bool useUILogGaussianOnly = true;
++    float smoothingOctaves = 0.0f;
++};
++
++struct PublishedAnalyzerSnapshot
++{
++    std::atomic<uint32_t> sequence{0};
++    AnalyzerSnapshot data;
++};
++
++} // namespace mdsp_dsp

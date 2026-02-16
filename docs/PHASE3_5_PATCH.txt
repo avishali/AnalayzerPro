@@ -1,0 +1,328 @@
+PLAN + FILES
+
+AnalyzerPro:
+  Source/ui/analyzer/RTADisplay.h
+  Source/ui/analyzer/RTADisplay.cpp
+  Source/ui/analyzer/AnalyzerDisplayView.cpp
+
+melechdsp-hq:
+  shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
+
+PATCH (AnalyzerPro)
+
+diff --git a/Source/ui/analyzer/RTADisplay.h b/Source/ui/analyzer/RTADisplay.h
+--- a/Source/ui/analyzer/RTADisplay.h
++++ b/Source/ui/analyzer/RTADisplay.h
+@@ -4,9 +4,12 @@
+ #include <mdsp_ui/AxisInteraction.h>
+ #include <mdsp_ui/AxisHoverController.h>
+ #include <mdsp_ui/PeakSnapController.h>
++#include <mdsp_ui/analyzer/AnalyzerRenderState.h>
++#include <mdsp_ui/analyzer/AnalyzerRenderer.h>
+ #include <vector>
+ #include <cstdint>
+ #include <cmath>
++#include <functional>
+ 
+ namespace mdsp_ui { struct Theme; }
+ 
+@@ -121,6 +124,9 @@ public:
+     /** Invalidate background cache (call on resize or range change) */
+     void invalidateBackground();
+ 
++    /** When set, paint() uses mdsp_ui::AnalyzerRenderer with state from callback and draws overlays only. */
++    void setGetRenderState (std::function<mdsp_ui::AnalyzerRenderState()> cb);
++
+ #if JUCE_DEBUG
+     /** Set debug info with structural generation - DEBUG only */
+@@ -230,6 +236,8 @@ private:
+         }
+     };
+     
++    void paintOverlays (juce::Graphics& g);
++
+     // B2: Geometry cache derived only from state + component bounds, never mutated in paint
+     void updateGeometry();
+@@ -281,6 +289,8 @@ private:
+     float getDbAtPixelX (float xPx, const RenderState& s) const;
+ 
++    std::function<mdsp_ui::AnalyzerRenderState()> getRenderState_;
++
+     // B1: RTADisplay owns one RenderState state
+     RenderState state;
+ 
+diff --git a/Source/ui/analyzer/RTADisplay.cpp b/Source/ui/analyzer/RTADisplay.cpp
+--- a/Source/ui/analyzer/RTADisplay.cpp
++++ b/Source/ui/analyzer/RTADisplay.cpp
+@@ -695,6 +695,11 @@ void RTADisplay::invalidateBackground()
+     repaint();
+ }
+ 
++void RTADisplay::setGetRenderState (std::function<mdsp_ui::AnalyzerRenderState()> cb)
++{
++    getRenderState_ = std::move (cb);
++}
++
+ void RTADisplay::refreshBackground()
+ {
+@@ -1746,6 +1751,16 @@ void RTADisplay::mouseUp (const juce::MouseEvent& e)
+ void RTADisplay::paint (juce::Graphics& g)
+ {
++    if (getRenderState_)
++    {
++        mdsp_ui::Theme theme;
++        mdsp_ui::AnalyzerRenderer::paint (g, getLocalBounds(), theme, getRenderState_());
++        buildFftPaths();
++        if (state.viewMode == 0)
++            paintOverlays (g);
++        return;
++    }
++
+     // B3: Use local references to state (NO mutations)
+     const auto& s = state;
+     mdsp_ui::Theme theme;
+@@ -1823,6 +1838,160 @@ void RTADisplay::paint (juce::Graphics& g)
+     }
+ }
+ 
++void RTADisplay::paintOverlays (juce::Graphics& g)
++{
++    const auto& s = state;
++    mdsp_ui::Theme theme;
++    if (!pathsValid_) return;
++
++    const float viewWidth = plotAreaWidth;
++    g.saveState();
++    g.reduceClipRegion (getLocalBounds());
++
++    const juce::Colour colSide  = juce::Colour (0xffe91e63);
++    const juce::Colour colMid   = juce::Colour (0xff00bcd4);
++    const juce::Colour colLeft  = juce::Colour (0xff4caf50);
++    const juce::Colour colRight = juce::Colour (0xfff44336);
++    const juce::Colour colStereo = juce::Colour (0xff9c27b0);
++    const juce::Colour colMono  = juce::Colour (0xffffeb3b);
++    const juce::Colour colRms   = theme.accent;
++
++    const auto& c = traceConfig_;
++    if (c.showSide) drawSilkTrace (g, cachedSidePath_,   colSide,  1.8f, viewWidth, false, 1.0f, false);
++    if (c.showMid)  drawSilkTrace (g, cachedMidPath_,    colMid,   1.8f, viewWidth, false, 1.0f, false);
++    if (c.showL)    drawSilkTrace (g, cachedLPath_,      colLeft,  1.8f, viewWidth, false, 1.0f, false);
++    if (c.showR)    drawSilkTrace (g, cachedRPath_,     colRight, 1.8f, viewWidth, false, 1.0f, false);
++    if (c.showLR && !cachedStereoPath_.isEmpty())
++        drawSilkTrace (g, cachedStereoPath_, colStereo, 1.8f, viewWidth, false, 1.0f, false);
++    if (c.showMono) drawSilkTrace (g, cachedMonoPath_,  colMono,  1.8f, viewWidth, false, 1.0f, false);
++
++    if (c.showRMS && !cachedFftPath_.isEmpty())
++    {
++        juce::Path fillPath = cachedFftPath_;
++        const auto pathBounds = cachedFftPath_.getBounds();
++        if (pathBounds.getWidth() > 1.0f)
++        {
++            const float bottomY = plotAreaTop + plotAreaHeight;
++            fillPath.lineTo (pathBounds.getRight(), bottomY);
++            fillPath.lineTo (pathBounds.getX(), bottomY);
++            fillPath.closeSubPath();
++            juce::ColourGradient gradient (colRms.withAlpha (0.35f), 0.0f, plotAreaTop,
++                                           colRms.withAlpha (0.05f), 0.0f, bottomY, false);
++            g.setGradientFill (gradient);
++            g.fillPath (fillPath);
++        }
++    }
++
++    if (!cachedPeakPath_.isEmpty())
++    {
++        juce::Path peakFillPath = cachedPeakPath_;
++        const auto peakBounds = cachedPeakPath_.getBounds();
++        if (peakBounds.getWidth() > 1.0f)
++        {
++            const float bottomY = plotAreaTop + plotAreaHeight;
++            peakFillPath.lineTo (peakBounds.getRight(), bottomY);
++            peakFillPath.lineTo (peakBounds.getX(), bottomY);
++            peakFillPath.closeSubPath();
++            juce::ColourGradient peakGradient (theme.seriesPeak.withAlpha (0.15f), 0.0f, plotAreaTop,
++                                              theme.seriesPeak.withAlpha (0.02f), 0.0f, bottomY, false);
++            g.setGradientFill (peakGradient);
++            g.fillPath (peakFillPath);
++        }
++    }
++
++    if (selectionActive_)
++    {
++        if (!juce::ModifierKeys::getCurrentModifiersRealtime().isAnyMouseButtonDown())
++            selectionActive_ = false;
++        else
++        {
++            g.setColour (theme.accent.withAlpha (0.2f));
++            g.fillRect (selectionRect_);
++            g.setColour (theme.accent.withAlpha (0.6f));
++            g.drawRect (selectionRect_);
++        }
++    }
++
++    const juce::Rectangle<float> legendPlotBounds (plotAreaLeft, plotAreaTop, plotAreaWidth, plotAreaHeight);
++    std::vector<mdsp_ui::LegendItem> legendItems;
++    legendItems.reserve (9);
++    if (c.showRMS) legendItems.push_back ({ "RMS", colRms, true });
++    if (!cachedPeakPath_.isEmpty()) legendItems.push_back ({ "Peak", theme.seriesPeak, true });
++    if (c.showL && !s.lDbL.empty()) legendItems.push_back ({ "L", colLeft, true });
++    if (c.showR && !s.lDbR.empty()) legendItems.push_back ({ "R", colRight, true });
++    if (c.showMid && !s.midDb.empty()) legendItems.push_back ({ "Mid", colMid, true });
++    if (c.showSide && !s.sideDb.empty()) legendItems.push_back ({ "Side", colSide, true });
++    if (c.showMono && !s.monoDb.empty()) legendItems.push_back ({ "Mono", colMono, true });
++    if (c.showLR && !cachedStereoPath_.isEmpty()) legendItems.push_back ({ "Stereo", colStereo, true });
++    if (!legendItems.empty())
++    {
++        mdsp_ui::LegendStyle legendStyle;
++        legendStyle.fontHeightPx = 10.0f;
++        legendStyle.drawFrame = true;
++        legendStyle.frameCornerRadiusPx = 4.0f;
++        legendStyle.frameFillAlpha = 0.80f;
++        legendStyle.frameBorderAlpha = 0.90f;
++        mdsp_ui::LegendRenderer::draw (g, legendPlotBounds, theme, legendItems.data(),
++                                      static_cast<int> (legendItems.size()),
++                                      mdsp_ui::LegendEdge::TopRight, legendStyle);
++    }
++
++    if (s.sessionMarkerVisible && s.viewMode == 0)
++    {
++        const float x = freqToX (s.fftSize > 0 ? static_cast<float> (s.sessionMarkerBin * s.sampleRate / s.fftSize) : 0.0f, s);
++        if (x >= plotAreaLeft && x <= (plotAreaLeft + plotAreaWidth))
++        {
++            const float y = dbToY (s.sessionMarkerDb, s);
++            g.setColour (theme.seriesPeak.brighter (0.3f));
++            g.drawLine (x, y - 4.0f, x, y + 4.0f, 2.0f);
++            g.fillEllipse (x - 2.0f, y - 2.0f, 4.0f, 4.0f);
++        }
++    }
++
++    const float crosshairX = (std::isfinite (fftHoverMouseXpx_) && fftHoverMouseXpx_ >= plotAreaLeft && fftHoverMouseXpx_ <= plotAreaLeft + plotAreaWidth)
++        ? fftHoverMouseXpx_ : fftHoverSnappedXpx_;
++    if (fftHoverActive_ && std::isfinite (crosshairX))
++    {
++        g.setColour (theme.text.withAlpha (0.45f));
++        g.drawVerticalLine (static_cast<int> (crosshairX), plotAreaTop, plotAreaTop + plotAreaHeight);
++        float crosshairY = 0.0f;
++        if (hoverDbHasValue_)
++        {
++            crosshairY = fftHoverSnappedYpx_;
++            if (!std::isfinite (crosshairY) && std::isfinite (hoverYSmoothPx_)) crosshairY = hoverYSmoothPx_;
++            else if (!std::isfinite (crosshairY)) crosshairY = dbToY (hoverDbTarget_, state);
++            if (!std::isfinite (crosshairY)) crosshairY = plotAreaTop + plotAreaHeight * 0.5f;
++        }
++        else
++        {
++            crosshairY = dbToY (state.bottomDb, state);
++            if (!std::isfinite (crosshairY)) crosshairY = plotAreaTop + plotAreaHeight;
++        }
++        g.drawHorizontalLine (static_cast<int> (crosshairY), plotAreaLeft, plotAreaLeft + plotAreaWidth);
++        g.fillEllipse (crosshairX - 2.5f, crosshairY - 2.5f, 5.0f, 5.0f);
++        if (fftHoverReadoutText_.isNotEmpty() && fftHoverReadoutWidth_ > 0.0f)
++        {
++            const float pad = 6.0f, fontH = 10.0f;
++            g.setFont (juce::FontOptions().withHeight (fontH));
++            const float tw = fftHoverReadoutWidth_, th = fontH + 4.0f;
++            float rx = crosshairX + 8.0f, ry = crosshairY - th - 4.0f;
++            if (rx + tw + pad > plotAreaLeft + plotAreaWidth) rx = crosshairX - tw - pad - 8.0f;
++            if (ry < plotAreaTop) ry = crosshairY + 6.0f;
++            if (ry + th > plotAreaTop + plotAreaHeight) ry = plotAreaTop + plotAreaHeight - th - 4.0f;
++            if (rx < plotAreaLeft + 2.0f) rx = plotAreaLeft + 2.0f;
++            const juce::Rectangle<float> readoutRect (rx, ry, tw + pad * 2.0f, th);
++            g.setColour (theme.background.withAlpha (0.92f));
++            g.fillRoundedRectangle (readoutRect, 3.0f);
++            g.setColour (theme.text.withAlpha (0.9f));
++            g.drawRoundedRectangle (readoutRect, 3.0f, 1.0f);
++            g.setColour (theme.text);
++            g.drawText (fftHoverReadoutText_, readoutRect.reduced (pad, 2.0f), juce::Justification::centredLeft, true);
++        }
++    }
++    g.restoreState();
++}
++
+ // Helper functions defined above
+ 
+ diff --git a/Source/ui/analyzer/AnalyzerDisplayView.cpp b/Source/ui/analyzer/AnalyzerDisplayView.cpp
+--- a/Source/ui/analyzer/AnalyzerDisplayView.cpp
++++ b/Source/ui/analyzer/AnalyzerDisplayView.cpp
+@@ -68,6 +68,10 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
+ #if JUCE_DEBUG
+     lastSentRtaMode_ = toRtaMode (currentMode_);
+ #endif
++
++    model_.setViewMode (toRtaMode (currentMode_));
++    model_.setDbRange (0.0f, lastAppliedMinDb_);
++    rtaDisplay.setGetRenderState ([this]() { return model_.getRenderState(); });
+     
+ #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
+@@ -92,6 +96,7 @@ void AnalyzerDisplayView::setDbRange (DbRange r)
+ 
+     dbRange_ = r;
+     targetMinDb_ = dbRangeToMinDb (dbRange_);
++    model_.setDbRange (0.0f, targetMinDb_);
+ 
+     minDbAnim_.reset (60.0, 0.20);
+@@ -604,6 +609,7 @@ void AnalyzerDisplayView::setMode (Mode mode)
+     const int rtaMode = toRtaMode (currentMode_);
+     rtaDisplay.setViewMode (rtaMode);
++    model_.setViewMode (rtaMode);
+ #if JUCE_DEBUG
+     lastSentRtaMode_ = rtaMode;
+@@ -759,6 +765,7 @@ void AnalyzerDisplayView::timerCallback()
+     if (std::abs (minDb - lastAppliedMinDb_) > 1.0e-4f)
+     {
+         rtaDisplay.setDbRange (0.0f, minDb);
++        model_.setDbRange (0.0f, minDb);
+         lastAppliedMinDb_ = minDb;
+     }
+@@ -901,6 +907,8 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
+     const int rtaMode = toRtaMode (currentMode_);
+     rtaDisplay.setViewMode (rtaMode);
++    model_.setViewMode (rtaMode);
++    model_.setDbRange (0.0f, lastAppliedMinDb_);
+ #if JUCE_DEBUG
+     lastSentRtaMode_ = rtaMode;
+@@ -1431,6 +1439,41 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
+             break;
+         }
+     }
++
++    mdsp_ui::AnalyzerRenderState rs;
++    rs.viewMode = rtaMode;
++    rs.minHz = 20.0f;
++    rs.maxHz = 20000.0f;
++    rs.topDb = 0.0f;
++    rs.bottomDb = lastAppliedMinDb_;
++    rs.sampleRate = lastMetaSampleRate_ > 0.0 ? lastMetaSampleRate_ : 48000.0;
++    rs.fftSize = lastMetaFftSize_ > 0 ? lastMetaFftSize_ : 2048;
++    rs.status = mdsp_ui::AnalyzerDataStatus::Ok;
++    rs.noDataReason.clear();
++    rs.isHoldOn = isHoldOn_;
++    rs.sessionMarkerVisible = sessionMarkerValid_;
++    rs.sessionMarkerBin = sessionMarkerBin_;
++    rs.sessionMarkerDb = sessionMarkerDb_;
++    rs.hasValidSpectrumFrame = true;
++    rs.fftDb = fftDb_;
++    rs.fftPeakDb = fftPeakDbDisplay_;
++    rs.fftPeakHoldDb = fftPeakHoldDb_;
++    rs.bandCentersHz = bandCentersHz_;
++    rs.bandsDb = bandsDb_;
++    rs.bandsPeakDb = bandsPeakDbDisplay_.empty() ? bandsPeakDb_ : bandsPeakDbDisplay_;
++    rs.logDb = logDb_;
++    rs.logPeakDb = logPeakDbDisplay_.empty() ? logPeakDb_ : logPeakDbDisplay_;
++    rs.lrBinCount = static_cast<int> (scratchPowerL_.size());
++    rs.lDbL = scratchPowerL_;
++    rs.lDbR = scratchPowerR_;
++    rs.stereoDb.resize (scratchPowerL_.size());
++    for (size_t i = 0; i < scratchPowerL_.size(); ++i)
++        rs.stereoDb[i] = std::max (scratchPowerL_[i], scratchPowerR_[i]);
++    rs.monoDb = scratchPowerMono_;
++    rs.midDb = scratchPowerMid_;
++    rs.sideDb = scratchPowerSide_;
++    rs.hasValidMultiTraceData = snapshot.multiTraceEnabled && !scratchPowerL_.empty() && scratchPowerL_.size() == scratchPowerR_.size();
++    model_.setRenderState (rs);
+ }
+ 
+ //==============================================================================
+
+PATCH (melechdsp-hq — shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp)
+
+Extend FFT branch: add anonymous buildDecimatedPath(), include <vector> and <limits>; replace per-bin vertical lines with decimated path for state.fftDb and (when present and above threshold) state.fftPeakDb, stroked with theme.accent and theme.seriesPeak. See full file in repo (untracked new file in melechdsp-hq; content as in current AnalyzerRenderer.cpp with buildDecimatedPath and FFT/peak path drawing).

@@ -1,0 +1,28 @@
+PLAN + FILES
+
+AnalyzerPro
+  ADDED: Source/ui/analyzer/AnalyzerViewModel.h
+  ADDED: Source/ui/analyzer/AnalyzerViewModel.cpp
+  MODIFIED: Source/ui/analyzer/AnalyzerDisplayView.h
+  MODIFIED: Source/ui/analyzer/AnalyzerDisplayView.cpp
+  MODIFIED: CMakeLists.txt
+
+melechdsp-hq
+  ADDED: shared/mdsp_ui/include/mdsp_ui/analyzer/AnalyzerRenderState.h
+  ADDED: shared/mdsp_ui/include/mdsp_ui/analyzer/AnalyzerRenderer.h
+  ADDED: shared/mdsp_ui/include/mdsp_ui/analyzer/AnalyzerController.h
+  ADDED: shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
+  ADDED: shared/mdsp_ui/src/analyzer/AnalyzerController.cpp
+  MODIFIED: shared/mdsp_ui/CMakeLists.txt
+
+PATCH
+
+Run from AnalyzerPro repo root:
+  patch -p1 < analyzerpro_slice_d.patch
+
+Run from melechdsp-hq repo root:
+  patch -p1 < melechdsp_slice_d.patch
+
+Full unified diffs are in the repo; key changes:
+- AnalyzerPro: new AnalyzerViewModel (setSnapshot, setRenderState, getRenderState, tick, applyInteraction); AnalyzerDisplayView owns model_ and controller_, calls controller in mouseDown/mouseDrag and model_.tick(1/60) in timerCallback.
+- melechdsp-hq: new AnalyzerRenderState (POD for renderer), AnalyzerRenderer::paint(g,bounds,theme,state), AnalyzerController (onMouseMove/Down/Drag/Wheel -> InteractionUpdate); mdsp_ui CMakeLists adds analyzer/*.cpp.

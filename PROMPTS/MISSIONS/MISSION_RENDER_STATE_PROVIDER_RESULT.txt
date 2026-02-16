@@ -1,0 +1,43 @@
+PLAN + FILES
+
+1. Add a persistent member renderState_ (mdsp_ui::AnalyzerRenderState) to AnalyzerDisplayView so the render-state provider returns it (AnalyzerDisplayView.h).
+
+2. After RTADisplay is constructed, set the render-state provider so paint uses it: rtaDisplay.setGetRenderState([this]() { return renderState_; }); (AnalyzerDisplayView.cpp constructor).
+
+3. Whenever RenderState rs is built in updateFromSnapshot, assign to the persistent member before passing to the model: renderState_ = rs; model_.setRenderState(rs); so the renderer reads from renderState_ every paint.
+
+4. Do not change any rendering logic in RTADisplay or AnalyzerRenderer.
+
+FILES:
+	Source/ui/analyzer/AnalyzerDisplayView.h   (add member renderState_)
+	Source/ui/analyzer/AnalyzerDisplayView.cpp  (wire provider, update renderState_)
+
+PATCH
+
+--- a/Source/ui/analyzer/AnalyzerDisplayView.h
++++ b/Source/ui/analyzer/AnalyzerDisplayView.h
+@@ -117,6 +117,7 @@ private:
+     RTADisplay rtaDisplay;
+     mdsp::gui::SpectrumComponent spectrumEngine;
+     AnalyzerViewModel model_;
++    mdsp_ui::AnalyzerRenderState renderState_;
+     mdsp_ui::AnalyzerController controller_;
+ 
+--- a/Source/ui/analyzer/AnalyzerDisplayView.cpp
++++ b/Source/ui/analyzer/AnalyzerDisplayView.cpp
+@@ -74,7 +74,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
+     model_.setViewMode (toRtaMode (currentMode_));
+     model_.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
+-    rtaDisplay.setGetRenderState ([this]() { return model_.getRenderState(); });
++    rtaDisplay.setGetRenderState ([this]() { return renderState_; });
+     rtaDisplay.setGetTheme ([this]() -> const mdsp_ui::Theme& { return theme_; });
+ 
+ #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
+@@ -1514,6 +1514,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
+     rs.showSide = lastTraceConfig_.showSide;
+     rs.showMono = lastTraceConfig_.showMono;
+     rs.showRMS = lastTraceConfig_.showRMS;
++    renderState_ = rs;
+     model_.setRenderState (rs);
+ }
+ 

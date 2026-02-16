@@ -1,0 +1,109 @@
+--- a/shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
++++ b/shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
+@@ -5,6 +5,7 @@
+ #include <juce_graphics/juce_graphics.h>
+ #include <cmath>
++#include <limits>
+ #include <vector>
+ 
+ namespace mdsp_ui
+@@ -16,6 +17,7 @@ namespace
+     constexpr float kTopMargin = 10.0f;
+     constexpr float kBottomMargin = 30.0f;
++    constexpr int kMaxPathPoints = 2048;
+ 
+     inline float dbToY(float db, const AnalyzerRenderState& s,
+@@ -58,10 +60,11 @@ namespace
+         const size_t numBins = data.size();
+         const float binWidthHz = static_cast<float>(s.sampleRate) / static_cast<float>(s.fftSize);
+ 
+-        std::vector<juce::Point<float>> pts;
+-        pts.reserve(static_cast<size_t>(w + 2));
++        float xs[kMaxPathPoints];
++        float ys[kMaxPathPoints];
++        int n = 0;
+         float lastX = -std::numeric_limits<float>::max();
+ 
+-        for (int x = 0; x <= w; ++x)
++        for (int x = 0; x <= w && n < kMaxPathPoints; ++x)
+         {
+             const float x0 = plotAreaLeft + static_cast<float>(x);
+             const float x1 = x0 + 1.0f;
+@@ -112,24 +115,26 @@ namespace
+             finalDb = juce::jlimit(s.bottomDb, s.topDb + 20.0f, finalDb);
+             const float y = dbToY(finalDb, s, plotAreaTop, plotAreaHeight);
+             if (!std::isfinite(y)) continue;
+-            if (x0 > lastX) { pts.emplace_back(x0, y); lastX = x0; }
++            if (x0 > lastX) { xs[n] = x0; ys[n] = y; ++n; lastX = x0; }
+         }
+ 
+-        if (pts.size() >= 3)
++        if (n >= 3)
+         {
+-            std::vector<float> ys(pts.size());
+-            for (size_t i = 0; i < pts.size(); ++i) ys[i] = pts[i].y;
+-            for (size_t i = 1; i < pts.size() - 1; ++i)
+-                pts[i].y = 0.25f * ys[i - 1] + 0.5f * ys[i] + 0.25f * ys[i + 1];
++            float ysCopy[kMaxPathPoints];
++            for (int i = 0; i < n; ++i) ysCopy[i] = ys[i];
++            for (int i = 1; i < n - 1; ++i)
++                ys[i] = 0.25f * ysCopy[i - 1] + 0.5f * ysCopy[i] + 0.25f * ysCopy[i + 1];
+         }
+-        if (pts.empty()) return;
++        if (n == 0) return;
+ 
+-        path.startNewSubPath(pts[0]);
+-        if (pts.size() < 3)
++        path.startNewSubPath(xs[0], ys[0]);
++        if (n < 3)
+         {
+-            for (size_t i = 1; i < pts.size(); ++i) path.lineTo(pts[i]);
++            for (int i = 1; i < n; ++i) path.lineTo(xs[i], ys[i]);
+         }
+         else
+         {
+-            for (size_t i = 1; i < pts.size() - 2; ++i)
++            for (int i = 1; i < n - 2; ++i)
+             {
+-                const auto& p1 = pts[i];
+-                const auto& p2 = pts[i + 1];
+-                path.quadraticTo(p1, (p1 + p2) * 0.5f);
++                path.quadraticTo(xs[i], ys[i], (xs[i] + xs[i + 1]) * 0.5f, (ys[i] + ys[i + 1]) * 0.5f);
+             }
+-            path.quadraticTo(pts[pts.size() - 2], pts.back());
++            path.quadraticTo(xs[n - 2], ys[n - 2], xs[n - 1], ys[n - 1]);
+         }
+     }
+ }
+@@ -233,7 +238,7 @@ void AnalyzerRenderer::paint(juce::Graphics& g,
+                 g.fillPath(fillPath);
+             }
+             g.setColour(theme.accent.withAlpha(0.75f));
+-            g.strokePath(rmsPath, juce::PathStrokeType(2.0f));
++            g.strokePath(rmsPath, juce::PathStrokeType(1.0f));
+         }
+         if (!state.fftPeakDb.empty() && state.fftPeakDb.size() == state.fftDb.size())
+         {
+@@ -248,18 +253,8 @@ void AnalyzerRenderer::paint(juce::Graphics& g,
+                                    state.fftPeakDb, peakPath);
+                 if (!peakPath.isEmpty())
+                 {
+-                    const float bottomY = plotAreaTop + plotAreaHeight;
+-                    const auto peakBounds = peakPath.getBounds();
+-                    if (peakBounds.getWidth() > 1.0f)
+-                    {
+-                        juce::Path peakFillPath = peakPath;
+-                        peakFillPath.lineTo(peakBounds.getRight(), bottomY);
+-                        peakFillPath.lineTo(peakBounds.getX(), bottomY);
+-                        peakFillPath.closeSubPath();
+-                        juce::ColourGradient peakGradient(theme.seriesPeak.withAlpha(0.15f), 0.0f, plotAreaTop,
+-                                                         theme.seriesPeak.withAlpha(0.02f), 0.0f, bottomY, false);
+-                        g.setGradientFill(peakGradient);
+-                        g.fillPath(peakFillPath);
+-                    }
+                     g.setColour(theme.seriesPeak.withAlpha(0.8f));
+-                    g.strokePath(peakPath, juce::PathStrokeType(1.2f));
++                    g.strokePath(peakPath, juce::PathStrokeType(1.0f));
+                 }
+             }
+         }

@@ -1,5 +1,22 @@
-Verification steps:
-1) Confirm RTADisplay.h no longer contains a by-value member of RenderConfigKey before the full struct definition.
-2) Clean build the standalone target (and any plugin targets if present).
-3) Confirm no other files were modified besides RTADisplay.h.
-Outcome must be PASS if build succeeds.
+VERIFIER PROMPT (Cursor)
+
+Return only the final content of VERIFICATION_SLICE_D.md (no markdown fences, no extra text).
+
+Goal: verify Slice-D (UI split into Model + Renderer + Controller; smoothing in Model).
+
+VERIFICATION_SLICE_D.md MUST INCLUDE:
+	1.	Build steps for:
+	•	melechdsp-hq mdsp_ui target
+	•	AnalyzerPro target
+	2.	Static checks (rg):
+	•	Renderer contains no mouse handlers/timer state
+	•	Controller contains no paint/Graphics usage
+	•	Model contains smoothing variables (hover smoothing, etc.)
+	•	AnalyzerPro view calls model_.tick() from a timer and renderer_.paint() from paint()
+	3.	Dependency checks:
+	•	mdsp_ui analyzer code does not include mdsp_dsp engine headers
+	•	mdsp_ui does not include juce_gui_basics outside of Component wrappers (renderer/controller can include minimal juce headers as needed, but must not subclass Component)
+	4.	Runtime smoke:
+	•	open plugin, feed signal, verify FFT + hover + smoothing, change FFT size/modes
+	5.	Rollback plan:
+	•	git commands to revert Slice-D in both repos

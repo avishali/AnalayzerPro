@@ -1,0 +1,155 @@
+PLAN + FILES
+
+A) INVENTORY (AnalyzerPro)
+  Definition: Source/analyzer/AnalyzerSnapshot.h (struct AnalyzerSnapshot, struct PublishedAnalyzerSnapshot). No product-specific enums; only std::array, std::atomic, primitives. Dependencies: <array>, <atomic>, <cstdint>.
+  Usages: AnalyzerEngine.h (.cpp) — publishSnapshot, getLatestSnapshot, stagingSnapshot_, published_; AnalyzerDisplayView.h (.cpp) — updateFromSnapshot, convertFFTToBands, convertFFTToLog, snapshot_, lastValidSnapshot_, kMaxFFTBins.
+
+B) CANONICAL LOCATION (melechdsp-hq)
+  New: shared/mdsp_dsp/include/mdsp_dsp/analyzer/AnalyzerSnapshot.h. Namespace mdsp_dsp. Header-only POD; no .cpp. Types: AnalyzerSnapshot, PublishedAnalyzerSnapshot. No JUCE GUI; no circular deps.
+
+C) CMAKE (melechdsp-hq)
+  No change. mdsp_dsp already exports include dir (include); new header under include/mdsp_dsp/analyzer/ is found as <mdsp_dsp/analyzer/AnalyzerSnapshot.h>.
+
+D) ADAPT ANALYZERPRO
+  New: Source/dsp_adapters/AnalyzerSnapshotAdapter.h — includes <mdsp_dsp/analyzer/AnalyzerSnapshot.h>, using mdsp_dsp::AnalyzerSnapshot; using mdsp_dsp::PublishedAnalyzerSnapshot; so callsites unchanged.
+  Source/analyzer/AnalyzerEngine.h: replace #include "AnalyzerSnapshot.h" with #include "../dsp_adapters/AnalyzerSnapshotAdapter.h".
+  Source/ui/analyzer/AnalyzerDisplayView.h: replace #include "../../analyzer/AnalyzerSnapshot.h" with #include "../../dsp_adapters/AnalyzerSnapshotAdapter.h".
+
+E) REMOVE LOCAL DEFINITION
+  Delete Source/analyzer/AnalyzerSnapshot.h. Single definition lives in mdsp_dsp.
+
+F) EXIT
+  AnalyzerPro builds and runs. Behavior unchanged. If AnalyzerPro consumes melechdsp-hq as submodule (third_party/melechdsp-hq), add the same header there or update submodule to commit that contains the new file in melechdsp-hq.
+
+FILES TOUCHED
+  melechdsp-hq:
+    ADD shared/mdsp_dsp/include/mdsp_dsp/analyzer/AnalyzerSnapshot.h
+  AnalyzerPro:
+    ADD Source/dsp_adapters/AnalyzerSnapshotAdapter.h
+    MODIFY Source/analyzer/AnalyzerEngine.h
+    MODIFY Source/ui/analyzer/AnalyzerDisplayView.h
+    DELETE Source/analyzer/AnalyzerSnapshot.h
+  AnalyzerPro (submodule copy, for build): same header under third_party/melechdsp-hq/shared/mdsp_dsp/include/mdsp_dsp/analyzer/AnalyzerSnapshot.h (or update submodule ref).
+
+
+PATCH
+
+--- melechdsp-hq (new file) ---
+
+diff --git a/shared/mdsp_dsp/include/mdsp_dsp/analyzer/AnalyzerSnapshot.h b/shared/mdsp_dsp/include/mdsp_dsp/analyzer/AnalyzerSnapshot.h
+new file mode 100644
+index 0000000..xxxxxxxx
+--- /dev/null
++++ b/shared/mdsp_dsp/include/mdsp_dsp/analyzer/AnalyzerSnapshot.h
+@@ -0,0 +1,104 @@
++#pragma once
++
++#include <array>
++#include <atomic>
++#include <cstdint>
++
++namespace mdsp_dsp
++{
++
++//==============================================================================
++/**
++    Snapshot of analyzer data for transport from audio thread to UI thread.
++    Pure data structure (no atomics) - trivially copyable.
++*/
++struct AnalyzerSnapshot
++{
++    static constexpr int kMaxFFTSize = 8192;
++    static constexpr int kMaxFFTBins = 8192;  // Headroom for 8192 FFT (4097 bins) + future expansion
++
++    std::array<float, kMaxFFTBins> fftDbL{};
++    std::array<float, kMaxFFTBins> fftDbR{};
++    std::array<float, kMaxFFTBins> fftDbMono{};
++    std::array<float, kMaxFFTBins> fftDbMid{};
++    std::array<float, kMaxFFTBins> fftDbSide{};
++    std::array<float, kMaxFFTBins> fftDbLRms{};
++    std::array<float, kMaxFFTBins> fftDbRRms{};
++    std::array<float, kMaxFFTBins> fftDbMidRms{};
++    std::array<float, kMaxFFTBins> fftDbSideRms{};
++    std::array<float, kMaxFFTBins> fftDbMonoRms{};
++    std::array<float, kMaxFFTBins> fftPeakDbL{};
++    std::array<float, kMaxFFTBins> fftPeakDbR{};
++    std::array<float, kMaxFFTBins> fftPeakDbMono{};
++    std::array<float, kMaxFFTBins> fftPeakDbMid{};
++    std::array<float, kMaxFFTBins> fftPeakDbSide{};
++    std::array<float, kMaxFFTBins> fftPeakHoldDbL{};
++    std::array<float, kMaxFFTBins> fftPeakHoldDbR{};
++    std::array<float, kMaxFFTBins> fftPeakHoldDbMono{};
++    std::array<float, kMaxFFTBins> fftPeakHoldDbMid{};
++    std::array<float, kMaxFFTBins> fftPeakHoldDbSide{};
++    std::array<float, kMaxFFTBins> fftPeakHoldDb{};
++    std::array<float, kMaxFFTBins> powerL{};
++    std::array<float, kMaxFFTBins> powerR{};
++    std::array<float, kMaxFFTBins> fftDb{};
++    std::array<float, kMaxFFTBins> fftPeakDb{};
++    int fftBinCount = 0;
++    int numBins = 0;
++    double sampleRate = 48000.0;
++    int fftSize = 2048;
++    float displayBottomDb = -90.0f;
++    float displayTopDb = 0.0f;
++    bool isValid = false;
++    bool isHoldOn = false;
++    bool multiTraceEnabled = false;
++    int weightingMode = 0;
++    bool engineDidSpectralSmooth = false;
++    bool useUILogGaussianOnly = true;
++    float smoothingOctaves = 0.0f;
++};
++
++struct PublishedAnalyzerSnapshot
++{
++    std::atomic<uint32_t> sequence{0};
++    AnalyzerSnapshot data;
++};
++
++} // namespace mdsp_dsp
++
++
++--- AnalyzerPro ---
++
++diff --git a/Source/analyzer/AnalyzerEngine.h b/Source/analyzer/AnalyzerEngine.h
++--- a/Source/analyzer/AnalyzerEngine.h
+++++ b/Source/analyzer/AnalyzerEngine.h
+@@ -2,7 +2,7 @@
+ 
+ #include <juce_dsp/juce_dsp.h>
+ #include <juce_audio_processors/juce_audio_processors.h>
+-#include "AnalyzerSnapshot.h"
++#include "../dsp_adapters/AnalyzerSnapshotAdapter.h"
+ #include <atomic>
+ #include <memory>
+ 
+diff --git a/Source/ui/analyzer/AnalyzerDisplayView.h b/Source/ui/analyzer/AnalyzerDisplayView.h
++--- a/Source/ui/analyzer/AnalyzerDisplayView.h
+++++ b/Source/ui/analyzer/AnalyzerDisplayView.h
+@@ -8,7 +8,7 @@
+ #include <array>
+ #include <vector>
+ #include "RTADisplay.h"
+-#include "../../analyzer/AnalyzerSnapshot.h"
++#include "../../dsp_adapters/AnalyzerSnapshotAdapter.h"
+ #include "../../PluginProcessor.h"
+ 
+diff --git a/Source/dsp_adapters/AnalyzerSnapshotAdapter.h b/Source/dsp_adapters/AnalyzerSnapshotAdapter.h
++new file mode 100644
++--- /dev/null
+++++ b/Source/dsp_adapters/AnalyzerSnapshotAdapter.h
+@@ -0,0 +1,8 @@
++#pragma once
++
++#include <mdsp_dsp/analyzer/AnalyzerSnapshot.h>
++
++using mdsp_dsp::AnalyzerSnapshot;
++using mdsp_dsp::PublishedAnalyzerSnapshot;
++
++diff --git a/Source/analyzer/AnalyzerSnapshot.h b/Source/analyzer/AnalyzerSnapshot.h
++deleted file mode 100644
++--- a/Source/analyzer/AnalyzerSnapshot.h
+++++ /dev/null
+@@ -1,97 +0,0 @@
++(- full content of original AnalyzerSnapshot.h removed -)

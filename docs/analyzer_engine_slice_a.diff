@@ -1,0 +1,406 @@
+diff --git a/Source/analyzer/AnalyzerEngine.cpp b/Source/analyzer/AnalyzerEngine.cpp
+index 23ada76..7456000 100644
+--- a/Source/analyzer/AnalyzerEngine.cpp
++++ b/Source/analyzer/AnalyzerEngine.cpp
+@@ -40,8 +40,8 @@ void AnalyzerEngine::prepare (double sampleRate, int /* samplesPerBlock */)
+ void AnalyzerEngine::initializeFFT (int fftSize)
+ {
+     const int oldNumBins = currentFFTSize / 2 + 1;
+-    const bool hasOldState = (currentFFTSize > 0 && !smoothedMagnitude.empty()
+-                              && static_cast<int> (smoothedMagnitude.size()) == oldNumBins);
++    const bool hasOldState = (currentFFTSize > 0 && !rmsBallistics_.empty()
++                              && static_cast<int> (rmsBallistics_.size()) == oldNumBins);
+ 
+     currentFFTSize = fftSize;
+     currentHopSize = fftSize / 4;  // 25% overlap
+@@ -57,41 +57,87 @@ void AnalyzerEngine::initializeFFT (int fftSize)
+     fifoBuffer.resize (fftSizeSz, 0.0f);
+     const int numBins = fftSize / 2 + 1;
+ 
+-    // Preserve ballistics state across FFT resize (prevents visual "pop")
+-    auto resampleBallistics = [](const std::vector<float>& old, int oldN, int newN) -> std::vector<float>
++    const double hopSec = static_cast<double> (currentHopSize) / currentSampleRate;
++    const double rateForHop = (hopSec > 0.0) ? (1.0 / hopSec) : 44100.0;
++
++    auto resampleLevels = [](const std::vector<mdsp_dsp::MeterBallistics>& old, int oldN, int newN) -> std::vector<float>
+     {
+         std::vector<float> result (static_cast<size_t> (newN), 0.0f);
+         if (oldN <= 0 || old.empty())
+             return result;
++        std::vector<float> oldLevels (static_cast<size_t> (oldN), 0.0f);
++        for (int i = 0; i < oldN; ++i)
++            oldLevels[static_cast<size_t> (i)] = old[static_cast<size_t> (i)].getCurrentLevel();
+         for (int i = 0; i < newN; ++i)
+         {
+-            const float srcPos = static_cast<float> (i) * static_cast<float> (oldN - 1) / static_cast<float> (newN - 1);
+-            const int lo = static_cast<int> (srcPos);
++            const float srcPos = (newN > 1) ? static_cast<float> (i) * static_cast<float> (oldN - 1) / static_cast<float> (newN - 1) : 0.0f;
++            const int lo = std::min (static_cast<int> (srcPos), oldN - 1);
+             const int hi = std::min (lo + 1, oldN - 1);
+             const float frac = srcPos - static_cast<float> (lo);
+-            result[static_cast<size_t> (i)] = old[static_cast<size_t> (lo)] * (1.0f - frac)
+-                                            + old[static_cast<size_t> (hi)] * frac;
++            result[static_cast<size_t> (i)] = oldLevels[static_cast<size_t> (lo)] * (1.0f - frac)
++                                            + oldLevels[static_cast<size_t> (hi)] * frac;
+         }
+         return result;
+     };
+ 
++    auto buildRmsBallistics = [this, rateForHop, numBins](const std::vector<float>& initial)
++    {
++        std::vector<mdsp_dsp::MeterBallistics> out;
++        out.reserve (static_cast<size_t> (numBins));
++        for (int i = 0; i < numBins; ++i)
++        {
++            mdsp_dsp::MeterBallistics b;
++            b.reset (rateForHop, static_cast<double> (rmsAttackMs_), static_cast<double> (rmsReleaseMs_),
++                     initial.empty() ? 0.0f : initial[static_cast<size_t> (i)]);
++            out.push_back (std::move (b));
++        }
++        return out;
++    };
++    auto buildPeakBallistics = [this, rateForHop, numBins](const std::vector<float>& initial)
++    {
++        std::vector<mdsp_dsp::MeterBallistics> out;
++        out.reserve (static_cast<size_t> (numBins));
++        for (int i = 0; i < numBins; ++i)
++        {
++            mdsp_dsp::MeterBallistics b;
++            b.reset (rateForHop, static_cast<double> (peakAttackMs_), static_cast<double> (peakReleaseMs_),
++                     initial.empty() ? 0.0f : initial[static_cast<size_t> (i)]);
++            out.push_back (std::move (b));
++        }
++        return out;
++    };
++
+     if (hasOldState && oldNumBins != numBins)
+     {
+-        smoothedMagnitude = resampleBallistics (smoothedMagnitude, oldNumBins, numBins);
+-        smoothedPeak = resampleBallistics (smoothedPeak, oldNumBins, numBins);
+-        smoothedLRms_ = resampleBallistics (smoothedLRms_, oldNumBins, numBins);
+-        smoothedRRms_ = resampleBallistics (smoothedRRms_, oldNumBins, numBins);
+-        smoothedMidRms_ = resampleBallistics (smoothedMidRms_, oldNumBins, numBins);
+-        smoothedSideRms_ = resampleBallistics (smoothedSideRms_, oldNumBins, numBins);
+-        smoothedMonoRms_ = resampleBallistics (smoothedMonoRms_, oldNumBins, numBins);
++        const std::vector<float> rmsInit = resampleLevels (rmsBallistics_, oldNumBins, numBins);
++        const std::vector<float> peakInit = resampleLevels (peakBallistics_, oldNumBins, numBins);
++        rmsBallistics_ = buildRmsBallistics (rmsInit);
++        peakBallistics_ = buildPeakBallistics (peakInit);
++        if (enableMultiTrace_)
++        {
++            const std::vector<float> lInit = resampleLevels (lRmsBallistics_, oldNumBins, numBins);
++            const std::vector<float> rInit = resampleLevels (rRmsBallistics_, oldNumBins, numBins);
++            const std::vector<float> midInit = resampleLevels (midRmsBallistics_, oldNumBins, numBins);
++            const std::vector<float> sideInit = resampleLevels (sideRmsBallistics_, oldNumBins, numBins);
++            const std::vector<float> monoInit = resampleLevels (monoRmsBallistics_, oldNumBins, numBins);
++            lRmsBallistics_ = buildRmsBallistics (lInit);
++            rRmsBallistics_ = buildRmsBallistics (rInit);
++            midRmsBallistics_ = buildRmsBallistics (midInit);
++            sideRmsBallistics_ = buildRmsBallistics (sideInit);
++            monoRmsBallistics_ = buildRmsBallistics (monoInit);
++        }
+     }
+     else
+     {
+-        smoothedMagnitude.resize (static_cast<size_t> (numBins), 0.0f);
+-        smoothedPeak.resize (static_cast<size_t> (numBins), 0.0f);
++        rmsBallistics_ = buildRmsBallistics ({});
++        peakBallistics_ = buildPeakBallistics ({});
++        lRmsBallistics_ = buildRmsBallistics ({});
++        rRmsBallistics_ = buildRmsBallistics ({});
++        midRmsBallistics_ = buildRmsBallistics ({});
++        sideRmsBallistics_ = buildRmsBallistics ({});
++        monoRmsBallistics_ = buildRmsBallistics ({});
+     }
+ 
+-    // Ensure correct size after resample
+     smoothedMagnitude.resize (static_cast<size_t> (numBins), 0.0f);
+     smoothedPeak.resize (static_cast<size_t> (numBins), 0.0f);
+ 
+@@ -211,10 +257,15 @@ void AnalyzerEngine::reset()
+     fftOutput.clear();
+     window.clear();
+     fifoBuffer.clear();
+-    // CLEANUP: DUPLICATE - Removed duplicate fifoBuffer.clear() call (line 173)
+-    // fifoBuffer.clear();
+     smoothedMagnitude.clear();
+     smoothedPeak.clear();
++    rmsBallistics_.clear();
++    peakBallistics_.clear();
++    lRmsBallistics_.clear();
++    rRmsBallistics_.clear();
++    midRmsBallistics_.clear();
++    sideRmsBallistics_.clear();
++    monoRmsBallistics_.clear();
+     peakHold.clear();
+     magnitudes_.clear();
+     dbValues_.clear();
+@@ -384,30 +435,17 @@ void AnalyzerEngine::computeFFT()
+     }
+ 
+     // -------------------------------------------------------------------------
+-    // Time Smoothing (Ballistics) - Applied to Power
++    // Time Smoothing (Ballistics) - Applied to Power (shared mdsp_dsp MeterBallistics)
+     // -------------------------------------------------------------------------
+-    // Calculate coefficients based on current hop time
+-    const double hopSec = static_cast<double> (currentHopSize) / currentSampleRate;
+-
+-    auto calcCoeff = [hopSec](float timeMs) -> float {
+-        if (timeMs <= 0.1f) return 0.0f; // Instant
+-        return static_cast<float>(std::exp(-hopSec / (static_cast<double>(timeMs) / 1000.0)));
+-    };
+-
+-    const float rmsAttCoeff = calcCoeff(rmsAttackMs_);
+-    const float rmsRelCoeff = calcCoeff(rmsReleaseMs_);
+-    const float peakAttCoeff = calcCoeff(peakAttackMs_);
+-    const float peakRelCoeff = calcCoeff(peakReleaseMs_);
+ 
+ #if JUCE_DEBUG
+-    // Debug: Check input power values
+     static int powerDebugCounter = 0;
+     if ((++powerDebugCounter % 100) == 0)
+     {
+         float maxInput = freqSmoothed[100];
+         float maxMag = magnitudes_[100];
+         DBG ("POWER INPUT: freqSmoothed[100]=" << maxInput << " rawMag[100]=" << maxMag
+-             << " smoothedPeak[100]=" << smoothedPeak[100]);
++             << " smoothedPeak[100]=" << (smoothedPeak.size() > 100 ? smoothedPeak[100] : 0.0f));
+     }
+ #endif
+ 
+@@ -416,17 +454,10 @@ void AnalyzerEngine::computeFFT()
+         const std::size_t idx = static_cast<std::size_t> (i);
+         const float inputPower = freqSmoothed[idx];
+ 
+-        // RMS Ballistics
+-        float& rmsState = smoothedMagnitude[idx];
+-        const float rmsCoeff = (inputPower > rmsState) ? rmsAttCoeff : rmsRelCoeff;
+-        rmsState = rmsCoeff * rmsState + (1.0f - rmsCoeff) * inputPower;
++        smoothedMagnitude[idx] = rmsBallistics_[idx].process (inputPower);
+ 
+-        // Peak Ballistics: envelope max with fast attack / release
+-        // NOTE: Only use main trace power for peak calculation to avoid multi-trace contamination
+         float maxPower = inputPower;
+-        float& peakState = smoothedPeak[idx];
+-        const float peakCoeff = (maxPower > peakState) ? peakAttCoeff : peakRelCoeff;
+-        peakState = peakCoeff * peakState + (1.0f - peakCoeff) * maxPower;
++        smoothedPeak[idx] = peakBallistics_[idx].process (maxPower);
+     }
+ 
+     // ============================================================================
+@@ -476,45 +507,31 @@ void AnalyzerEngine::computeFFT()
+             std::copy (powerR_.begin(), powerR_.begin() + numBins, smoothedR_.begin());
+         }
+ 
+-        // Apply RMS ballistics to L/R
+         constexpr float kMinPower = 1.0e-20f;
+ 
+         for (int i = 0; i < numBins; ++i)
+         {
+             const size_t idx = static_cast<size_t>(i);
+ 
+-            // L channel (using spectrally-smoothed input)
+             const float inputPowerL = smoothedL_[idx];
+-            float& rmsStateL = smoothedLRms_[idx];
+-            const float coeffL = (inputPowerL > rmsStateL) ? rmsAttCoeff : rmsRelCoeff;
+-            rmsStateL = coeffL * rmsStateL + (1.0f - coeffL) * inputPowerL;
++            smoothedLRms_[idx] = lRmsBallistics_[idx].process (inputPowerL);
+ 
+-            // R channel (using spectrally-smoothed input)
+             const float inputPowerR = smoothedR_[idx];
+-            float& rmsStateR = smoothedRRms_[idx];
+-            const float coeffR = (inputPowerR > rmsStateR) ? rmsAttCoeff : rmsRelCoeff;
+-            rmsStateR = coeffR * rmsStateR + (1.0f - coeffR) * inputPowerR;
++            smoothedRRms_[idx] = rRmsBallistics_[idx].process (inputPowerR);
+ 
+-            // Mid: derive from smoothed L/R (magnitude domain)
+-            const float magL = std::sqrt(std::max(rmsStateL, kMinPower));
+-            const float magR = std::sqrt(std::max(rmsStateR, kMinPower));
++            const float magL = std::sqrt (std::max (smoothedLRms_[idx], kMinPower));
++            const float magR = std::sqrt (std::max (smoothedRRms_[idx], kMinPower));
+             const float magMid = 0.5f * (magL + magR);
+             const float powerMid = magMid * magMid;
+ 
+-            float& rmsStateMid = smoothedMidRms_[idx];
+-            const float coeffMid = (powerMid > rmsStateMid) ? rmsAttCoeff : rmsRelCoeff;
+-            rmsStateMid = coeffMid * rmsStateMid + (1.0f - coeffMid) * powerMid;
++            smoothedMidRms_[idx] = midRmsBallistics_[idx].process (powerMid);
+ 
+-            // Side: derive from smoothed L/R (magnitude domain)
+-            const float magSide = 0.5f * std::abs(magL - magR);
++            const float magSide = 0.5f * std::abs (magL - magR);
+             const float powerSide = magSide * magSide;
+ 
+-            float& rmsStateSide = smoothedSideRms_[idx];
+-            const float coeffSide = (powerSide > rmsStateSide) ? rmsAttCoeff : rmsRelCoeff;
+-            rmsStateSide = coeffSide * rmsStateSide + (1.0f - coeffSide) * powerSide;
++            smoothedSideRms_[idx] = sideRmsBallistics_[idx].process (powerSide);
+ 
+-            // Mono: same as Mid
+-            smoothedMonoRms_[idx] = rmsStateMid;
++            smoothedMonoRms_[idx] = monoRmsBallistics_[idx].process (powerMid);
+         }
+     }
+ 
+@@ -939,11 +956,8 @@ void AnalyzerEngine::requestFftSize (int fftSize)
+ 
+     void AnalyzerEngine::setAveragingMs (float averagingMs)
+     {
+-        // Removed in favor of Attack/Release. 
+-        // Mapping legacy "Averaging" to "Release" for basic compatibility if needed, 
+-        // or just ignoring.
+-        // For now, let's map it to RMS Release to keep some control if UI calls this.
+         rmsReleaseMs_ = juce::jlimit(10.0f, 2000.0f, averagingMs);
++        updateBallisticsRates();
+     }
+ 
+ void AnalyzerEngine::resetPeaks()
+@@ -951,23 +965,29 @@ void AnalyzerEngine::resetPeaks()
+     std::fill (peakHold.begin(), peakHold.end(), kDbFloor);
+     std::fill (peakHoldFramesRemaining_.begin(), peakHoldFramesRemaining_.end(), 0);
+ 
+-    // CRITICAL: Reset ballistic peak state (smoothedPeak feeds into yellow peak trace via dbRaw_)
+-    // Without this, the yellow peak trace stays at old max values even after "reset peaks"
+-    std::fill (smoothedPeak.begin(), smoothedPeak.end(), 0.0f);
++    const double hopSec = static_cast<double> (currentHopSize) / currentSampleRate;
++    const double rateForHop = (hopSec > 0.0) ? (1.0 / hopSec) : 44100.0;
++
++    for (size_t i = 0; i < rmsBallistics_.size(); ++i)
++        rmsBallistics_[i].reset (rateForHop, static_cast<double> (rmsAttackMs_), static_cast<double> (rmsReleaseMs_), 0.0f);
++    for (size_t i = 0; i < peakBallistics_.size(); ++i)
++        peakBallistics_[i].reset (rateForHop, static_cast<double> (peakAttackMs_), static_cast<double> (peakReleaseMs_), 0.0f);
++    for (size_t i = 0; i < lRmsBallistics_.size(); ++i)
++        lRmsBallistics_[i].reset (rateForHop, static_cast<double> (rmsAttackMs_), static_cast<double> (rmsReleaseMs_), 0.0f);
++    for (size_t i = 0; i < rRmsBallistics_.size(); ++i)
++        rRmsBallistics_[i].reset (rateForHop, static_cast<double> (rmsAttackMs_), static_cast<double> (rmsReleaseMs_), 0.0f);
++    for (size_t i = 0; i < midRmsBallistics_.size(); ++i)
++        midRmsBallistics_[i].reset (rateForHop, static_cast<double> (rmsAttackMs_), static_cast<double> (rmsReleaseMs_), 0.0f);
++    for (size_t i = 0; i < sideRmsBallistics_.size(); ++i)
++        sideRmsBallistics_[i].reset (rateForHop, static_cast<double> (rmsAttackMs_), static_cast<double> (rmsReleaseMs_), 0.0f);
++    for (size_t i = 0; i < monoRmsBallistics_.size(); ++i)
++        monoRmsBallistics_[i].reset (rateForHop, static_cast<double> (rmsAttackMs_), static_cast<double> (rmsReleaseMs_), 0.0f);
+ 
+-    // Multi-trace Peak Reset
+     std::fill (peakL_.begin(), peakL_.end(), kDbFloor);
+     std::fill (peakR_.begin(), peakR_.end(), kDbFloor);
+     std::fill (peakMono_.begin(), peakMono_.end(), kDbFloor);
+     std::fill (peakMid_.begin(), peakMid_.end(), kDbFloor);
+     std::fill (peakSide_.begin(), peakSide_.end(), kDbFloor);
+-
+-    // Clear multi-trace RMS ballistics state (engine-side)
+-    std::fill (smoothedLRms_.begin(), smoothedLRms_.end(), 0.0f);
+-    std::fill (smoothedRRms_.begin(), smoothedRRms_.end(), 0.0f);
+-    std::fill (smoothedMidRms_.begin(), smoothedMidRms_.end(), 0.0f);
+-    std::fill (smoothedSideRms_.begin(), smoothedSideRms_.end(), 0.0f);
+-    std::fill (smoothedMonoRms_.begin(), smoothedMonoRms_.end(), 0.0f);
+ }
+ 
+ void AnalyzerEngine::setPeakHoldMode (PeakHoldMode mode)
+@@ -1022,6 +1042,7 @@ void AnalyzerEngine::setReleaseTimeMs (float ms)
+     peakReleaseMs_ = clampedMs;
+     const float seconds = clampedMs / 1000.0f;
+     peakDecayDbPerSec = 60.0f / seconds;
++    updateBallisticsRates();
+ }
+ 
+ void AnalyzerEngine::setSmoothingOctaves (float octaves)
+@@ -1033,6 +1054,36 @@ void AnalyzerEngine::setSmoothingOctaves (float octaves)
+     updateSmoothingBounds();
+ }
+ 
++void AnalyzerEngine::updateBallisticsRates()
++{
++    const double hopSec = static_cast<double> (currentHopSize) / currentSampleRate;
++    if (hopSec <= 0.0)
++        return;
++    const double rateForHop = 1.0 / hopSec;
++
++    for (size_t i = 0; i < rmsBallistics_.size(); ++i)
++        rmsBallistics_[i].reset (rateForHop, static_cast<double> (rmsAttackMs_), static_cast<double> (rmsReleaseMs_),
++                                rmsBallistics_[i].getCurrentLevel());
++    for (size_t i = 0; i < peakBallistics_.size(); ++i)
++        peakBallistics_[i].reset (rateForHop, static_cast<double> (peakAttackMs_), static_cast<double> (peakReleaseMs_),
++                                 peakBallistics_[i].getCurrentLevel());
++    for (size_t i = 0; i < lRmsBallistics_.size(); ++i)
++        lRmsBallistics_[i].reset (rateForHop, static_cast<double> (rmsAttackMs_), static_cast<double> (rmsReleaseMs_),
++                                 lRmsBallistics_[i].getCurrentLevel());
++    for (size_t i = 0; i < rRmsBallistics_.size(); ++i)
++        rRmsBallistics_[i].reset (rateForHop, static_cast<double> (rmsAttackMs_), static_cast<double> (rmsReleaseMs_),
++                                 rRmsBallistics_[i].getCurrentLevel());
++    for (size_t i = 0; i < midRmsBallistics_.size(); ++i)
++        midRmsBallistics_[i].reset (rateForHop, static_cast<double> (rmsAttackMs_), static_cast<double> (rmsReleaseMs_),
++                                  midRmsBallistics_[i].getCurrentLevel());
++    for (size_t i = 0; i < sideRmsBallistics_.size(); ++i)
++        sideRmsBallistics_[i].reset (rateForHop, static_cast<double> (rmsAttackMs_), static_cast<double> (rmsReleaseMs_),
++                                   sideRmsBallistics_[i].getCurrentLevel());
++    for (size_t i = 0; i < monoRmsBallistics_.size(); ++i)
++        monoRmsBallistics_[i].reset (rateForHop, static_cast<double> (rmsAttackMs_), static_cast<double> (rmsReleaseMs_),
++                                    monoRmsBallistics_[i].getCurrentLevel());
++}
++
+ void AnalyzerEngine::updateSmoothingBounds()
+ {
+     if (smoothingOctaves_ <= 0.0f)
+diff --git a/Source/analyzer/AnalyzerEngine.h b/Source/analyzer/AnalyzerEngine.h
+index 143186f..4b715a0 100644
+--- a/Source/analyzer/AnalyzerEngine.h
++++ b/Source/analyzer/AnalyzerEngine.h
+@@ -12,6 +12,7 @@
+     Runs on audio thread, produces snapshots for UI consumption.
+ */
+ #include "StereoScopeAnalyzer.h"
++#include <mdsp_dsp/MeterBallistics.h>
+ 
+ class AnalyzerEngine
+ {
+@@ -122,9 +123,13 @@ private:
+     bool prepared = false;
+     
+     
+-    // Smoothing buffers (Power domain) - Legacy single-channel
+-    std::vector<float> smoothedMagnitude; // RMS State
+-    std::vector<float> smoothedPeak;      // Peak State (ballistics for peak trace)
++    // Smoothing buffers (Power domain) - Output of ballistics each frame, used by convertToDb
++    std::vector<float> smoothedMagnitude; // RMS (filled from rmsBallistics_.process)
++    std::vector<float> smoothedPeak;      // Peak (filled from peakBallistics_.process)
++
++    // Attack/release ballistics state (shared mdsp_dsp implementation)
++    std::vector<mdsp_dsp::MeterBallistics> rmsBallistics_;
++    std::vector<mdsp_dsp::MeterBallistics> peakBallistics_;
+ 
+     // Multi-trace complex bin storage (for L/R channels)
+     std::vector<float> fftOutputL;  // Complex FFT output for Left channel
+@@ -144,12 +149,18 @@ private:
+     std::vector<float> smoothedMid_;
+     std::vector<float> smoothedSide_;
+ 
+-    // RMS ballistics state for multi-trace (audio thread)
+-    std::vector<float> smoothedLRms_;      // RMS ballistics state for L
+-    std::vector<float> smoothedRRms_;      // RMS ballistics state for R
+-    std::vector<float> smoothedMidRms_;    // RMS ballistics state for Mid
+-    std::vector<float> smoothedSideRms_;   // RMS ballistics state for Side
+-    std::vector<float> smoothedMonoRms_;   // RMS ballistics state for Mono
++    // Multi-trace RMS ballistics state (shared mdsp_dsp)
++    std::vector<mdsp_dsp::MeterBallistics> lRmsBallistics_;
++    std::vector<mdsp_dsp::MeterBallistics> rRmsBallistics_;
++    std::vector<mdsp_dsp::MeterBallistics> midRmsBallistics_;
++    std::vector<mdsp_dsp::MeterBallistics> sideRmsBallistics_;
++    std::vector<mdsp_dsp::MeterBallistics> monoRmsBallistics_;
++    // Output buffers for convertToDb (filled each frame from ballistics)
++    std::vector<float> smoothedLRms_;
++    std::vector<float> smoothedRRms_;
++    std::vector<float> smoothedMidRms_;
++    std::vector<float> smoothedSideRms_;
++    std::vector<float> smoothedMonoRms_;
+ 
+     // Multi-trace peak hold
+     std::vector<float> peakL_;
+@@ -222,7 +233,7 @@ private:
+     int samplesCollectedR_ = 0;
+     
+     void initializeFFT (int fftSize);
+-    // void updateSmoothingCoeff (float averagingMs, double sampleRate); // Removed in favor of Attack/Release ballistics
++    void updateBallisticsRates();
+     void updateSmoothingBounds();
+     
+     void computeFFT();

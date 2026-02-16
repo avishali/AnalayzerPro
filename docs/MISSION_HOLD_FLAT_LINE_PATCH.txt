@@ -1,0 +1,119 @@
+--- a/shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
++++ b/shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
+@@ -74,6 +74,8 @@ namespace
+         if (w <= 0) return;
+ 
++        const float floorDb = s.bottomDb;
++        const float topDb = s.topDb;
+         const float logMin = std::log10(s.minHz);
+         const float logMax = std::log10(s.maxHz);
+         const float logRange = logMax - logMin;
+@@ -100,35 +102,60 @@ namespace
+             const size_t b0 = juce::jlimit(static_cast<size_t>(0), numBins - 1, static_cast<size_t>(binStartF));
+             const size_t b1 = juce::jlimit(static_cast<size_t>(0), numBins, static_cast<size_t>(std::ceil(binEndF)));
+ 
+-            float finalDb = -200.0f;
++            bool hasValid = false;
++            float maxDb = floorDb;
++
+             if ((binEndF - binStartF) < 1.0f)
+             {
+                 const float freqCenter = xToFreq(x0 + 0.5f);
+                 const float exactBin = freqCenter / binWidthHz;
+-                const size_t idx = static_cast<size_t>(exactBin);
++                const size_t idx = juce::jlimit(static_cast<size_t>(0), numBins > 0 ? numBins - 1 : 0, static_cast<size_t>(exactBin));
+                 const float frac = exactBin - static_cast<float>(idx);
+                 if (idx < numBins - 1)
+                 {
+                     float v1 = data[idx], v2 = data[idx + 1];
+-                    if (!std::isfinite(v1)) v1 = -200.0f;
+-                    if (!std::isfinite(v2)) v2 = -200.0f;
+-                    finalDb = v1 * (1.0f - frac) + v2 * frac;
++                    if (std::isfinite(v1) && std::isfinite(v2))
++                    {
++                        v1 = juce::jlimit(floorDb, topDb, v1);
++                        v2 = juce::jlimit(floorDb, topDb, v2);
++                        maxDb = std::max(maxDb, v1 * (1.0f - frac) + v2 * frac);
++                        hasValid = true;
++                    }
++                    else if (std::isfinite(v1))
++                    {
++                        v1 = juce::jlimit(floorDb, topDb, v1);
++                        maxDb = std::max(maxDb, v1);
++                        hasValid = true;
++                    }
++                    else if (std::isfinite(v2))
++                    {
++                        v2 = juce::jlimit(floorDb, topDb, v2);
++                        maxDb = std::max(maxDb, v2);
++                        hasValid = true;
++                    }
+                 }
+                 else if (idx < numBins)
+-                    finalDb = data[idx];
++                {
++                    const float v = data[idx];
++                    if (std::isfinite(v))
++                    {
++                        maxDb = std::max(maxDb, juce::jlimit(floorDb, topDb, v));
++                        hasValid = true;
++                    }
++                }
+             }
+             else
+             {
+-                size_t validB1 = std::max(b1, b0 + 1);
+-                validB1 = std::min(validB1, numBins);
+-                float maxVal = -200.0f;
++                const size_t validB1 = std::min(std::max(b1, b0 + 1), numBins);
+                 for (size_t k = b0; k < validB1; ++k)
+                 {
+                     const float val = data[k];
+-                    if (std::isfinite(val) && val > maxVal) maxVal = val;
++                    if (!std::isfinite(val)) continue;
++                    const float clamped = juce::jlimit(floorDb, topDb, val);
++                    maxDb = std::max(maxDb, clamped);
++                    hasValid = true;
+                 }
+-                finalDb = maxVal;
+             }
+-            finalDb = juce::jlimit(s.bottomDb, s.topDb + 20.0f, finalDb);
+-            const float y = dbToY(finalDb, s, plotAreaTop, plotAreaHeight);
++
++            if (!hasValid) continue;
++
++            const float y = dbToY(maxDb, s, plotAreaTop, plotAreaHeight);
+             if (!std::isfinite(y)) continue;
+             if (x0 > lastX) { xs[n] = x0; ys[n] = y; ++n; lastX = x0; }
+         }
+@@ -291,6 +318,26 @@ namespace
+             // Hold trace (theme.seriesPeak variant when hold on)
+             if (state.isHoldOn && !state.fftPeakHoldDb.empty() && state.fftPeakHoldDb.size() == state.fftDb.size())
+             {
++#if JUCE_DEBUG
++                {
++                    static juce::uint32 lastDbgTime = 0;
++                    const juce::uint32 now = juce::Time::getMillisecondCounter();
++                    if (now - lastDbgTime >= 1000)
++                    {
++                        int finiteCount = 0;
++                        float maxHoldDb = -200.0f;
++                        for (float v : state.fftPeakHoldDb)
++                        {
++                            if (std::isfinite(v)) { ++finiteCount; maxHoldDb = std::max(maxHoldDb, v); }
++                        }
++                        if (finiteCount == 0)
++                        {
++                            DBG("HoldDb invalid: 0 finite");
++                            lastDbgTime = now;
++                        }
++                        else if (maxHoldDb >= state.topDb - 0.001f)
++                        {
++                            DBG(juce::String("HoldDb near top: maxHoldDb=") + juce::String(maxHoldDb) + " topDb=" + juce::String(state.topDb));
++                            lastDbgTime = now;
++                        }
++                    }
++                }
++#endif
+                 constexpr float kVisibleThresholdDb = -100.0f;
+                 bool hasHoldData = false;

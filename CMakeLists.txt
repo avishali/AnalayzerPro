@@ -82,6 +82,21 @@ if(NOT EXISTS "${JUCE_PATH}")
 endif()
 
 # ==============================================================================
+# MelechDSP HQ root (main repo path; overrides third_party copy)
+# ==============================================================================
+
+set(MELECHDSP_HQ_ROOT "" CACHE PATH "Path to main melechdsp-hq repo root (must contain shared/mdsp_ui/CMakeLists.txt)")
+if(MELECHDSP_HQ_ROOT STREQUAL "")
+    get_filename_component(_default_hq "${CMAKE_CURRENT_SOURCE_DIR}/../melechdsp-hq" ABSOLUTE)
+    set(MELECHDSP_HQ_ROOT "${_default_hq}" CACHE PATH "Path to main melechdsp-hq repo root (must contain shared/mdsp_ui/CMakeLists.txt)" FORCE)
+endif()
+get_filename_component(MELECHDSP_HQ_ROOT "${MELECHDSP_HQ_ROOT}" ABSOLUTE)
+message(STATUS "MELECHDSP_HQ_ROOT: ${MELECHDSP_HQ_ROOT}")
+if(NOT EXISTS "${MELECHDSP_HQ_ROOT}/shared/mdsp_ui/CMakeLists.txt")
+    message(FATAL_ERROR "Invalid MELECHDSP_HQ_ROOT: ${MELECHDSP_HQ_ROOT} (expected shared/mdsp_ui/CMakeLists.txt)")
+endif()
+
+# ==============================================================================
 # PROJECT SETUP
 # ==============================================================================
 
@@ -124,24 +139,13 @@ endif()
 add_subdirectory("${JUCE_PATH}" "${CMAKE_CURRENT_BINARY_DIR}/JUCE" EXCLUDE_FROM_ALL)
 
 # ==============================================================================
-# MelechDSP shared modules (via submodule)
+# MelechDSP shared modules (from MELECHDSP_HQ_ROOT)
 # ==============================================================================
 
-add_subdirectory(
-    third_party/melechdsp-hq/shared/mdsp_core
-)
-
-add_subdirectory(
-    third_party/melechdsp-hq/shared/mdsp_ui
-)
-
-add_subdirectory(
-    third_party/melechdsp-hq/shared/mdsp_dsp
-)
-
-add_subdirectory(
-    third_party/melechdsp-hq/shared/mdsp_gui
-)
+add_subdirectory("${MELECHDSP_HQ_ROOT}/shared/mdsp_core" "${CMAKE_CURRENT_BINARY_DIR}/hq_mdsp_core")
+add_subdirectory("${MELECHDSP_HQ_ROOT}/shared/mdsp_ui"   "${CMAKE_CURRENT_BINARY_DIR}/hq_mdsp_ui")
+add_subdirectory("${MELECHDSP_HQ_ROOT}/shared/mdsp_dsp"  "${CMAKE_CURRENT_BINARY_DIR}/hq_mdsp_dsp")
+add_subdirectory("${MELECHDSP_HQ_ROOT}/shared/mdsp_gui"  "${CMAKE_CURRENT_BINARY_DIR}/hq_mdsp_gui")
 
 # ==============================================================================
 # PLUGIN TARGET
@@ -205,8 +209,14 @@ target_sources(${PLUGIN_NAME}
         Source/analyzer/AnalyzerEngine.cpp
         Source/analyzer/StereoScopeAnalyzer.cpp
         Source/ui/analyzer/AnalyzerDisplayView.cpp
+        Source/ui/analyzer/AnalyzerViewModel.cpp
         Source/ui/analyzer/StereoScopeView.cpp
         Source/ui/analyzer/RTADisplay.cpp
+        Source/ui/rta/RTADisplayController.cpp
+        Source/ui/rta/RTACurveHelpers.cpp
+        Source/ui/rta/RTAGeometry.cpp
+        Source/ui/rta/RTADisplayModel.cpp
+        Source/ui/rta/RTADisplayRenderer.cpp
         Source/ui/layout/HeaderBar.cpp
         Source/ui/layout/ControlRail.cpp
         Source/ui/layout/DraggableParamValueLabel.cpp
@@ -233,8 +243,8 @@ target_compile_features(${PLUGIN_NAME} PUBLIC cxx_std_17)
 target_include_directories(${PLUGIN_NAME}
     PRIVATE
         Source
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/melechdsp-hq/shared/mdsp_ui/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/melechdsp-hq/shared/mdsp_gui/include
+        ${MELECHDSP_HQ_ROOT}/shared/mdsp_ui/include
+        ${MELECHDSP_HQ_ROOT}/shared/mdsp_gui/include
 )
 
 target_compile_definitions(${PLUGIN_NAME}

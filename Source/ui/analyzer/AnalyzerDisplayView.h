@@ -5,10 +5,13 @@
 #include <mdsp_gui/components/SpectrumComponent.h>
 #include <mdsp_ui/Theme.h>
 #include <mdsp_ui/ThemeVariant.h>
+#include <mdsp_ui/analyzer/AnalyzerRenderer.h>
+#include <mdsp_ui/analyzer/AnalyzerController.h>
 #include <array>
 #include <vector>
 #include "RTADisplay.h"
-#include "../../analyzer/AnalyzerSnapshot.h"
+#include "AnalyzerViewModel.h"
+#include "../../dsp_adapters/AnalyzerSnapshotAdapter.h"
 #include "../../PluginProcessor.h"
 
 #if !defined(ANALYZERPRO_MODE_DEBUG_OVERLAY)
@@ -111,8 +114,12 @@ private:
 #endif
 
     AnalayzerProAudioProcessor& audioProcessor;
+    mdsp_ui::Theme theme_ { mdsp_ui::ThemeVariant::Custom };
     RTADisplay rtaDisplay;
     mdsp::gui::SpectrumComponent spectrumEngine;
+    AnalyzerViewModel model_;
+    mdsp_ui::AnalyzerRenderState renderState_;
+    mdsp_ui::AnalyzerController controller_;
     Mode currentMode_ = Mode::FFT;
     DbRange dbRange_ = DbRange::Minus120;
     DbRange appliedDbRange_ = DbRange::Minus120;
@@ -194,6 +201,7 @@ private:
 
     bool binMismatch_ = false;
     bool isShutdown = false;
+    RTADisplay::TraceConfig lastTraceConfig_;
     
     // Debug counters for BANDS/LOG mode
 #if JUCE_DEBUG

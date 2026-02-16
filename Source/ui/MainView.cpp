@@ -357,20 +357,20 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
         // Tilt is UI-only, applied to RTADisplay (not AnalyzerEngine)
         // Convert choice index to TiltMode (Flat=0, Pink=1, White=2)
         const int index = juce::roundToInt (newValue);
-        RTADisplay::TiltMode tiltMode = RTADisplay::TiltMode::Flat;
+        rta::TiltMode tiltMode = rta::TiltMode::Flat;
         switch (index)
         {
             case 0:
-                tiltMode = RTADisplay::TiltMode::Flat;
+                tiltMode = rta::TiltMode::Flat;
                 break;
             case 1:
-                tiltMode = RTADisplay::TiltMode::Pink;
+                tiltMode = rta::TiltMode::Pink;
                 break;
             case 2:
-                tiltMode = RTADisplay::TiltMode::White;
+                tiltMode = rta::TiltMode::White;
                 break;
             default:
-                tiltMode = RTADisplay::TiltMode::Flat;
+                tiltMode = rta::TiltMode::Flat;
                 break;
         }
         analyzerView_.getRTADisplay().setTiltMode (tiltMode);

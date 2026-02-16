@@ -1,0 +1,89 @@
+--- a/third_party/melechdsp-hq/shared/mdsp_dsp/include/mdsp_dsp/analyzer/AnalyzerSnapshot.h
++++ b/third_party/melechdsp-hq/shared/mdsp_dsp/include/mdsp_dsp/analyzer/AnalyzerSnapshot.h
+@@ -11,10 +11,16 @@ namespace mdsp_dsp
+ /**
+     Snapshot of analyzer data for transport from audio thread to UI thread.
+     Pure data structure (no atomics) - trivially copyable.
++
++    CONTRACT: All FFT arrays are in dBFS (decibels full scale).
++    - Expected range: approximately [kDbFloor, 0] dB (e.g. -200 dB floor to 0 dB).
++    - Engine must perform any power-to-dB conversion before writing to these arrays.
++    - Exception: powerL / powerR are explicitly linear power (see below).
+ */
+ struct AnalyzerSnapshot
+ {
+     static constexpr int kMaxFFTSize = 8192;
+     static constexpr int kMaxFFTBins = 8192;  // Headroom for 8192 FFT (4097 bins) + future expansion
+
+-    // Multi-trace FFT data (dB values)
++    // Multi-trace FFT data (dBFS)
+     // Each trace has its own spectrum for independent rendering
+     std::array<float, kMaxFFTBins> fftDbL{};      // Left channel
+
+--- a/third_party/melechdsp-hq/shared/mdsp_dsp/src/analyzer/AnalyzerEngine.cpp
++++ b/third_party/melechdsp-hq/shared/mdsp_dsp/src/analyzer/AnalyzerEngine.cpp
+@@ -667,7 +667,7 @@ void mdsp_dsp::AnalyzerEngine::fillStagingSnapshot (int numBins)
+         snapshot.fftPeakDb[idx] = juce::jmax (kDbFloor, dbRaw_[idx], dbValues_[idx]);
+
+-        // Populate snapshot with Peak Hold: floor, finite, and hold >= rms, hold >= peak
++        // Peak Hold: already dB (peakHold_ from updatePeakHold). No power conversion; snapshot contract is dB only.
+         snapshot.fftPeakHoldDb[idx] = juce::jmax (kDbFloor, peakHold_[idx],
+                                                   snapshot.fftDb[idx], snapshot.fftPeakDb[idx]);
+     }
+
+--- a/Source/ui/analyzer/AnalyzerDisplayView.cpp
++++ b/Source/ui/analyzer/AnalyzerDisplayView.cpp
+@@ -1248,48 +1248,12 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
+                                snapshot.fftPeakHoldDb.begin() + static_cast<std::ptrdiff_t> (safeHoldBins),
+                                fftPeakHoldDb_.begin());
+                     usePeakHold = true;
+-
+-#if JUCE_DEBUG
+-                    float holdMin = std::numeric_limits<float>::max();
+-                    float holdMax = -std::numeric_limits<float>::max();
+-                    for (size_t i = 0; i < safeHoldBins; ++i)
+-                    {
+-                        const float v = fftPeakHoldDb_[i];
+-                        if (v < holdMin) holdMin = v;
+-                        if (v > holdMax) holdMax = v;
+-                    }
+-                    DBG ("HOLD raw min=" << holdMin << " max=" << holdMax);
+-#endif
+-                    // Auto-detect: if all hold values in [0..2], treat as linear power and convert to dB
+-                    bool allInPowerRange = true;
+-                    for (size_t i = 0; i < safeHoldBins && allInPowerRange; ++i)
+-                    {
+-                        const float v = fftPeakHoldDb_[i];
+-                        if (v < 0.0f || v > 2.0f)
+-                            allInPowerRange = false;
+-                    }
+-                    if (allInPowerRange)
+-                    {
+-                        for (size_t i = 0; i < safeHoldBins; ++i)
+-                        {
+-                            const float p = fftPeakHoldDb_[i];
+-                            fftPeakHoldDb_[i] = (p > 0.0f)
+-                                ? juce::jmax (kPeakHoldDbFloor, 10.0f * static_cast<float> (std::log10 (static_cast<double> (p))))
+-                                : kPeakHoldDbFloor;
+-                        }
+-#if JUCE_DEBUG
+-                        holdMin = std::numeric_limits<float>::max();
+-                        holdMax = -std::numeric_limits<float>::max();
+-                        for (size_t i = 0; i < safeHoldBins; ++i)
+-                        {
+-                            const float v = fftPeakHoldDb_[i];
+-                            if (v < holdMin) holdMin = v;
+-                            if (v > holdMax) holdMax = v;
+-                        }
+-                        DBG ("HOLD after power->dB min=" << holdMin << " max=" << holdMax);
+-#endif
+-                    }
+-                    // Clamp hold >= current peak per bin when peaks are available
++                    // Clamp hold >= current peak per bin when peaks are available (snapshot is dB; no unit conversion)
+                     if (usePeaks && fftPeakDbDisplay_.size() == validBinsSize)
+                     {
+                         for (size_t i = 0; i < safeHoldBins && i < fftPeakDbDisplay_.size(); ++i)
+                             fftPeakHoldDb_[i] = juce::jmax (fftPeakHoldDb_[i], fftPeakDbDisplay_[i]);
+                     }
+                 }
+             }

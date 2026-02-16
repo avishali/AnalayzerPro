@@ -1,0 +1,18 @@
+diff --git a/shared/mdsp_dsp/CMakeLists.txt b/shared/mdsp_dsp/CMakeLists.txt
+index fc21851..e274a76 100644
+--- a/shared/mdsp_dsp/CMakeLists.txt
++++ b/shared/mdsp_dsp/CMakeLists.txt
+@@ -5,6 +5,7 @@ add_library(mdsp_dsp STATIC
+     src/Smoother.cpp
+     src/MeterBallistics.cpp
+     src/spectrogram/SpectrogramAccumulator.cpp
++    src/analyzer/AnalyzerEngine.cpp
+ )
+ 
+ target_include_directories(mdsp_dsp PUBLIC
+@@ -15,4 +16,5 @@ target_compile_features(mdsp_dsp PUBLIC cxx_std_20)
+ 
+ target_link_libraries(mdsp_dsp PUBLIC
+     juce::juce_dsp
++    juce::juce_audio_basics
+ )

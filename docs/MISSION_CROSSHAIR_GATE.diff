@@ -1,0 +1,40 @@
+--- a/Source/ui/analyzer/RTADisplay.cpp
++++ b/Source/ui/analyzer/RTADisplay.cpp
+@@ -286,7 +286,7 @@
+     if (state.fftDb.empty())
+     {
+-         // No-op for empty data
++        state.hasValidSpectrumFrame = false;  // Clear when no data so crosshair does not draw
+     }
+     else
+     {
+@@ -1893,6 +1893,8 @@
+             if (!std::isfinite (crosshairY)) crosshairY = plotAreaTop + plotAreaHeight;
+         }
++        const bool canDrawHoverY = fftHoverActive_ && fftHoverDbValid_ && std::isfinite (hoverYSmoothPx_) && state.hasValidSpectrumFrame;
++        if (canDrawHoverY)
+             g.drawHorizontalLine (static_cast<int> (crosshairY), plotAreaLeft, plotAreaLeft + plotAreaWidth);
+         g.fillEllipse (crosshairX - 2.5f, crosshairY - 2.5f, 5.0f, 5.0f);
+         if (fftHoverReadoutText_.isNotEmpty() && fftHoverReadoutWidth_ > 0.0f)
+@@ -2657,8 +2659,10 @@
+         }
+         
+-        // Draw horizontal cursor line at resolved position (if db active and snapped)
+-        if (dbActive && dbHoverState.active && dbHoverState.snappedTickIndex >= 0)
++        // Draw horizontal cursor line at resolved position (if db active and snapped and valid frame)
++        const bool canDrawCursorY = (dbActive && dbHoverState.active && dbHoverState.snappedTickIndex >= 0) && state.hasValidSpectrumFrame;
++        if (canDrawCursorY)
+         {
+             const float cursorY = plotAreaTop + dbCursorYPx;
+             g.setColour (theme.text.withAlpha (0.25f));
+@@ -3061,7 +3063,9 @@
+             if (!std::isfinite (crosshairY))
+                 crosshairY = plotAreaTop + plotAreaHeight;
+         }
+-        g.drawHorizontalLine (static_cast<int> (crosshairY), plotAreaLeft, plotAreaLeft + plotAreaWidth);
++        const bool canDrawHoverY = fftHoverActive_ && fftHoverDbValid_ && std::isfinite (hoverYSmoothPx_) && state.hasValidSpectrumFrame;
++        if (canDrawHoverY)
++            g.drawHorizontalLine (static_cast<int> (crosshairY), plotAreaLeft, plotAreaLeft + plotAreaWidth);
+         g.fillEllipse (crosshairX - 2.5f, crosshairY - 2.5f, 5.0f, 5.0f);
+ 
+         if (fftHoverReadoutText_.isNotEmpty() && fftHoverReadoutWidth_ > 0.0f)

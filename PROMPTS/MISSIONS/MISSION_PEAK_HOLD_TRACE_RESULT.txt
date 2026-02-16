@@ -1,0 +1,38 @@
+PLAN + FILES
+
+1. RenderState (HQ): AnalyzerRenderState already has isHoldOn and fftPeakHoldDb. No change.
+
+2. AnalyzerPro wiring (AnalyzerDisplayView.cpp): When building RenderState, rs.isHoldOn and rs.fftPeakHoldDb are already set when sizes match. On size mismatch (else branch), clear rs.fftPeakHoldDb so renderer never draws hold with wrong length (avoids flat-line on FFT size change). Change: else rs.fftPeakHoldDb.clear();
+
+3. Renderer draw (HQ AnalyzerRenderer.cpp): Hold trace already drawn after peak with traceHasSignal gate and size check. Use theme.seriesPeak.withAlpha(0.6f) per mission (was 0.5f). No per-bin vertical lines, no extra allocations.
+
+FILES IN SCOPE (HQ):
+	melechdsp-hq/shared/mdsp_ui/include/mdsp_ui/analyzer/AnalyzerRenderState.h  (no patch)
+	melechdsp-hq/shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
+
+FILES IN SCOPE (AnalyzerPro):
+	Source/ui/analyzer/AnalyzerDisplayView.cpp
+
+PATCH
+
+--- a/shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
++++ b/shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
+@@ -285,7 +285,7 @@ void AnalyzerRenderer::paint(juce::Graphics& g,
+                                    state.fftPeakHoldDb, holdPath);
+                 if (!holdPath.isEmpty())
+                 {
+-                    g.setColour(theme.seriesPeak.withAlpha(0.5f));
++                    g.setColour(theme.seriesPeak.withAlpha(0.6f));
+                     g.strokePath(holdPath, juce::PathStrokeType(1.0f));
+                 }
+             }
+
+--- a/Source/ui/analyzer/AnalyzerDisplayView.cpp
++++ b/Source/ui/analyzer/AnalyzerDisplayView.cpp
+@@ -1491,7 +1491,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
+         }
+     }
+     else
+-        rs.fftPeakHoldDb = fftPeakHoldDb_;
++        rs.fftPeakHoldDb.clear();
+     rs.bandCentersHz = bandCentersHz_;

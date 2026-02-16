@@ -28,12 +28,22 @@ static float dbRangeToMinDb (AnalyzerDisplayView::DbRange r) noexcept
 // This is NOT a display floor and must not track user-selected dB range.
 static constexpr float kUiPeakInvalidSentinelDb = -90.0f;
 
+// Spectrum Y-axis headroom; RenderState topDb must never be 0.
+static constexpr float kSpectrumTopDb = 6.0f;
+
 static inline bool isInvalidPeakDb (float db) noexcept
 {
     return db <= kUiPeakInvalidSentinelDb;
 }
 
-
+static bool hasSignal (const std::vector<float>& db, float bottomDb)
+{
+    const float threshold = bottomDb + 1.0f;
+    for (float v : db)
+        if (v > threshold)
+            return true;
+    return false;
+}
 
 AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     : audioProcessor (processor)
@@ -42,6 +52,19 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
 #endif
 {
     addAndMakeVisible (rtaDisplay);
+    // =======================================================
+// Wire HQ renderer callbacks (CRITICAL)
+// =======================================================
+
+rtaDisplay.setGetRenderState([this]() -> mdsp_ui::AnalyzerRenderState
+{
+    return renderState_;   // copy is correct (API expects value)
+});
+
+rtaDisplay.setGetTheme([this]() -> const mdsp_ui::Theme&
+{
+    return theme_;         // must be persistent member
+});
     // DISABLED: spectrumEngine was causing flat yellow line at maximum
     // addAndMakeVisible (spectrumEngine);
     // spectrumEngine.setAudioBufferQueue (&audioProcessor.getSpectrumBufferQueue());
@@ -57,7 +80,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     minDbAnim_.reset (60.0, 0.20);
     minDbAnim_.setCurrentAndTargetValue (targetMinDb_);
     lastAppliedMinDb_ = targetMinDb_;
-    rtaDisplay.setDbRange (0.0f, lastAppliedMinDb_);
+    rtaDisplay.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
     appliedDbRange_ = dbRange_;
     
     // Initialize band centers
@@ -68,6 +91,11 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
 #if JUCE_DEBUG
     lastSentRtaMode_ = toRtaMode (currentMode_);
 #endif
+
+    model_.setViewMode (toRtaMode (currentMode_));
+    model_.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
+    rtaDisplay.setGetRenderState ([this]() { return renderState_; });
+    rtaDisplay.setGetTheme ([this]() -> const mdsp_ui::Theme& { return theme_; });
     
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     addAndMakeVisible (modeOverlay_);
@@ -88,6 +116,7 @@ void AnalyzerDisplayView::setDbRange (DbRange r)
 
     dbRange_ = r;
     targetMinDb_ = dbRangeToMinDb (dbRange_);
+    model_.setDbRange (kSpectrumTopDb, targetMinDb_);
 
     minDbAnim_.reset (60.0, 0.20);
     minDbAnim_.setTargetValue (targetMinDb_);
@@ -293,6 +322,7 @@ void AnalyzerDisplayView::mouseDown (const juce::MouseEvent& e)
 {
     dragStartPos_ = e.position;
     dragStartDbRange_ = dbRange_;
+    controller_.onMouseDown(getLocalBounds(), e.position.toFloat(), e.mods);
 }
 
 void AnalyzerDisplayView::mouseDrag (const juce::MouseEvent& e)
@@ -348,6 +378,8 @@ void AnalyzerDisplayView::mouseDrag (const juce::MouseEvent& e)
                 onDbRangeUserChanged (nextRange);
         }
     }
+    auto upd = controller_.onMouseDrag(getLocalBounds(), e.position.toFloat(), dragStartPos_, e.mods);
+    model_.applyInteraction(upd);
 }
 
 void AnalyzerDisplayView::resized()
@@ -602,6 +634,7 @@ void AnalyzerDisplayView::setMode (Mode mode)
     // UI mode is authoritative - RTADisplay must match
     const int rtaMode = toRtaMode (currentMode_);
     rtaDisplay.setViewMode (rtaMode);
+    model_.setViewMode (rtaMode);
 #if JUCE_DEBUG
     lastSentRtaMode_ = rtaMode;
     assertModeSync();
@@ -750,12 +783,14 @@ void AnalyzerDisplayView::timerCallback()
 #endif
     
     rtaDisplay.setTraceConfig(traceConfig);
+    lastTraceConfig_ = traceConfig;
 
     // Animate dB range changes (grid + FFT + peak mapping all derive from RTADisplay bottomDb).
     const float minDb = minDbAnim_.getNextValue();
     if (std::abs (minDb - lastAppliedMinDb_) > 1.0e-4f)
     {
-        rtaDisplay.setDbRange (0.0f, minDb);
+        rtaDisplay.setDbRange (kSpectrumTopDb, minDb);
+        model_.setDbRange (kSpectrumTopDb, minDb);
         lastAppliedMinDb_ = minDb;
     }
 
@@ -851,6 +886,8 @@ void AnalyzerDisplayView::timerCallback()
     if (minDbAnim_.isSmoothing())
         repaint();
 
+    model_.tick(1.0 / 60.0);
+
     // Apply any pending FFT resize on the message thread (RT-safe: allocations happen here, not on audio thread).
     audioProcessor.getAnalyzerEngine().applyPendingFftSizeIfNeeded();
     
@@ -889,6 +926,8 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     // UI mode is authoritative - ensure RTADisplay always matches
     const int rtaMode = toRtaMode (currentMode_);
     rtaDisplay.setViewMode (rtaMode);
+    model_.setViewMode (rtaMode);
+    model_.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
 #if JUCE_DEBUG
     lastSentRtaMode_ = rtaMode;
     assertModeSync();
@@ -1195,8 +1234,11 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             }
             
             // Extract Peak Hold from snapshot (Independent of Peak Trace)
+            // Floor init so unmapped / tail bins never draw at top (0 dB); fix for "flat line at top"
+            static constexpr float kPeakHoldDbFloor = -200.0f;
             bool usePeakHold = false;
             fftPeakHoldDb_.resize (validBinsSize);
+            std::fill (fftPeakHoldDb_.begin(), fftPeakHoldDb_.end(), kPeakHoldDbFloor);
 
             {
                 const size_t safeHoldBins = std::min (validBinsSize,
@@ -1209,10 +1251,53 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                                snapshot.fftPeakHoldDb.begin() + static_cast<std::ptrdiff_t> (safeHoldBins),
                                fftPeakHoldDb_.begin());
                     usePeakHold = true;
-                }
-                else
-                {
-                    std::fill (fftPeakHoldDb_.begin(), fftPeakHoldDb_.end(), -120.0f);
+
+#if JUCE_DEBUG
+                    float holdMin = std::numeric_limits<float>::max();
+                    float holdMax = -std::numeric_limits<float>::max();
+                    for (size_t i = 0; i < safeHoldBins; ++i)
+                    {
+                        const float v = fftPeakHoldDb_[i];
+                        if (v < holdMin) holdMin = v;
+                        if (v > holdMax) holdMax = v;
+                    }
+                    DBG ("HOLD raw min=" << holdMin << " max=" << holdMax);
+#endif
+                    // Auto-detect: if all hold values in [0..2], treat as linear power and convert to dB
+                    bool allInPowerRange = true;
+                    for (size_t i = 0; i < safeHoldBins && allInPowerRange; ++i)
+                    {
+                        const float v = fftPeakHoldDb_[i];
+                        if (v < 0.0f || v > 2.0f)
+                            allInPowerRange = false;
+                    }
+                    if (allInPowerRange)
+                    {
+                        for (size_t i = 0; i < safeHoldBins; ++i)
+                        {
+                            const float p = fftPeakHoldDb_[i];
+                            fftPeakHoldDb_[i] = (p > 0.0f)
+                                ? juce::jmax (kPeakHoldDbFloor, 10.0f * static_cast<float> (std::log10 (static_cast<double> (p))))
+                                : kPeakHoldDbFloor;
+                        }
+#if JUCE_DEBUG
+                        holdMin = std::numeric_limits<float>::max();
+                        holdMax = -std::numeric_limits<float>::max();
+                        for (size_t i = 0; i < safeHoldBins; ++i)
+                        {
+                            const float v = fftPeakHoldDb_[i];
+                            if (v < holdMin) holdMin = v;
+                            if (v > holdMax) holdMax = v;
+                        }
+                        DBG ("HOLD after power->dB min=" << holdMin << " max=" << holdMax);
+#endif
+                    }
+                    // Clamp hold >= current peak per bin when peaks are available
+                    if (usePeaks && fftPeakDbDisplay_.size() == validBinsSize)
+                    {
+                        for (size_t i = 0; i < safeHoldBins && i < fftPeakDbDisplay_.size(); ++i)
+                            fftPeakHoldDb_[i] = juce::jmax (fftPeakHoldDb_[i], fftPeakDbDisplay_[i]);
+                    }
                 }
             }
 
@@ -1431,6 +1516,64 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             break;
         }
     }
+
+    mdsp_ui::AnalyzerRenderState rs;
+    rs.viewMode = rtaMode;
+    rs.minHz = 20.0f;
+    rs.maxHz = 20000.0f;
+    rs.topDb = kSpectrumTopDb;
+    rs.bottomDb = -200.0f;
+#if JUCE_DEBUG
+    jassert(rs.topDb >= 1.0f);
+    jassert(rs.bottomDb < rs.topDb);
+#endif
+    rs.sampleRate = lastMetaSampleRate_ > 0.0 ? lastMetaSampleRate_ : 48000.0;
+    rs.fftSize = lastMetaFftSize_ > 0 ? lastMetaFftSize_ : 2048;
+    rs.status = mdsp_ui::AnalyzerDataStatus::Ok;
+    rs.noDataReason.clear();
+    rs.isHoldOn = isHoldOn_;
+    rs.sessionMarkerVisible = sessionMarkerValid_;
+    rs.sessionMarkerBin = sessionMarkerBin_;
+    rs.sessionMarkerDb = sessionMarkerDb_;
+    rs.hasValidSpectrumFrame = true;
+    // --- RMS / FFT trace ---
+    if (hasSignal (fftDb_, rs.bottomDb))
+        rs.fftDb = fftDb_;
+    else
+        rs.fftDb.clear();
+    // --- PEAK trace ---
+    if (hasSignal (fftPeakDbDisplay_, rs.bottomDb))
+        rs.fftPeakDb = fftPeakDbDisplay_;
+    else
+        rs.fftPeakDb.clear();
+    // --- HOLD trace ---
+    if (rs.isHoldOn && hasSignal (fftPeakHoldDb_, rs.bottomDb))
+        rs.fftPeakHoldDb = fftPeakHoldDb_;
+    else
+        rs.fftPeakHoldDb.clear();
+    rs.bandCentersHz = bandCentersHz_;
+    rs.bandsDb = bandsDb_;
+    rs.bandsPeakDb = bandsPeakDbDisplay_.empty() ? bandsPeakDb_ : bandsPeakDbDisplay_;
+    rs.logDb = logDb_;
+    rs.logPeakDb = logPeakDbDisplay_.empty() ? logPeakDb_ : logPeakDbDisplay_;
+    rs.lrBinCount = static_cast<int> (scratchPowerL_.size());
+    rs.lDbL = scratchPowerL_;
+    rs.lDbR = scratchPowerR_;
+    rs.stereoDb.resize (scratchPowerL_.size());
+    for (size_t i = 0; i < scratchPowerL_.size(); ++i)
+        rs.stereoDb[i] = std::max (scratchPowerL_[i], scratchPowerR_[i]);
+    rs.monoDb = scratchPowerMono_;
+    rs.midDb = scratchPowerMid_;
+    rs.sideDb = scratchPowerSide_;
+    rs.hasValidMultiTraceData = snapshot.multiTraceEnabled && !scratchPowerL_.empty() && scratchPowerL_.size() == scratchPowerR_.size();
+    rs.showL = lastTraceConfig_.showL;
+    rs.showR = lastTraceConfig_.showR;
+    rs.showMid = lastTraceConfig_.showMid;
+    rs.showSide = lastTraceConfig_.showSide;
+    rs.showMono = lastTraceConfig_.showMono;
+    rs.showRMS = lastTraceConfig_.showRMS;
+    renderState_ = rs;
+    model_.setRenderState (rs);
 }
 
 //==============================================================================

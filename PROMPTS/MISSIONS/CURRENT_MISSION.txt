@@ -1,50 +1,103 @@
-Return only the final prompt content.
-No markdown.
-No explanation.
+Return only the final content.
+No markdown. No explanation.
 
-You are Cursor inside the AnalyzerPro JUCE project.
+You are editing an existing codebase.
 
-GOAL
-Harden the new top-bar pixel-snapping + inside-stroke implementation against edge cases:
-	•	Prevent negative corner radii after inside-stroke adjustment
-	•	Ensure fill/stroke rects share the exact same snapped basis (no drift)
-	•	Ensure row layout snapping does not accumulate rounding error across multiple buttons
+Task: Slice 5 — Extract RTADisplayRenderer out of Source/ui/analyzer/RTADisplay.cpp.
 
-HARD REQUIREMENTS
-	•	No visual redesign; keep the same look.
-	•	No layout changes except micro-adjustments needed for deterministic snapping.
-	•	No DSP/audio changes.
-	•	macOS warning-clean.
+Goal:
+	•	Move ALL drawing/paint logic out of RTADisplay.cpp into a renderer class.
+	•	RTADisplay becomes a thin JUCE Component:
+	•	owns geometry_, model_, controller_, renderer_
+	•	forwards events to controller_
+	•	calls renderer_.paint(…) from paint()
+	•	calls geometry_.updateLayout(…) from resized()
+	•	calls model_.ensurePathsBuilt(…) as needed (renderer may call it too, but keep one place)
+	•	No behavior change.
+	•	Keep allocations out of steady-state paint.
+	•	Controller remains “compute interaction state only” (no painting).
+	•	Model remains “data + cached paths + path building.”
+	•	Geometry remains “layout + mapping.”
 
-TASKS
-	1.	Clamp stroke radius safely
-In HeaderBarLookAndFeel (or wherever strokeRadius is computed):
+Create files:
+	1.	Source/ui/rta/RTADisplayRenderer.h
+	2.	Source/ui/rta/RTADisplayRenderer.cpp
 
-	•	If strokeRadius = radius - 0.5f, clamp:
-strokeRadius = juce::jmax(0.0f, radius - 0.5f);
-	•	If any snapRadius helper exists, ensure the clamped value is snapped after clamp (or snap then clamp, but be consistent).
+Renderer responsibilities:
+	•	All paint entry points currently in RTADisplay.cpp:
+	•	paint()
+	•	paintFFTMode / paintBandMode / paintLogMode
+	•	grid rendering
+	•	axis rendering / axis label drawing
+	•	overlay rendering (crosshair, hover labels, peak snap markers, selection highlights)
+	•	any “build axis config” helpers moved earlier (FreqAxisConfig/DbAxisConfig or equivalents)
+	•	Renderer must read:
+	•	const RTADisplayModel& (state + cached paths)
+	•	const RTAGeometry& (rects/mapping)
+	•	const RTADisplayController& (hover state, smoothed y, selection indices)
+	•	const mdsp_ui::Theme& (colors/fonts)
+	•	Renderer must NOT mutate model caches except through a single explicit hook:
+	•	Either RTADisplay calls model_.ensurePathsBuilt(…) before renderer_.paint(…)
+	•	OR renderer_.paint(…) may call model_.ensurePathsBuilt(…), but it must remain a fast-exit gate and not allocate in steady-state.
+Choose one and keep it consistent.
 
-	2.	Derive inside-stroke rect from snapped fill rect
+Constraints:
+	•	No behavior change.
+	•	Keep drawing order identical (grid → traces → overlays, etc.).
+	•	Preserve existing snapping, alpha, stroke widths, and label formatting.
+	•	Keep local “fillPath copy” behavior: cached paths are immutable; any fill closure uses a local copy.
 
-	•	Ensure fill rect is snapped once:
-fillR = PixelSnap::snapRectToPixels(bounds.toFloat())
-	•	Compute stroke rect only from fillR:
-strokeR = PixelSnap::insetForInsideStroke(fillR, 1.0f)
-	•	Do not recompute from original bounds.
+Implementation steps:
+	1.	Create RTADisplayRenderer class with:
+	•	void paint(juce::Graphics& g,
+const RTADisplayModel& model,
+const RTAGeometry& geometry,
+const RTADisplayController& controller,
+const mdsp_ui::Theme& theme,
+float displayGainDb,
+::rta::TiltMode tiltMode,
+/* any other small scalar flags needed for drawing */);
+	2.	Move all paint helper functions from RTADisplay.cpp into RTADisplayRenderer.cpp as private static/member functions.
+	3.	Update RTADisplay.cpp:
+	•	Add #include “../rta/RTADisplayRenderer.h”
+	•	Add RTADisplayRenderer renderer_;
+	•	Replace RTADisplay::paint implementation with a thin call:
+	•	model_.ensurePathsBuilt(geometry_, theme, displayGainDb, tiltMode, refreshBackground callback or equivalent)
+	•	renderer_.paint(…)
+	•	Remove all moved paint helper method definitions and any paint-only member variables.
+	4.	Update CMakeLists.txt to compile RTADisplayRenderer.cpp.
 
-	3.	Prevent cumulative rounding drift in button row layout
-In HeaderBar::resized():
+Output:
+Return ONLY the final contents of the files that changed, in this order:
+	1.	Source/ui/rta/RTADisplayRenderer.h
+	2.	Source/ui/rta/RTADisplayRenderer.cpp
+	3.	Source/ui/analyzer/RTADisplay.cpp
+	4.	Source/ui/analyzer/RTADisplay.h (only if modified)
+	5.	CMakeLists.txt (only if modified)
 
-	•	Ensure canonical row is snapped once (int coords).
-	•	Ensure buttonH and y are integer pixels.
-	•	When placing buttons left→right:
-	•	snap x once at start
-	•	snap each width
-	•	gap is integer
-	•	next x = x + w + gap using integer arithmetic
-	•	Ensure last button stays within row (clamp width if needed by 1px rather than overflowing).
+⸻
 
-DELIVERABLES
-	•	FILES CHANGED
-	•	SUMMARY of the hardening changes
-	•	Unified diffs
+Return only the final content.
+No markdown. No explanation.
+
+Verifier task: Validate Slice 5 (RTADisplayRenderer extraction) preserves visuals and performance.
+
+Checks:
+	1.	Build succeeds.
+	2.	RTADisplay public API unchanged.
+	3.	All drawing code is in RTADisplayRenderer (RTADisplay.cpp paint is a thin delegator).
+	4.	Visual parity:
+	•	FFT/BAND/LOG modes identical
+	•	grid + axis ticks/labels identical
+	•	hover overlays identical (crosshair, readouts, peak snap)
+	•	fills/strokes identical
+	5.	Performance:
+	•	No allocations in steady-state paint
+	•	Cached paths remain owned by model and not mutated by renderer (fill uses local copy).
+	6.	Sanity ripgrep:
+	•	RTADisplay.cpp no longer contains large paint helper functions
+	•	Controller contains no Graphics usage
+	•	Geometry contains no Theme usage
+
+Output:
+Return ONLY a brief pass/fail summary with bullet points and any file/line references needed for fixes.

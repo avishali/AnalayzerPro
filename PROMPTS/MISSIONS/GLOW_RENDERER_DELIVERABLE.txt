@@ -1,0 +1,138 @@
+PLAN + FILES
+
+1) Where topDb/bottomDb are set
+   - AnalyzerDisplayView.cpp: buildAnalyzerRenderState builds rs and sets rs.topDb = 6.0f, rs.bottomDb = -200.0f (lines ~1454–1455). Same view calls setDbRange(0.0f, bottom) in ctor, setDbRange(), timerCallback(), updateFromSnapshot() for both rtaDisplay and model_, which overwrote topDb to 0.
+   - AnalyzerViewModel: renderState_.topDb/bottomDb set in setDbRange(topDb, bottomDb); getRenderState() returns renderState_. Defaults in ViewModel were topDb_ = 0.0f, bottomDb_ = -120.0f, and struct default in mdsp_ui is topDb = 0.
+
+2) Fix at source (contract)
+   - Introduce kSpectrumTopDb = 6.0f in AnalyzerDisplayView.cpp. Use it for all setDbRange(first, …) calls (rtaDisplay and model_) and for rs.topDb so renderer never receives topDb = 0.
+   - In AnalyzerViewModel, default topDb_ = 6.0f; in setDbRange(), if (topDb < 1.0f) topDb = 6.0f then assign, so we never store 0.
+   - After assigning rs.topDb and rs.bottomDb in DisplayView, add JUCE_DEBUG jassert(rs.topDb >= 1.0f) and jassert(rs.bottomDb < rs.topDb).
+
+3) Hold line
+   - Existing hold sanitization (jlimit kHoldFloorDb..rs.topDb and hold >= peak >= rms) kept; range is now correct so hold is not pinned at 0.
+
+4) Optional silence policy
+   - In mdsp_ui AnalyzerRenderer.cpp, in buildDecimatedPath(), after existing early returns, add: if no bin > bottomDb + 1.0f, return without drawing (path stays clear).
+
+FILES IN SCOPE (AnalyzerPro)
+   Source/ui/analyzer/AnalyzerDisplayView.cpp
+   Source/ui/analyzer/AnalyzerViewModel.h
+   Source/ui/analyzer/AnalyzerViewModel.cpp
+
+OPTIONAL
+   third_party/melechdsp-hq/shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
+
+
+PATCH
+
+--- a/Source/ui/analyzer/AnalyzerDisplayView.cpp
++++ b/Source/ui/analyzer/AnalyzerDisplayView.cpp
+@@ -26,6 +26,9 @@ static float dbRangeToMinDb (AnalyzerDisplayView::DbRange r) noexcept
+ // This is NOT a display floor and must not track user-selected dB range.
+ static constexpr float kUiPeakInvalidSentinelDb = -90.0f;
+ 
++// Spectrum Y-axis headroom; RenderState topDb must never be 0.
++static constexpr float kSpectrumTopDb = 6.0f;
++
+ static inline bool isInvalidPeakDb (float db) noexcept
+ {
+     return db <= kUiPeakInvalidSentinelDb;
+@@ -57,7 +60,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
+     minDbAnim_.reset (60.0, 0.20);
+     minDbAnim_.setCurrentAndTargetValue (targetMinDb_);
+     lastAppliedMinDb_ = targetMinDb_;
+-    rtaDisplay.setDbRange (0.0f, lastAppliedMinDb_);
++    rtaDisplay.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
+     appliedDbRange_ = dbRange_;
+@@ -70,7 +73,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
+ #endif
+ 
+     model_.setViewMode (toRtaMode (currentMode_));
+-    model_.setDbRange (0.0f, lastAppliedMinDb_);
++    model_.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
+     rtaDisplay.setGetRenderState ([this]() { return model_.getRenderState(); });
+     rtaDisplay.setGetTheme ([this]() -> const mdsp_ui::Theme& { return theme_; });
+@@ -93,7 +96,7 @@ void AnalyzerDisplayView::setDbRange (DbRange r)
+ 
+     dbRange_ = r;
+     targetMinDb_ = dbRangeToMinDb (dbRange_);
+-    model_.setDbRange (0.0f, targetMinDb_);
++    model_.setDbRange (kSpectrumTopDb, targetMinDb_);
+ 
+     minDbAnim_.reset (60.0, 0.20);
+     minDbAnim_.setTargetValue (targetMinDb_);
+@@ -766,8 +769,8 @@ void AnalyzerDisplayView::timerCallback()
+     const float minDb = minDbAnim_.getNextValue();
+     if (std::abs (minDb - lastAppliedMinDb_) > 1.0e-4f)
+     {
+-        rtaDisplay.setDbRange (0.0f, minDb);
+-        model_.setDbRange (0.0f, minDb);
++        rtaDisplay.setDbRange (kSpectrumTopDb, minDb);
++        model_.setDbRange (kSpectrumTopDb, minDb);
+         lastAppliedMinDb_ = minDb;
+     }
+@@ -904,7 +907,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
+     rtaDisplay.setViewMode (rtaMode);
+     model_.setViewMode (rtaMode);
+-    model_.setDbRange (0.0f, lastAppliedMinDb_);
++    model_.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
+ #if JUCE_DEBUG
+     lastSentRtaMode_ = rtaMode;
+     assertModeSync();
+@@ -1452,8 +1455,12 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
+     rs.viewMode = rtaMode;
+     rs.minHz = 20.0f;
+     rs.maxHz = 20000.0f;
+-    rs.topDb = 6.0f;
++    rs.topDb = kSpectrumTopDb;
+     rs.bottomDb = -200.0f;
++#if JUCE_DEBUG
++    jassert(rs.topDb >= 1.0f);
++    jassert(rs.bottomDb < rs.topDb);
++#endif
+     rs.sampleRate = lastMetaSampleRate_ > 0.0 ? lastMetaSampleRate_ : 48000.0;
+     rs.fftSize = lastMetaFftSize_ > 0 ? lastMetaFftSize_ : 2048;
+     rs.status = mdsp_ui::AnalyzerDataStatus::Ok;
+
+--- a/Source/ui/analyzer/AnalyzerViewModel.h
++++ b/Source/ui/analyzer/AnalyzerViewModel.h
+@@ -21,7 +21,7 @@ class AnalyzerViewModel
+     void setDbRange(float topDb, float bottomDb);
+ 
+ private:
+     int viewMode_ = 0;
+-    float topDb_ = 0.0f;
++    float topDb_ = 6.0f;
+     float bottomDb_ = -120.0f;
+     mdsp_ui::AnalyzerRenderState renderState_;
+ };
+
+--- a/Source/ui/analyzer/AnalyzerViewModel.cpp
++++ b/Source/ui/analyzer/AnalyzerViewModel.cpp
+@@ -32,6 +32,8 @@ void AnalyzerViewModel::tick(double dtSeconds)
+ 
+ void AnalyzerViewModel::setDbRange(float topDb, float bottomDb)
+ {
++    if (topDb < 1.0f)
++        topDb = 6.0f;
+     topDb_ = topDb;
+     bottomDb_ = bottomDb;
+     renderState_.topDb = topDb;
+
+--- a/third_party/melechdsp-hq/shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
++++ b/third_party/melechdsp-hq/shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
+@@ -73,6 +73,14 @@ void buildDecimatedPath(...)
+         if (w <= 0) return;
+ 
+         const float floorDb = s.bottomDb;
++        const float silenceThreshold = floorDb + 1.0f;
++        bool anyAboveFloor = false;
++        for (float v : data)
++        {
++            if (std::isfinite(v) && v > silenceThreshold) { anyAboveFloor = true; break; }
++        }
++        if (!anyAboveFloor) return;
++
+         const float topDb = s.topDb;
+         const float logMin = std::log10(s.minHz);

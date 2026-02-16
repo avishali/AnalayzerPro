@@ -1,0 +1,40 @@
+--- a/Source/ui/analyzer/RTADisplay.cpp
++++ b/Source/ui/analyzer/RTADisplay.cpp
+@@ -283,24 +283,11 @@ void RTADisplay::setFFTData (const std::vector<float>& fftBinsDb,
+     else
+         state.fftPeakHoldDb.clear();
+ 
+-    // FFT No Data Guard: Latch valid frame if signal > threshold (+6dB above noise floor)
+-    // Must explicitly clear when below threshold so plugin load (before first signal) never treats floor as valid
+-    if (state.fftDb.empty())
+-    {
+-        state.hasValidSpectrumFrame = false;  // Clear when no data so crosshair does not draw
+-    }
+-    else
+-    {
+-        // Check threshold
+-        float maxDb = -200.0f;
+-        for (float db : state.fftDb)
+-            if (db > maxDb) maxDb = db;
+-        if (std::isfinite(maxDb) && maxDb > (state.bottomDb + 6.0f))
+-            state.hasValidSpectrumFrame = true;
+-        else
+-            state.hasValidSpectrumFrame = false;  // Clear when no signal so crosshair stays at center on load
+-    }
++    // FFT No Data Guard: Content-based valid frame (clear when all bins at floor, do not rely on empty)
++    const float thresholdDb = state.bottomDb + 6.0f;
++    float maxDb = state.bottomDb;
++    for (float v : state.fftDb)
++        if (std::isfinite (v)) maxDb = std::max (maxDb, v);
++    state.hasValidSpectrumFrame = (maxDb > thresholdDb);
+
+     state.status = DataStatus::Ok;
+     if (fftHoverActive_ && fftHoverBinIndex_ >= 0 && static_cast<size_t> (fftHoverBinIndex_) < state.fftDb.size())
+--- a/third_party/melechdsp-hq/shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
++++ b/third_party/melechdsp-hq/shared/mdsp_ui/src/analyzer/AnalyzerRenderer.cpp
+@@ -339,7 +339,7 @@ namespace mdsp_ui
+             }
+             // Hold trace (theme.seriesPeak variant when hold on)
+-            if (state.isHoldOn && !state.fftPeakHoldDb.empty() && state.fftPeakHoldDb.size() == state.fftDb.size())
++            if (state.hasValidSpectrumFrame && state.isHoldOn && !state.fftPeakHoldDb.empty() && state.fftPeakHoldDb.size() == state.fftDb.size())
+             {
