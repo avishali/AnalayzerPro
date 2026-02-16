@@ -3,11 +3,11 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <mdsp_ui/analyzer/AnalyzerRenderState.h>
 #include <mdsp_ui/Theme.h>
-#include "../rta/RTAEnums.h"
-#include "../rta/RTAGeometry.h"
-#include "../rta/RTADisplayModel.h"
-#include "../rta/RTADisplayController.h"
-#include "../rta/RTADisplayRenderer.h"
+#include <mdsp_ui/rta/RTAEnums.h>
+#include <mdsp_ui/rta/RTAGeometry.h>
+#include <mdsp_ui/rta/RTADisplayModel.h>
+#include <mdsp_ui/rta/RTADisplayController.h>
+#include <mdsp_ui/rta/RTADisplayRenderer.h>
 #include <vector>
 #include <cstdint>
 #include <cmath>

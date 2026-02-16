@@ -1,7 +1,7 @@
 #include "RTADisplay.h"
-#include "../rta/RTADisplayRenderer.h"
-#include "../rta/RTACurveHelpers.h"
-#include "../rta/RTADisplayModel.h"
+#include <mdsp_ui/rta/RTADisplayRenderer.h>
+#include <mdsp_ui/rta/RTACurveHelpers.h>
+#include <mdsp_ui/rta/RTADisplayModel.h>
 #include <mdsp_ui/Theme.h>
 #include <cmath>
 #include <cstdint>
@@ -24,6 +24,7 @@ RTADisplay::RTADisplay()
         [this](int px, int py, int pw, int ph) { repaint (px, py, pw, ph); }
     });
     controller_.setDisplayGainDb (displayGainDb);
+    controller_.setTiltMode (tiltMode);
     startTimerHz (60);
 }
 
@@ -149,6 +150,7 @@ void RTADisplay::setTiltMode (TiltMode mode)
     if (tiltMode != mode)
     {
         tiltMode = mode;
+        controller_.setTiltMode (mode);
         model_.invalidatePaths();
         repaint();
     }
@@ -187,20 +189,9 @@ float RTADisplay::computeTiltDb (float freqHz) const
 
 float RTADisplay::dbToYWithCompensation (float db, float freqHz, const RenderState& s) const
 {
-    (void) freqHz; // Used when tilt/weighting are re-enabled
-    // TEMPORARILY DISABLED - Testing if double-weighting/tilt causes flat line issue
-    // Apply display gain and tilt compensation
-    // const float tiltDb = computeTiltDb (freqHz);
-    const float tiltDb = 0.0f; // DISABLED FOR TEST
-
-    // Apply frequency weighting if enabled
-    // float weightingDb = 0.0f;
-    // if (traceConfig_.weightingMode == 1)
-    //     weightingDb = getAWeightingDb (freqHz);
-    // else if (traceConfig_.weightingMode == 2)
-    //     weightingDb = getBS468WeightingDb (freqHz);
-    const float weightingDb = 0.0f; // DISABLED FOR TEST
-
+    (void) s;
+    const float tiltDb = computeTiltDb (freqHz);
+    const float weightingDb = 0.0f;  // Weighting applied engine-side before display
     return geometry_.dbToYWithCompensation (db + displayGainDb, freqHz, tiltDb, weightingDb);
 }
 
