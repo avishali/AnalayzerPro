@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 BUILD_DIR="build"
-CONFIG="${1:-Release}"
+CONFIG="${1:-Debug}"
 
 # Check if JUCE_PATH is set
 if [ -z "$JUCE_PATH" ]; then

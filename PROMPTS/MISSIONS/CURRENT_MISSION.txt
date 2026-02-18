@@ -1,32 +1,52 @@
-Return only the final content.
-No markdown. No explanation.
+Implementer patch (paste-ready)
 
-Task: Add a CMake option in AnalyzerPro to choose mdsp_ui source:
-	•	Default: use vendored third_party/melechdsp-hq (current behavior).
-	•	Dev override: allow using a local HQ repo path via -DMELECHDSP_HQ_ROOT=/abs/path/to/melechdsp-hq
+Put this after:
+	•	juce_add_plugin(${PLUGIN_NAME} ...) is called
+	•	and after add_subdirectory("${HQ_DIR}" ...) (so mdsp targets exist)
 
-Requirements:
-	•	If MELECHDSP_HQ_ROOT is set and exists, use it.
-	•	Otherwise fall back to third_party/melechdsp-hq.
-	•	Emit a CMake STATUS message showing which path is used.
-	•	Do NOT change target names or library linkage beyond swapping the add_subdirectory source path.
-	•	Keep build behavior identical when using third_party.
+	# ------------------------------------------------------------------
+# Ensure mdsp SDK include dirs/defs propagate to the actual JUCE build targets
+# ------------------------------------------------------------------
+set(_mdsp_consumer_targets
+    ${PLUGIN_NAME}
+    ${PLUGIN_NAME}_Standalone
+    ${PLUGIN_NAME}_VST3
+    ${PLUGIN_NAME}_AAX
+    ${PLUGIN_NAME}_SharedCode
+)
 
-Implementation:
-	1.	In AnalyzerPro top-level CMakeLists.txt (or the place where you currently add third_party/melechdsp-hq), introduce:
-	•	option(MELECHDSP_USE_VENDORED_HQ “…” ON) OR simply a cache PATH variable MELECHDSP_HQ_ROOT.
-Prefer: set(MELECHDSP_HQ_ROOT “” CACHE PATH “Path to melechdsp-hq; if empty, use third_party copy”)
-	2.	Compute HQ_DIR:
-	•	if (MELECHDSP_HQ_ROOT AND EXISTS “${MELECHDSP_HQ_ROOT}/shared/mdsp_ui/CMakeLists.txt”) use that
-	•	else use “${CMAKE_CURRENT_SOURCE_DIR}/third_party/melechdsp-hq”
-	3.	Replace the existing add_subdirectory(third_party/melechdsp-hq …) with add_subdirectory(”${HQ_DIR}” …)
-	4.	Add:
-	•	message(STATUS “AnalyzerPro: using melechdsp-hq from: ${HQ_DIR}”)
+foreach(t IN LISTS _mdsp_consumer_targets)
+    if (TARGET ${t})
+        if (TARGET mdsp::sdk)
+            target_link_libraries(${t} PRIVATE mdsp::sdk)
+        elseif (TARGET mdsp_sdk)
+            target_link_libraries(${t} PRIVATE mdsp_sdk)
+        else()
+            message(FATAL_ERROR "mdsp SDK target not found (expected mdsp::sdk or mdsp_sdk). Check HQ_DIR/add_subdirectory.")
+        endif()
+    endif()
+endforeach()
 
-Output:
-Return ONLY the final content of the modified AnalyzerPro CMakeLists.txt file(s).
 
-How you’ll use it locally:
-	•	Configure with:
-cmake -S . -B build -DMELECHDSP_HQ_ROOT=/Users/avishaylidani/DEV/GitHubRepo/MelechDSP/melechdsp-hq
-	•	Or leave it empty to keep vendored behavior.
+And remove the earlier hard FATAL_ERROR that expects TARGET AnalyzerPro.
+
+This way:
+	•	You won’t fail if the compile target isn’t exactly AnalyzerPro.
+	•	You’ll still attach mdsp to the correct build targets that actually compile your sources.
+
+⸻
+
+Also: your HQ_DIR log shows a potential path issue
+
+You print:
+AnalyzerPro: using melechdsp-hq from: .../third_party/melechdsp-hq
+
+But earlier your submodule folder listing showed:
+third_party/melechdsp-hq/melechdsp-hq/... (nested)
+
+Right now your log also shows it found:
+third_party/melechdsp-hq/shared/mdsp_ui/CMakeLists.txt
+So in this checkout, shared/ is directly under third_party/melechdsp-hq/, which is fine.
+
+So don’t change HQ_DIR unless you see it missing.
+

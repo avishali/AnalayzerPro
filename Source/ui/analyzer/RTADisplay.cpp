@@ -5,10 +5,11 @@
 #include <mdsp_ui/Theme.h>
 #include <cmath>
 #include <cstdint>
-#include <algorithm>
-#include <limits>
+//#include <algorithm>
+//#include <limits>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+static const char* kBuildStamp = "BUILD_STAMP: 2026-02-16_XXYY_CURSOR";
 // NOTE (audit trail):
 // "Slice 5: All paint logic moved to RTADisplayRenderer. RTADisplay is now a thin wrapper."
 
@@ -306,7 +307,19 @@ int RTADisplay::findNearestLogBand (float x, const RenderState& s) const
 
 float RTADisplay::mapXToFreqFFT (float x, const RenderState& s) const
 {
-    return geometry_.mapXToFreqFFT (x);
+    const float plotLeft = geometry_.getPlotAreaLeft();
+    const float plotWidth = geometry_.getPlotAreaWidth();
+    if (plotWidth <= 0.0f || s.maxHz <= s.minHz || s.minHz <= 0.0f)
+        return s.minHz;
+    const float maxHz = s.getEffectiveMaxHz();
+    if (maxHz <= s.minHz)
+        return s.minHz;
+    const float norm = (x - plotLeft) / plotWidth;
+    const float logMin = std::log10 (s.minHz);
+    const float logMax = std::log10 (maxHz);
+    const float logRange = logMax - logMin;
+    const float logFreq = logMin + norm * logRange;
+    return std::pow (10.0f, juce::jlimit (logMin, logMax, logFreq));
 }
 
 int RTADisplay::mapFreqToBinIndex (float freqHz, const RenderState& s) const
@@ -356,10 +369,40 @@ void RTADisplay::mouseUp (const juce::MouseEvent& e)
 //==============================================================================
 void RTADisplay::paint (juce::Graphics& g)
 {
-    if (!getRenderState_)
-        return;
-
+    #if JUCE_DEBUG
+    g.setColour(juce::Colours::white);
+    g.drawText(kBuildStamp, 10, 10, 600, 20, juce::Justification::left);
+    #endif
     const mdsp_ui::Theme& theme = (getTheme_ ? getTheme_() : fallbackTheme_);
-    renderer_.paint (g, model_, geometry_, controller_, theme, displayGainDb, tiltMode, traceConfig_,
-                     getLocalBounds(), getRenderState_);
+    
+    // Compute intended background bounds (must match what refreshBackground builds for)
+    const auto intendedBounds = juce::Rectangle<int> (0, 0,
+                                                      static_cast<int>(geometry_.getPlotAreaWidth() + 60),
+                                                      static_cast<int>(geometry_.getPlotAreaHeight() + 40));
+    
+    // Ensure background is built before painting
+    if (!model_.isBackgroundValid() || model_.getCachedBackground().getBounds() != intendedBounds)
+    {
+        refreshBackground();
+    }
+    
+    // Draw cached background image using bounds
+    const auto& bg = model_.getCachedBackground();
+    const auto b = bg.getBounds();
+    if (bg.isValid() && b.getWidth() > 0 && b.getHeight() > 0)
+    {
+        g.drawImageWithin (bg, b.getX(), b.getY(), b.getWidth(), b.getHeight(), juce::RectanglePlacement::stretchToFit);
+    }
+    
+    // Draw traces and overlays via renderer (renderer must NOT draw grid)
+    if (getRenderState_)
+    {
+        renderer_.paint (g, model_, geometry_, controller_, theme, displayGainDb, tiltMode, traceConfig_,
+                         getLocalBounds(), getRenderState_);
+    }
+    else
+    {
+        renderer_.paint (g, model_, geometry_, controller_, theme, displayGainDb, tiltMode, traceConfig_,
+                         getLocalBounds(), nullptr);
+    }
 }

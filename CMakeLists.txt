@@ -87,11 +87,34 @@ endif()
 
 set(MELECHDSP_HQ_ROOT "" CACHE PATH "Path to melechdsp-hq; if empty, use third_party copy")
 
-# Compute HQ_DIR: use MELECHDSP_HQ_ROOT if set and valid, otherwise fall back to third_party
-if(MELECHDSP_HQ_ROOT AND EXISTS "${MELECHDSP_HQ_ROOT}/shared/mdsp_ui/CMakeLists.txt")
-    get_filename_component(HQ_DIR "${MELECHDSP_HQ_ROOT}" ABSOLUTE)
-else()
-    set(HQ_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/melechdsp-hq")
+# Default to the vendored submodule - check both parent and nested layouts
+set(_HQ_FALLBACK_PARENT "${CMAKE_CURRENT_LIST_DIR}/third_party/melechdsp-hq")
+set(_HQ_FALLBACK_NESTED "${CMAKE_CURRENT_LIST_DIR}/third_party/melechdsp-hq/melechdsp-hq")
+
+set(HQ_DIR "")
+if (MELECHDSP_HQ_ROOT)
+    # Normalize to absolute early (handles relative values from presets)
+    get_filename_component(_HQ_ABS "${MELECHDSP_HQ_ROOT}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+    if (IS_DIRECTORY "${_HQ_ABS}" AND EXISTS "${_HQ_ABS}/shared/mdsp_ui/CMakeLists.txt")
+        set(HQ_DIR "${_HQ_ABS}")
+    endif()
+endif()
+
+if (NOT HQ_DIR)
+    # Try parent layout first
+    if (IS_DIRECTORY "${_HQ_FALLBACK_PARENT}" AND EXISTS "${_HQ_FALLBACK_PARENT}/shared/mdsp_ui/CMakeLists.txt")
+        set(HQ_DIR "${_HQ_FALLBACK_PARENT}")
+    # Fall back to nested layout if parent doesn't exist
+    elseif (IS_DIRECTORY "${_HQ_FALLBACK_NESTED}" AND EXISTS "${_HQ_FALLBACK_NESTED}/shared/mdsp_ui/CMakeLists.txt")
+        set(HQ_DIR "${_HQ_FALLBACK_NESTED}")
+    else()
+        # Use parent as default even if check fails (will error later)
+        set(HQ_DIR "${_HQ_FALLBACK_PARENT}")
+    endif()
+endif()
+
+if (NOT IS_DIRECTORY "${HQ_DIR}")
+    message(FATAL_ERROR "HQ_DIR is not a directory: '${HQ_DIR}'")
 endif()
 
 message(STATUS "AnalyzerPro: using melechdsp-hq from: ${HQ_DIR}")
@@ -139,13 +162,10 @@ endif()
 add_subdirectory("${JUCE_PATH}" "${CMAKE_CURRENT_BINARY_DIR}/JUCE" EXCLUDE_FROM_ALL)
 
 # ==============================================================================
-# MelechDSP shared modules (from HQ_DIR)
+# MelechDSP SDK (from HQ_DIR)
 # ==============================================================================
 
-add_subdirectory("${HQ_DIR}/shared/mdsp_core" "${CMAKE_CURRENT_BINARY_DIR}/hq_mdsp_core")
-add_subdirectory("${HQ_DIR}/shared/mdsp_ui"   "${CMAKE_CURRENT_BINARY_DIR}/hq_mdsp_ui")
-add_subdirectory("${HQ_DIR}/shared/mdsp_dsp"  "${CMAKE_CURRENT_BINARY_DIR}/hq_mdsp_dsp")
-add_subdirectory("${HQ_DIR}/shared/mdsp_gui"  "${CMAKE_CURRENT_BINARY_DIR}/hq_mdsp_gui")
+add_subdirectory("${HQ_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/mdsp_sdk")
 
 # ==============================================================================
 # PLUGIN TARGET
@@ -226,6 +246,29 @@ target_sources(${PLUGIN_NAME}
         Source/ui/loudness/LoudnessNumericPanel.cpp
 )
 
+# ------------------------------------------------------------------
+# Ensure mdsp SDK include dirs/defs propagate to the actual JUCE build targets
+# ------------------------------------------------------------------
+set(_mdsp_consumer_targets
+    ${PLUGIN_NAME}
+    ${PLUGIN_NAME}_Standalone
+    ${PLUGIN_NAME}_VST3
+    ${PLUGIN_NAME}_AAX
+    ${PLUGIN_NAME}_SharedCode
+)
+
+foreach(t IN LISTS _mdsp_consumer_targets)
+    if (TARGET ${t})
+        if (TARGET mdsp::sdk)
+            target_link_libraries(${t} PRIVATE mdsp::sdk)
+        elseif (TARGET mdsp_sdk)
+            target_link_libraries(${t} PRIVATE mdsp_sdk)
+        else()
+            message(FATAL_ERROR "mdsp SDK target not found (expected mdsp::sdk or mdsp_sdk). Check HQ_DIR/add_subdirectory.")
+        endif()
+    endif()
+endforeach()
+
 # Temporary: make deprecated-declarations an error for RTADisplay.cpp to pinpoint exact callsite
 set_source_files_properties(
     Source/ui/analyzer/RTADisplay.cpp
@@ -238,8 +281,6 @@ target_compile_features(${PLUGIN_NAME} PUBLIC cxx_std_17)
 target_include_directories(${PLUGIN_NAME}
     PRIVATE
         Source
-        ${HQ_DIR}/shared/mdsp_ui/include
-        ${HQ_DIR}/shared/mdsp_gui/include
 )
 
 target_compile_definitions(${PLUGIN_NAME}
@@ -258,11 +299,8 @@ target_link_libraries(${PLUGIN_NAME}
         juce::juce_audio_utils
         juce::juce_gui_basics
         juce::juce_dsp
-        mdsp_ui
-        mdsp_dsp
-        mdsp_gui
+        mdsp_sdk
     PUBLIC
-        mdsp_core
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
 )

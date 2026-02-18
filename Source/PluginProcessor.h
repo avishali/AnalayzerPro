@@ -3,14 +3,14 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <atomic>
 #include "parameters/Parameters.h"
-#include "analyzer/AnalyzerEngine.h"
+#include "analyzer/AnalyzerEngine.h" 
 #include "audio/IStereoScopeSink.h"
 #include "hardware/HardwareMeterMapper.h"
 #include "hardware/SoftwareMeterSink.h"
 #include "presets/PresetManager.h"
 #include "presets/ABStateManager.h"
 #include "loudness/LoudnessAnalyzer.h"
-#include <mdsp_core/containers/AudioBufferQueue.h>
+#include <mdsp_core/containers/AudioBufferQueue.h> 
 #include <limits>
 
 

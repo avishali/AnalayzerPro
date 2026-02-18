@@ -1,8 +1,9 @@
 #pragma once
 
-#include "../dsp_adapters/AnalyzerSnapshotAdapter.h"
 #include "StereoScopeAnalyzer.h"
+#include "../dsp_adapters/AnalyzerSnapshotAdapter.h"
 #include <mdsp_dsp/analyzer/AnalyzerEngine.h>
+
 
 //==============================================================================
 /**
