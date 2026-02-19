@@ -87,37 +87,55 @@ endif()
 
 set(MELECHDSP_HQ_ROOT "" CACHE PATH "Path to melechdsp-hq; if empty, use third_party copy")
 
-# Default to the vendored submodule - check both parent and nested layouts
-set(_HQ_FALLBACK_PARENT "${CMAKE_CURRENT_LIST_DIR}/third_party/melechdsp-hq")
-set(_HQ_FALLBACK_NESTED "${CMAKE_CURRENT_LIST_DIR}/third_party/melechdsp-hq/melechdsp-hq")
+# Resolve HQ_DIR robustly. Support both layouts:
+#   A) <HQ>/CMakeLists.txt
+#   B) <HQ>/melechdsp-hq/CMakeLists.txt (nested wrapper checkout)
+set(_hq_candidates "")
 
-set(HQ_DIR "")
 if (MELECHDSP_HQ_ROOT)
     # Normalize to absolute early (handles relative values from presets)
     get_filename_component(_HQ_ABS "${MELECHDSP_HQ_ROOT}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_LIST_DIR}")
-    if (IS_DIRECTORY "${_HQ_ABS}" AND EXISTS "${_HQ_ABS}/shared/mdsp_ui/CMakeLists.txt")
-        set(HQ_DIR "${_HQ_ABS}")
-    endif()
+    list(APPEND _hq_candidates
+        "${_HQ_ABS}"
+        "${_HQ_ABS}/melechdsp-hq"
+    )
 endif()
+
+list(APPEND _hq_candidates
+    "${CMAKE_CURRENT_LIST_DIR}/third_party/melechdsp-hq"
+    "${CMAKE_CURRENT_LIST_DIR}/third_party/melechdsp-hq/melechdsp-hq"
+)
+
+set(HQ_DIR "")
+foreach(p IN LISTS _hq_candidates)
+    if (EXISTS "${p}/CMakeLists.txt" OR EXISTS "${p}/shared/mdsp_core/CMakeLists.txt")
+        get_filename_component(HQ_DIR "${p}" ABSOLUTE)
+        break()
+    endif()
+endforeach()
 
 if (NOT HQ_DIR)
-    # Try parent layout first
-    if (IS_DIRECTORY "${_HQ_FALLBACK_PARENT}" AND EXISTS "${_HQ_FALLBACK_PARENT}/shared/mdsp_ui/CMakeLists.txt")
-        set(HQ_DIR "${_HQ_FALLBACK_PARENT}")
-    # Fall back to nested layout if parent doesn't exist
-    elseif (IS_DIRECTORY "${_HQ_FALLBACK_NESTED}" AND EXISTS "${_HQ_FALLBACK_NESTED}/shared/mdsp_ui/CMakeLists.txt")
-        set(HQ_DIR "${_HQ_FALLBACK_NESTED}")
-    else()
-        # Use parent as default even if check fails (will error later)
-        set(HQ_DIR "${_HQ_FALLBACK_PARENT}")
-    endif()
-endif()
-
-if (NOT IS_DIRECTORY "${HQ_DIR}")
-    message(FATAL_ERROR "HQ_DIR is not a directory: '${HQ_DIR}'")
+    message(FATAL_ERROR
+        "Could not locate melechdsp-hq root. Tried:\n"
+        "  ${_hq_candidates}\n"
+        "Fix your submodule checkout or set -DMELECHDSP_HQ_ROOT=/path/to/melechdsp-hq"
+    )
 endif()
 
 message(STATUS "AnalyzerPro: using melechdsp-hq from: ${HQ_DIR}")
+
+# ==============================================================================
+# JUCE BinaryBuilder override (optional, auto-detected if available)
+# ==============================================================================
+
+# If BinaryBuilder was built via the HQ helper script, set it automatically (only if user hasn't set it)
+if (NOT JUCE_BINARYBUILDER_EXE)
+    set(_bb "${HQ_DIR}/build_binarybuilder/extras/BinaryBuilder/BinaryBuilder_artefacts/Release/BinaryBuilder")
+    if (EXISTS "${_bb}")
+        set(JUCE_BINARYBUILDER_EXE "${_bb}" CACHE FILEPATH "" )
+        message(STATUS "AnalyzerPro: auto-detected BinaryBuilder: ${JUCE_BINARYBUILDER_EXE}")
+    endif()
+endif()
 
 # ==============================================================================
 # PROJECT SETUP
@@ -165,7 +183,86 @@ add_subdirectory("${JUCE_PATH}" "${CMAKE_CURRENT_BINARY_DIR}/JUCE" EXCLUDE_FROM_
 # MelechDSP SDK (from HQ_DIR)
 # ==============================================================================
 
-add_subdirectory("${HQ_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/mdsp_sdk")
+# HQ integration:
+# - Modern HQ: add_subdirectory(HQ_DIR) provides mdsp::sdk / mdsp_sdk
+# - Legacy HQ (no top-level CMakeLists): add the module subdirs and create a local mdsp::sdk aggregate
+if (EXISTS "${HQ_DIR}/CMakeLists.txt")
+    add_subdirectory("${HQ_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/mdsp_sdk")
+else()
+    message(STATUS "AnalyzerPro: HQ has no top-level CMakeLists.txt; using legacy module integration")
+    add_subdirectory("${HQ_DIR}/shared/mdsp_core" "${CMAKE_CURRENT_BINARY_DIR}/_deps/hq_mdsp_core")
+    add_subdirectory("${HQ_DIR}/shared/mdsp_dsp"  "${CMAKE_CURRENT_BINARY_DIR}/_deps/hq_mdsp_dsp")
+    add_subdirectory("${HQ_DIR}/shared/mdsp_ui"   "${CMAKE_CURRENT_BINARY_DIR}/_deps/hq_mdsp_ui")
+    add_subdirectory("${HQ_DIR}/shared/mdsp_gui"  "${CMAKE_CURRENT_BINARY_DIR}/_deps/hq_mdsp_gui")
+
+    if (NOT TARGET mdsp_sdk)
+        add_library(mdsp_sdk INTERFACE)
+    endif()
+    if (NOT TARGET mdsp::sdk)
+        add_library(mdsp::sdk ALIAS mdsp_sdk)
+    endif()
+
+    target_link_libraries(mdsp_sdk INTERFACE
+        mdsp_core
+        mdsp_dsp
+        mdsp_ui
+        mdsp_gui
+    )
+
+    # Ensure include roots are visible even if module targets are mis-scoped in older checkouts
+    target_include_directories(mdsp_sdk INTERFACE
+        "${HQ_DIR}/shared/mdsp_core/include"
+        "${HQ_DIR}/shared/mdsp_dsp/include"
+        "${HQ_DIR}/shared/mdsp_ui/include"
+        "${HQ_DIR}/shared/mdsp_gui/include"
+    )
+endif()
+
+# Read MDSP SDK version:
+# 1) Prefer MDSP_SDK_VERSION target property (modern HQ)
+# 2) Fallback to melechdsp_hq_VERSION (modern HQ project var)
+# 3) Fallback to git describe in HQ_DIR (works for submodule checkouts)
+set(MDSP_SDK_VERSION "")
+
+if (TARGET mdsp::sdk)
+    get_property(MDSP_SDK_VERSION TARGET mdsp::sdk PROPERTY MDSP_SDK_VERSION)
+elseif (TARGET mdsp_sdk)
+    get_property(MDSP_SDK_VERSION TARGET mdsp_sdk PROPERTY MDSP_SDK_VERSION)
+endif()
+
+if (NOT MDSP_SDK_VERSION AND DEFINED melechdsp_hq_VERSION)
+    set(MDSP_SDK_VERSION "${melechdsp_hq_VERSION}")
+endif()
+
+if (NOT MDSP_SDK_VERSION)
+    find_package(Git QUIET)
+    if (GIT_FOUND AND EXISTS "${HQ_DIR}/.git")
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" -C "${HQ_DIR}" describe --tags --abbrev=0
+            OUTPUT_VARIABLE _mdsp_tag
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        string(REGEX MATCH "([0-9]+\\.[0-9]+\\.[0-9]+)" _mdsp_m "${_mdsp_tag}")
+        if (CMAKE_MATCH_1)
+            set(MDSP_SDK_VERSION "${CMAKE_MATCH_1}")
+        endif()
+    endif()
+endif()
+
+if (NOT MDSP_SDK_VERSION)
+    set(MDSP_SDK_VERSION "0.0.0")
+    message(WARNING "Could not determine MDSP SDK version; defaulting to ${MDSP_SDK_VERSION}")
+endif()
+
+message(STATUS "MDSP SDK version: ${MDSP_SDK_VERSION}")
+
+# Enforce minimum version 0.2.2 when a real semver is available
+if (NOT MDSP_SDK_VERSION STREQUAL "0.0.0")
+    if (MDSP_SDK_VERSION VERSION_LESS "0.2.2")
+        message(FATAL_ERROR "MDSP SDK version ${MDSP_SDK_VERSION} is below minimum required version 0.2.2")
+    endif()
+endif()
 
 # ==============================================================================
 # PLUGIN TARGET
@@ -266,6 +363,7 @@ foreach(t IN LISTS _mdsp_consumer_targets)
         else()
             message(FATAL_ERROR "mdsp SDK target not found (expected mdsp::sdk or mdsp_sdk). Check HQ_DIR/add_subdirectory.")
         endif()
+        target_compile_definitions(${t} PRIVATE MDSP_SDK_VERSION_STRING="${MDSP_SDK_VERSION}")
     endif()
 endforeach()
 
@@ -299,7 +397,8 @@ target_link_libraries(${PLUGIN_NAME}
         juce::juce_audio_utils
         juce::juce_gui_basics
         juce::juce_dsp
-        mdsp_sdk
+        $<$<BOOL:$<TARGET_EXISTS:mdsp::sdk>>:mdsp::sdk>
+        $<$<AND:$<NOT:$<TARGET_EXISTS:mdsp::sdk>>,$<BOOL:$<TARGET_EXISTS:mdsp_sdk>>>:mdsp_sdk>
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags

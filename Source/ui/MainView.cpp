@@ -1,7 +1,6 @@
 #include "MainView.h"
 #include "layout/LayoutConstants.h"
 #include "../PluginProcessor.h"
-#include "analyzer/RTADisplay.h"
 #include <mdsp_ui/UiContext.h>
 
 using namespace AnalyzerPro::Layout;
@@ -350,30 +349,30 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     else if (parameterID == "DisplayGain")
     {
         // Display gain is UI-only, applied to RTADisplay (not AnalyzerEngine)
-        analyzerView_.getRTADisplay().setDisplayGainDb (newValue);
+        analyzerView_.setDisplayGainDb (newValue);
     }
     else if (parameterID == "Tilt")
     {
         // Tilt is UI-only, applied to RTADisplay (not AnalyzerEngine)
         // Convert choice index to TiltMode (Flat=0, Pink=1, White=2)
         const int index = juce::roundToInt (newValue);
-        rta::TiltMode tiltMode = rta::TiltMode::Flat;
+        AnalyzerDisplayView::TiltMode tiltMode = AnalyzerDisplayView::TiltMode::Flat;
         switch (index)
         {
             case 0:
-                tiltMode = rta::TiltMode::Flat;
+                tiltMode = AnalyzerDisplayView::TiltMode::Flat;
                 break;
             case 1:
-                tiltMode = rta::TiltMode::Pink;
+                tiltMode = AnalyzerDisplayView::TiltMode::Pink;
                 break;
             case 2:
-                tiltMode = rta::TiltMode::White;
+                tiltMode = AnalyzerDisplayView::TiltMode::White;
                 break;
             default:
-                tiltMode = rta::TiltMode::Flat;
+                tiltMode = AnalyzerDisplayView::TiltMode::Flat;
                 break;
         }
-        analyzerView_.getRTADisplay().setTiltMode (tiltMode);
+        analyzerView_.setTiltMode (tiltMode);
     }
 }
 

@@ -1,22 +1,52 @@
-VERIFIER PROMPT (Cursor)
+Verifier prompt (copy/paste to Cursor)
 
-Return only the final content of VERIFICATION_SLICE_D.md (no markdown fences, no extra text).
+Return only the final content of GRID_VERIFY.md.
+No markdown. No explanation.
+Goal: Determine why FFT/RTA grid (freq lines + dB lines + labels) is not visible (blackish plot).
 
-Goal: verify Slice-D (UI split into Model + Renderer + Controller; smoothing in Model).
+Rules:
+	•	Do NOT guess.
+	•	Add instrumentation behind MDSP_DEBUG_GRID (default 0).
+	•	Print exactly ONE line per paint when grid is supposed to show.
+	•	Also print ONE line when refreshBackground is called.
 
-VERIFICATION_SLICE_D.md MUST INCLUDE:
-	1.	Build steps for:
-	•	melechdsp-hq mdsp_ui target
-	•	AnalyzerPro target
-	2.	Static checks (rg):
-	•	Renderer contains no mouse handlers/timer state
-	•	Controller contains no paint/Graphics usage
-	•	Model contains smoothing variables (hover smoothing, etc.)
-	•	AnalyzerPro view calls model_.tick() from a timer and renderer_.paint() from paint()
-	3.	Dependency checks:
-	•	mdsp_ui analyzer code does not include mdsp_dsp engine headers
-	•	mdsp_ui does not include juce_gui_basics outside of Component wrappers (renderer/controller can include minimal juce headers as needed, but must not subclass Component)
-	4.	Runtime smoke:
-	•	open plugin, feed signal, verify FFT + hover + smoothing, change FFT size/modes
-	5.	Rollback plan:
-	•	git commands to revert Slice-D in both repos
+Search in HQ for:
+	•	refreshBackground / isBackgroundValid / getCachedBackground
+	•	drawGrid (or grid render) and any label draw calls
+	•	theme colours used for grid/labels
+	•	where the cached background image is created/fill/cleared
+
+Instrumentation to add:
+A) In the function that decides to rebuild the cached background (paint() or refreshBackground caller):
+Log:
+“GRID: needRefresh=%d valid=%d cachedW=%d cachedH=%d intendedW=%d intendedH=%d plotL=%.1f plotT=%.1f plotW=%.1f plotH=%.1f”
+B) In RTADisplayModel::refreshBackground (or equivalent):
+Log:
+“GRID: refreshBackground called imageW=%d imageH=%d”
+C) In the function that actually draws the grid (renderer_.drawGrid or similar):
+Log RGBA of:
+	•	background fill colour used for the cached image
+	•	major grid colour
+	•	minor grid colour
+	•	label/text colour
+Example:
+“GRID: colors bg=%08X major=%08X minor=%08X text=%08X alphaMaj=%.3f alphaMin=%.3f”
+Also log whether labels are drawn:
+“GRID: labelsDrawn=%d”
+
+What to capture:
+	•	Run with MDSP_DEBUG_GRID=1
+	•	Open analyzer, hover not needed
+	•	Paste 5–10 lines of output
+
+Verdict criteria:
+	1.	If refreshBackground called and drawGrid called, but colors show bg/major/minor/text nearly equal or alpha near 0 -> THEME/TOKENS ISSUE.
+	2.	If refreshBackground called but drawGrid not called -> CALLBACK/WIRING ISSUE.
+	3.	If drawGrid called but intended bounds are smaller than plotL/plotT or weird -> CLIP/OFFSET ISSUE.
+
+Deliverable:
+	•	Exact file paths + functions + line ranges where you added logs
+	•	The pasted log lines
+	•	Verdict: THEME/TOKENS vs CALLBACK/WIRING vs CLIP/OFFSET
+
+⸻

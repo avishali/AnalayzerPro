@@ -78,6 +78,12 @@ public:
     
     std::function<void(DbRange)> onDbRangeUserChanged;
 
+    // Migration step: keep RTADisplay backend hidden from parent views.
+    using TiltMode = RTADisplay::TiltMode;
+    void setDisplayGainDb (float db);
+    void setTiltMode (TiltMode mode);
+
+    // Transitional API during migration; avoid adding new callers.
     RTADisplay& getRTADisplay() noexcept { return rtaDisplay; }
     const RTADisplay& getRTADisplay() const noexcept { return rtaDisplay; }
 

@@ -17,6 +17,10 @@
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++",
+                "MELECHDSP_HQ_ROOT": {
+                    "type": "PATH",
+                    "value": "${sourceDir}/../melechdsp-hq"
+                },
                 "JUCE_PATH": {
                     "type": "PATH",
                     "value": "$env{JUCE_PATH}"
@@ -34,6 +38,10 @@
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++",
+                "MELECHDSP_HQ_ROOT": {
+                    "type": "PATH",
+                    "value": "${sourceDir}/../melechdsp-hq"
+                },
                 "JUCE_PATH": {
                     "type": "PATH",
                     "value": "$env{JUCE_PATH}"
@@ -48,6 +56,10 @@
             "binaryDir": "${sourceDir}/build-xcode",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
+                "MELECHDSP_HQ_ROOT": {
+                    "type": "PATH",
+                    "value": "${sourceDir}/../melechdsp-hq"
+                },
                 "JUCE_PATH": {
                     "type": "PATH",
                     "value": "$env{JUCE_PATH}"

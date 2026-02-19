@@ -93,6 +93,7 @@ void StereoScopeView::renderScopeToImage(int numSamples)
     if (limit <= 0) return;
 
     juce::Graphics g (accumImage_);
+    juce::Image::BitmapData scatterBitmap (accumImage_, juce::Image::BitmapData::readWrite);
     
     // M/S Mapping:
     // X = Side = (L - R)
@@ -211,14 +212,28 @@ void StereoScopeView::renderScopeToImage(int numSamples)
                 p.lineTo (sx, sy);
             }
         }
-        else // Scatter: clamp rect to image bounds to avoid CoreGraphics RIPLayer crash
+        else // Scatter: write pixels directly to the backing image (avoid CGContext fillRect crash path)
         {
-            const float rx = juce::jlimit (0.0f, w - 1.0f, sx - 1.0f);
-            const float ry = juce::jlimit (0.0f, h - 1.0f, sy - 1.0f);
-            const float rw = juce::jmin (2.0f, w - rx);
-            const float rh = juce::jmin (2.0f, h - ry);
-            if (rw > 0.0f && rh > 0.0f)
-                g.fillRect (rx, ry, rw, rh);
+            const int px = juce::jlimit (0, static_cast<int> (w) - 1, static_cast<int> (std::floor (sx)));
+            const int py = juce::jlimit (0, static_cast<int> (h) - 1, static_cast<int> (std::floor (sy)));
+
+            const auto putPixel = [&scatterBitmap](int x, int y)
+            {
+                if (x < 0 || y < 0 || x >= scatterBitmap.width || y >= scatterBitmap.height)
+                    return;
+
+                auto* pxPtr = scatterBitmap.getPixelPointer (x, y);
+                const juce::uint8 alpha = pxPtr[3];
+                pxPtr[0] = 0x3a; // B
+                pxPtr[1] = 0xd8; // G
+                pxPtr[2] = 0xff; // R
+                pxPtr[3] = static_cast<juce::uint8> (juce::jmin (255, static_cast<int> (alpha) + 96));
+            };
+
+            putPixel (px, py);
+            putPixel (px + 1, py);
+            putPixel (px, py + 1);
+            putPixel (px + 1, py + 1);
         }
     }
     

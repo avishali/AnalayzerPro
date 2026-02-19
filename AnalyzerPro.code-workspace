@@ -1,15 +1,11 @@
 {
-	"folders": [
-		{
-			"path": "."
-		},
-		{
-			"path": "../melechdsp-hq"
-		}
-	],
-	"settings": {
-		"githubPullRequests.ignoredPullRequestBranches": [
-			"main_02"
-		]
-	}
+  "folders": [
+    { "path": ".", "name": "AnalyzerPro" },
+    { "path": "../melechdsp-hq", "name": "melechdsp-hq" }
+  ],
+  "settings": {
+    "files.exclude": { "**/third_party/melechdsp-hq": true },
+    "search.exclude": { "**/third_party/melechdsp-hq": true },
+    "githubPullRequests.ignoredPullRequestBranches": ["master"]
+  }
 }

@@ -4,7 +4,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <mdsp_ui/UiContext.h>
 #include "ui/tooltips/TooltipManager.h" // Added include
-#include "../PluginProcessor.h"
+#include "../PluginProcessor.h" // Added include
 #include "../control/AnalyzerProControlContext.h"
 #include "layout/LayoutConstants.h"
 #include "layout/HeaderBar.h"

@@ -369,10 +369,10 @@ void RTADisplay::mouseUp (const juce::MouseEvent& e)
 //==============================================================================
 void RTADisplay::paint (juce::Graphics& g)
 {
-    #if JUCE_DEBUG
+#if JUCE_DEBUG
     g.setColour(juce::Colours::white);
     g.drawText(kBuildStamp, 10, 10, 600, 20, juce::Justification::left);
-    #endif
+#endif
     const mdsp_ui::Theme& theme = (getTheme_ ? getTheme_() : fallbackTheme_);
     
     // Compute intended background bounds (must match what refreshBackground builds for)

@@ -52,19 +52,9 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
 #endif
 {
     addAndMakeVisible (rtaDisplay);
-    // =======================================================
-// Wire HQ renderer callbacks (CRITICAL)
-// =======================================================
-
-rtaDisplay.setGetRenderState([this]() -> mdsp_ui::AnalyzerRenderState
-{
-    return renderState_;   // copy is correct (API expects value)
-});
-
-rtaDisplay.setGetTheme([this]() -> const mdsp_ui::Theme&
-{
-    return theme_;         // must be persistent member
-});
+    // Use RTADisplay's native model/renderer path for trace rendering.
+    // The legacy getRenderState delegation does not apply tilt consistently.
+    rtaDisplay.setGetTheme ([this]() -> const mdsp_ui::Theme& { return theme_; });
     // DISABLED: spectrumEngine was causing flat yellow line at maximum
     // addAndMakeVisible (spectrumEngine);
     // spectrumEngine.setAudioBufferQueue (&audioProcessor.getSpectrumBufferQueue());
@@ -94,8 +84,6 @@ rtaDisplay.setGetTheme([this]() -> const mdsp_ui::Theme&
 
     model_.setViewMode (toRtaMode (currentMode_));
     model_.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
-    rtaDisplay.setGetRenderState ([this]() { return renderState_; });
-    rtaDisplay.setGetTheme ([this]() -> const mdsp_ui::Theme& { return theme_; });
     
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     addAndMakeVisible (modeOverlay_);
@@ -671,6 +659,16 @@ void AnalyzerDisplayView::setSpectrumDecayRate (float decay)
     juce::ignoreUnused(decay);
 }
 
+void AnalyzerDisplayView::setDisplayGainDb (float db)
+{
+    rtaDisplay.setDisplayGainDb (db);
+}
+
+void AnalyzerDisplayView::setTiltMode (TiltMode mode)
+{
+    rtaDisplay.setTiltMode (mode);
+}
+
 void AnalyzerDisplayView::timerCallback()
 {
     // Early return if shutdown (do not rely on isTimerRunning())
@@ -946,7 +944,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     
     // Update Hold Status
     isHoldOn_ = snapshot.isHoldOn;
-    // rtaDisplay.setHoldStatus (isHoldOn_);
+    rtaDisplay.setHoldStatus (isHoldOn_);
     
     // Route data STRICTLY by mode (FFT data only sent in FFT mode)
     // -------------------------------------------------------------------------
@@ -1236,7 +1234,15 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             // Extract Peak Hold from snapshot (Independent of Peak Trace)
             // Floor init so unmapped / tail bins never draw at top (0 dB); fix for "flat line at top"
             static constexpr float kPeakHoldDbFloor = -200.0f;
+            auto hasAnyFiniteHold = [](const std::vector<float>& db) noexcept
+            {
+                for (float v : db)
+                    if (std::isfinite (v) && v > -199.0f)
+                        return true;
+                return false;
+            };
             bool usePeakHold = false;
+            const std::vector<float> prevPeakHoldDb = fftPeakHoldDb_;
             fftPeakHoldDb_.resize (validBinsSize);
             std::fill (fftPeakHoldDb_.begin(), fftPeakHoldDb_.end(), kPeakHoldDbFloor);
 
@@ -1298,10 +1304,26 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                         for (size_t i = 0; i < safeHoldBins && i < fftPeakDbDisplay_.size(); ++i)
                             fftPeakHoldDb_[i] = juce::jmax (fftPeakHoldDb_[i], fftPeakDbDisplay_[i]);
                     }
+
+                    // If hold is active and incoming hold vector is shorter than expected,
+                    // preserve the previous tail instead of forcing floor.
+                    if (holdOn && prevPeakHoldDb.size() == validBinsSize && safeHoldBins < validBinsSize)
+                    {
+                        std::copy (prevPeakHoldDb.begin() + static_cast<std::ptrdiff_t> (safeHoldBins),
+                                   prevPeakHoldDb.end(),
+                                   fftPeakHoldDb_.begin() + static_cast<std::ptrdiff_t> (safeHoldBins));
+                    }
+                }
+                else if (holdOn && prevPeakHoldDb.size() == validBinsSize)
+                {
+                    // No incoming hold bins on this frame (common right after signal cut).
+                    // Keep last hold curve so visual hold trace remains visible.
+                    fftPeakHoldDb_ = prevPeakHoldDb;
+                    usePeakHold = hasAnyFiniteHold (fftPeakHoldDb_);
                 }
             }
 
-            // Peak dominance: clamp all traces to peak so nothing draws above the peak trace
+            // Keep RMS under peak, but leave multi-traces untouched to avoid clipped/squared tops.
             if (usePeaks && fftPeakDbDisplay_.size() == validBinsSize)
             {
                 for (size_t i = 0; i < validBinsSize; ++i)
@@ -1309,16 +1331,6 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                     const float peakDb = fftPeakDbDisplay_[i];
                     if (i < fftDb_.size())
                         fftDb_[i] = juce::jmin (fftDb_[i], peakDb);
-                    if (i < scratchPowerL_.size())
-                        scratchPowerL_[i] = juce::jmin (scratchPowerL_[i], peakDb);
-                    if (i < scratchPowerR_.size())
-                        scratchPowerR_[i] = juce::jmin (scratchPowerR_[i], peakDb);
-                    if (i < scratchPowerMid_.size())
-                        scratchPowerMid_[i] = juce::jmin (scratchPowerMid_[i], peakDb);
-                    if (i < scratchPowerSide_.size())
-                        scratchPowerSide_[i] = juce::jmin (scratchPowerSide_[i], peakDb);
-                    if (i < scratchPowerMono_.size())
-                        scratchPowerMono_[i] = juce::jmin (scratchPowerMono_[i], peakDb);
                 }
             }
 
@@ -1522,7 +1534,9 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     rs.minHz = 20.0f;
     rs.maxHz = 20000.0f;
     rs.topDb = kSpectrumTopDb;
-    rs.bottomDb = -200.0f;
+    // Keep renderer dB mapping aligned with RTADisplay geometry/model mapping.
+    // If these diverge, the FFT crosshair Y and peak trace no longer match.
+    rs.bottomDb = lastAppliedMinDb_;
 #if JUCE_DEBUG
     jassert(rs.topDb >= 1.0f);
     jassert(rs.bottomDb < rs.topDb);
@@ -1566,6 +1580,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     rs.midDb = scratchPowerMid_;
     rs.sideDb = scratchPowerSide_;
     rs.hasValidMultiTraceData = snapshot.multiTraceEnabled && !scratchPowerL_.empty() && scratchPowerL_.size() == scratchPowerR_.size();
+    rs.showLR = lastTraceConfig_.showLR;
     rs.showL = lastTraceConfig_.showL;
     rs.showR = lastTraceConfig_.showR;
     rs.showMid = lastTraceConfig_.showMid;
