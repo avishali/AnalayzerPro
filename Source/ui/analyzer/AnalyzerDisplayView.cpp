@@ -36,25 +36,16 @@ static inline bool isInvalidPeakDb (float db) noexcept
     return db <= kUiPeakInvalidSentinelDb;
 }
 
-static bool hasSignal (const std::vector<float>& db, float bottomDb)
-{
-    const float threshold = bottomDb + 1.0f;
-    for (float v : db)
-        if (v > threshold)
-            return true;
-    return false;
-}
-
 AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     : audioProcessor (processor)
 #if JUCE_DEBUG
     , lastDebugLogTime_ (juce::Time::getCurrentTime())
 #endif
 {
-    addAndMakeVisible (rtaDisplay);
+    addAndMakeVisible (analyzerBridgeWidget_);
     // Use RTADisplay's native model/renderer path for trace rendering.
     // The legacy getRenderState delegation does not apply tilt consistently.
-    rtaDisplay.setGetTheme ([this]() -> const mdsp_ui::Theme& { return theme_; });
+    analyzerBridgeWidget_.setGetTheme ([this]() -> const mdsp_ui::Theme& { return theme_; });
     // DISABLED: spectrumEngine was causing flat yellow line at maximum
     // addAndMakeVisible (spectrumEngine);
     // spectrumEngine.setAudioBufferQueue (&audioProcessor.getSpectrumBufferQueue());
@@ -65,32 +56,44 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     // DISABLED: Initial FFT order: 4096 (order 12) for high-resolution spectrum
     // spectrumEngine.setFftOrder (mdsp::gui::SpectrumComponent::defaultFftOrder);
     // Initialize RTADisplay with default ranges
-    rtaDisplay.setFrequencyRange (20.0f, 20000.0f);
+    analyzerBridgeWidget_.setFrequencyRange (20.0f, 20000.0f);
     targetMinDb_ = dbRangeToMinDb (dbRange_);
     minDbAnim_.reset (60.0, 0.20);
     minDbAnim_.setCurrentAndTargetValue (targetMinDb_);
     lastAppliedMinDb_ = targetMinDb_;
-    rtaDisplay.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
+    analyzerBridgeWidget_.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
     appliedDbRange_ = dbRange_;
     
     // Initialize band centers
     bandCentersHz_ = generateThirdOctaveBands();
     
     // Sync initial mode to RTADisplay (currentMode_ defaults to FFT)
-    rtaDisplay.setViewMode (toRtaMode (currentMode_));
+    analyzerBridgeWidget_.setViewMode (toRtaMode (currentMode_));
 #if JUCE_DEBUG
     lastSentRtaMode_ = toRtaMode (currentMode_);
 #endif
 
-    model_.setViewMode (toRtaMode (currentMode_));
-    model_.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
-    
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     addAndMakeVisible (modeOverlay_);
     modeOverlay_.setInterceptsMouseClicks (false, false);
     updateModeOverlayText();
 #endif
     
+    analyzerBridgeWidget_.setSnapshotSupplier ([this] (AnalyzerSnapshot& out)
+    {
+        return audioProcessor.getAnalyzerEngine().getLatestSnapshot (out);
+    });
+    analyzerBridgeWidget_.setSnapshotValidator ([] (const AnalyzerSnapshot& s)
+    {
+        const int fftBinCount = (s.fftBinCount > 0) ? s.fftBinCount : s.numBins;
+        return s.isValid && fftBinCount > 0;
+    });
+    analyzerBridgeWidget_.setOnSnapshot ([this] (const AnalyzerSnapshot& s)
+    {
+        handlePumpedSnapshot (s);
+    });
+    analyzerBridgeWidget_.start (60);
+
     // Start timer for snapshot updates (~60 Hz) and dB range animation
     startTimerHz (60);
     
@@ -104,10 +107,11 @@ void AnalyzerDisplayView::setDbRange (DbRange r)
 
     dbRange_ = r;
     targetMinDb_ = dbRangeToMinDb (dbRange_);
-    model_.setDbRange (kSpectrumTopDb, targetMinDb_);
 
     minDbAnim_.reset (60.0, 0.20);
     minDbAnim_.setTargetValue (targetMinDb_);
+    analyzerBridgeWidget_.setDbRange (kSpectrumTopDb, targetMinDb_);
+    kickSnapshotPumpImmediate();
     repaint();
 }
 
@@ -124,6 +128,8 @@ void AnalyzerDisplayView::setPeakDbRange (DbRange r)
 
     peakDbRange_ = r;
     peakScaleDirty_ = true;
+    analyzerBridgeWidget_.setPeakDbRange (dbRangeToMinDb (peakDbRange_));
+    kickSnapshotPumpImmediate();
     repaint();
 }
 
@@ -133,13 +139,13 @@ void AnalyzerDisplayView::resetSessionMarker()
     sessionMarkerDb_ = -1000.0f;
     sessionMarkerBin_ = -1;
     // Force immediate update to display
-    rtaDisplay.setSessionMarker (false, -1, -1000.0f);
+    analyzerBridgeWidget_.setSessionMarker (false, -1, -1000.0f);
 }
 
 void AnalyzerDisplayView::resetViewPeaks()
 {
-    // Clear UI-side latch buffer
-    std::fill (uiHeldPeak_.begin(), uiHeldPeak_.end(), -120.0f);
+    // Clear bridge-owned hold-latch buffer
+    analyzerBridgeWidget_.clearHoldLatch();
 
     // CRITICAL: Clear UI-side peak trace buffers that retain stale max values
     // These are copies from snapshots and won't reset automatically
@@ -185,6 +191,7 @@ void AnalyzerDisplayView::shutdown()
 
     isShutdown = true;
 
+    analyzerBridgeWidget_.stop();
     stopTimer();          // CRITICAL
     //cancelPendingUpdate(); // if AsyncUpdater ever used later
 
@@ -310,7 +317,6 @@ void AnalyzerDisplayView::mouseDown (const juce::MouseEvent& e)
 {
     dragStartPos_ = e.position;
     dragStartDbRange_ = dbRange_;
-    controller_.onMouseDown(getLocalBounds(), e.position.toFloat(), e.mods);
 }
 
 void AnalyzerDisplayView::mouseDrag (const juce::MouseEvent& e)
@@ -366,17 +372,15 @@ void AnalyzerDisplayView::mouseDrag (const juce::MouseEvent& e)
                 onDbRangeUserChanged (nextRange);
         }
     }
-    auto upd = controller_.onMouseDrag(getLocalBounds(), e.position.toFloat(), dragStartPos_, e.mods);
-    model_.applyInteraction(upd);
 }
 
 void AnalyzerDisplayView::resized()
 {
     auto bounds = getLocalBounds();
-    rtaDisplay.setBounds (bounds);
+    analyzerBridgeWidget_.setBounds (bounds);
     // DISABLED: spectrumEngine.setBounds (bounds);
     // Keep AnalyzerEngine-driven display on top (timerCallback feeds rtaDisplay via getLatestSnapshot).
-    rtaDisplay.toFront (false);
+    analyzerBridgeWidget_.toFront (false);
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     modeOverlay_.setBounds (8, 8, 260, 18);
     modeOverlay_.toFront (false);
@@ -419,7 +423,7 @@ void AnalyzerDisplayView::convertFFTToBands (const AnalyzerSnapshot& snapshot, s
     if (bandCentersHz_.empty())
     {
         bandCentersHz_ = generateThirdOctaveBands();
-        rtaDisplay.setBandCenters (bandCentersHz_);
+        analyzerBridgeWidget_.setBandCenters (bandCentersHz_);
     }
     
     const size_t numBands = bandCentersHz_.size();
@@ -621,8 +625,8 @@ void AnalyzerDisplayView::setMode (Mode mode)
     // CRITICAL: Always sync RTADisplay to UI mode immediately
     // UI mode is authoritative - RTADisplay must match
     const int rtaMode = toRtaMode (currentMode_);
-    rtaDisplay.setViewMode (rtaMode);
-    model_.setViewMode (rtaMode);
+    analyzerBridgeWidget_.setMode (static_cast<mdsp::gui::AnalyzerDisplayWidget::Mode> (rtaMode));
+    analyzerBridgeWidget_.setViewMode (rtaMode);
 #if JUCE_DEBUG
     lastSentRtaMode_ = rtaMode;
     assertModeSync();
@@ -643,6 +647,7 @@ void AnalyzerDisplayView::setMode (Mode mode)
     updateModeOverlayText();
 #endif
     
+    kickSnapshotPumpImmediate();
     // Force repaint
     repaint();
 }
@@ -651,22 +656,33 @@ void AnalyzerDisplayView::setSpectrumFftOrder (int order)
 {
     // DISABLED: spectrumEngine.setFftOrder (order);
     juce::ignoreUnused(order);
+    analyzerBridgeWidget_.setSpectrumFftOrder (order);
 }
 
 void AnalyzerDisplayView::setSpectrumDecayRate (float decay)
 {
     // DISABLED: spectrumEngine.setDecayRate (decay);
     juce::ignoreUnused(decay);
+    analyzerBridgeWidget_.setSpectrumDecayRate (decay);
 }
 
 void AnalyzerDisplayView::setDisplayGainDb (float db)
 {
-    rtaDisplay.setDisplayGainDb (db);
+    analyzerBridgeWidget_.setDisplayGainDb (db);
 }
 
 void AnalyzerDisplayView::setTiltMode (TiltMode mode)
 {
-    rtaDisplay.setTiltMode (mode);
+    analyzerBridgeWidget_.setTiltMode (static_cast<int> (mode));
+}
+
+void AnalyzerDisplayView::kickSnapshotPumpImmediate()
+{
+    if (isShutdown)
+        return;
+
+    analyzerBridgeWidget_.requestEmitSoon();
+    analyzerBridgeWidget_.emitNowIfDirty (true);
 }
 
 void AnalyzerDisplayView::timerCallback()
@@ -677,7 +693,7 @@ void AnalyzerDisplayView::timerCallback()
 
     // Read trace configuration from APVTS and pass to RTADisplay
     auto& apvts = audioProcessor.getAPVTS();
-    RTADisplay::TraceConfig traceConfig;
+    mdsp::gui::RTADisplay::TraceConfig traceConfig;
     
     // Helper lambda with null check
     auto getBoolParam = [&apvts](const char* id) -> bool {
@@ -780,15 +796,14 @@ void AnalyzerDisplayView::timerCallback()
     }
 #endif
     
-    rtaDisplay.setTraceConfig(traceConfig);
+    analyzerBridgeWidget_.setTraceConfig(traceConfig);
     lastTraceConfig_ = traceConfig;
 
     // Animate dB range changes (grid + FFT + peak mapping all derive from RTADisplay bottomDb).
     const float minDb = minDbAnim_.getNextValue();
     if (std::abs (minDb - lastAppliedMinDb_) > 1.0e-4f)
     {
-        rtaDisplay.setDbRange (kSpectrumTopDb, minDb);
-        model_.setDbRange (kSpectrumTopDb, minDb);
+        analyzerBridgeWidget_.setDbRange (kSpectrumTopDb, minDb);
         lastAppliedMinDb_ = minDb;
     }
 
@@ -826,7 +841,7 @@ void AnalyzerDisplayView::timerCallback()
                             peakDb = juce::jmin (0.0f, peakDb + 2.0f);
                         fftPeakDbDisplay_[i] = peakDb;
                     }
-                    rtaDisplay.setFFTData (fftDb_, 
+                    analyzerBridgeWidget_.setFFTData (fftDb_, 
                                            &fftPeakDbDisplay_,
                                            !peakHoldDbDisplay_.empty() ? &peakHoldDbDisplay_ : nullptr);
                 }
@@ -850,7 +865,7 @@ void AnalyzerDisplayView::timerCallback()
                             result = juce::jmin (0.0f, result + 2.0f);
                         bandsPeakDbDisplay_[i] = result;
                     }
-                    rtaDisplay.setBandData (bandsDb_, &bandsPeakDbDisplay_);
+                    analyzerBridgeWidget_.setBandData (bandsDb_, &bandsPeakDbDisplay_);
                 }
                 break;
             }
@@ -872,7 +887,7 @@ void AnalyzerDisplayView::timerCallback()
                             result = juce::jmin (0.0f, result + 2.0f);
                         logPeakDbDisplay_[i] = result;
                     }
-                    rtaDisplay.setLogData (logDb_, &logPeakDbDisplay_);
+                    analyzerBridgeWidget_.setLogData (logDb_, &logPeakDbDisplay_);
                 }
                 break;
             }
@@ -884,34 +899,18 @@ void AnalyzerDisplayView::timerCallback()
     if (minDbAnim_.isSmoothing())
         repaint();
 
-    model_.tick(1.0 / 60.0);
-
     // Apply any pending FFT resize on the message thread (RT-safe: allocations happen here, not on audio thread).
     audioProcessor.getAnalyzerEngine().applyPendingFftSizeIfNeeded();
-    
-    // Pull latest snapshot from analyzer engine (UI thread, reuse member snapshot)
-    const bool gotSnapshot = audioProcessor.getAnalyzerEngine().getLatestSnapshot (snapshot_);
-    
-    if (!gotSnapshot)
-    {
-        // No new snapshot - hold last valid frame (do not touch RTADisplay)
+}
+
+void AnalyzerDisplayView::handlePumpedSnapshot (const AnalyzerSnapshot& snapshot)
+{
+    if (isShutdown)
         return;
-    }
-    
-    // CRITICAL: Only update if snapshot is valid AND has bins (prevents blinking to floor)
-    // Gate explicitly on isValid && fftBinCount > 0 to ensure smooth updates
-    const int fftBinCount = (snapshot_.fftBinCount > 0) ? snapshot_.fftBinCount : snapshot_.numBins;
-    if (!snapshot_.isValid || fftBinCount <= 0)
-    {
-        // Invalid snapshot - hold last valid frame (do not touch RTADisplay)
-        return;
-    }
-    
-    // Valid snapshot - store as last valid and update display
-    // getLatestSnapshot() already handles torn reads with retry loop, so we update every valid snapshot
-        lastValidSnapshot_ = snapshot_;
-        hasLastValid_ = true;
-            updateFromSnapshot (snapshot_);
+
+    lastValidSnapshot_ = snapshot;
+    hasLastValid_ = true;
+    updateFromSnapshot (snapshot);
 }
 
 void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
@@ -923,9 +922,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     // CRITICAL: Synchronize RTADisplay mode BEFORE any data feeding
     // UI mode is authoritative - ensure RTADisplay always matches
     const int rtaMode = toRtaMode (currentMode_);
-    rtaDisplay.setViewMode (rtaMode);
-    model_.setViewMode (rtaMode);
-    model_.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
+    analyzerBridgeWidget_.setViewMode (rtaMode);
 #if JUCE_DEBUG
     lastSentRtaMode_ = rtaMode;
     assertModeSync();
@@ -934,7 +931,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     // ALWAYS call setFftMeta when snapshot has valid meta (required before first data frame)
     if (snapshot.fftSize > 0 && snapshot.sampleRate > 0.0)
     {
-        rtaDisplay.setFftMeta (snapshot.sampleRate, snapshot.fftSize);
+        analyzerBridgeWidget_.setFftMeta (snapshot.sampleRate, snapshot.fftSize);
         lastMetaSampleRate_ = snapshot.sampleRate;
         lastMetaFftSize_ = snapshot.fftSize;
         expectedBins_ = snapshot.fftSize / 2 + 1;
@@ -944,34 +941,36 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     
     // Update Hold Status
     isHoldOn_ = snapshot.isHoldOn;
-    rtaDisplay.setHoldStatus (isHoldOn_);
+    analyzerBridgeWidget_.setHoldStatus (isHoldOn_);
     
     // Route data STRICTLY by mode (FFT data only sent in FFT mode)
     // -------------------------------------------------------------------------
     // 1. DATA PREPARATION (Common for ALL modes)
     // -------------------------------------------------------------------------
     
-    // Bin contract: snapshot.fftBinCount should equal (fftSize/2 + 1)
-    const int validBins = fftBinCount;
-    const int expectedBins = snapshot.fftSize / 2 + 1;
-    
-    if (validBins != expectedBins_ || validBins != expectedBins)
+    auto prep = analyzerBridgeWidget_.prepareFftTraces (snapshot, expectedBins_);
+
+    if (! prep.valid)
     {
-        binMismatch_ = true;
+        binMismatch_ = prep.binMismatch;
 #if JUCE_DEBUG
-        dropReason_ = "DROP: bin mismatch (" + juce::String (validBins) + " != " + juce::String (expectedBins_) + " expected " + juce::String (expectedBins) + ")";
+        if (prep.binMismatch)
+            dropReason_ = "DROP: bin mismatch (" + juce::String (prep.validBins) + " != " + juce::String (expectedBins_) + " expected " + juce::String (prep.expectedBins) + ")";
+        else
+            dropReason_ = "DROP: " + prep.noDataReason;
 #endif
 #if JUCE_DEBUG && ANALYZERPRO_FFT_DEBUG_LINE
         fftDebugLine_ = dropReason_;
 #endif
         if (currentMode_ == Mode::FFT)
         {
-             rtaDisplay.setNoData ("Bin Mismatch");
-             rtaDisplay.repaint();
+             analyzerBridgeWidget_.setNoData (prep.noDataReason.isNotEmpty() ? prep.noDataReason : juce::String ("No Data"));
+             analyzerBridgeWidget_.repaint();
         }
         return; // Skip update on mismatch
     }
-    
+
+    const int validBins = prep.validBins;
     binMismatch_ = false;
 #if JUCE_DEBUG
     dropReason_.clear();
@@ -980,66 +979,17 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     smoother_.setEngineDidSpectralSmooth (snapshot.engineDidSpectralSmooth);
     smoother_.setUseUILogGaussianOnly (snapshot.useUILogGaussianOnly);
     
-    // Resize member vectors to expected size
-    const size_t validBinsSize = static_cast<size_t> (validBins);
-    const size_t safeCopyBins = std::min (validBinsSize, static_cast<size_t> (AnalyzerSnapshot::kMaxFFTBins));
-    fftDb_.resize (validBinsSize);
-    fftPeakDb_.resize (validBinsSize);
-
-    // Copy from snapshot arrays into member vectors (bounds-checked)
-    jassert (snapshot.fftDb.size() >= safeCopyBins);
-    std::copy (snapshot.fftDb.begin(),
-               snapshot.fftDb.begin() + static_cast<std::ptrdiff_t> (safeCopyBins),
-               fftDb_.begin());
-
-    // Copy peak bins: validate size matches expected bins; if mismatch ignore peaks
-    bool usePeaks = false;
-    if (snapshot.fftPeakDb.size() >= safeCopyBins)
-    {
-        std::copy (snapshot.fftPeakDb.begin(),
-                   snapshot.fftPeakDb.begin() + static_cast<std::ptrdiff_t> (safeCopyBins),
-                   fftPeakDb_.begin());
-        usePeaks = true;
-    }
-    else
-    {
-        // Peak mismatch: ignore peaks for this frame
-        fftPeakDb_.clear();
-        fftPeakDb_.resize (validBinsSize, -121.0f);  // Fill with floor if no peaks
-    }
+    // Consume builder output (Step 3 extraction: snapshot->FFT trace prep in mdsp_gui)
+    const size_t validBinsSize = prep.validBinsSize;
+    fftDb_ = prep.fftDb;
+    fftPeakDb_ = prep.fftPeakDb;
+    const bool usePeaks = prep.usePeaks;
 
     // Centralized Latch: Apply True Freeze logic to fftPeakDb_ BEFORE mode conversion
     // This ensures BAND and LOG modes also inherit the frozen peak values.
     const bool holdOn = snapshot.isHoldOn;
     
-    if (usePeaks)
-    {
-         if (uiHeldPeak_.size() != validBinsSize)
-         {
-             uiHeldPeak_.resize (validBinsSize);
-             std::fill (uiHeldPeak_.begin(), uiHeldPeak_.end(), -120.0f);
-             uiHoldActive_ = false; 
-         }
-         
-         for (size_t i = 0; i < validBinsSize; ++i)
-         {
-             float incomingDb = sanitizeDb (fftPeakDb_[i]); // Sanitize first
-             
-             if (holdOn)
-             {
-                 float heldDb = uiHeldPeak_[i];
-                 heldDb = juce::jmax (heldDb, incomingDb);
-                 uiHeldPeak_[i] = heldDb;
-                 incomingDb = heldDb;
-             }
-             else
-             {
-                 uiHeldPeak_[i] = incomingDb;
-             }
-             // Write back to source so all modes use the latched value
-             fftPeakDb_[i] = incomingDb;
-         }
-    }
+    juce::ignoreUnused (validBinsSize);
     
     // -------------------------------------------------------------------------
     // 1b. WEIGHTING + SMOOTHING + BALLISTICS PIPELINE
@@ -1056,9 +1006,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     //    octave smoothing (AnalyzerEngine::computeFFT). The snapshot dB values
     //    already include weighting. No UI-side weighting addition needed.
 
-    // Sanitize
-    for (auto& v : fftDb_) v = sanitizeDb(v);
-    for (auto& v : fftPeakDb_) v = sanitizeDb(v);
+    // Sanitization now handled by mdsp_gui::analyzer::AnalyzerRenderStateBuilder
     
     // -------------------------------------------------------------------------
     // Session Marker Logic (Calculate on Peak Data)
@@ -1336,10 +1284,10 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
 
             // Feed RTADisplay with FFT data (ONLY in FFT mode)
             // Send data to Display (including session marker)
-            rtaDisplay.setFFTData (fftDb_, 
+            analyzerBridgeWidget_.setFFTData (fftDb_, 
                                    usePeaks ? &fftPeakDbDisplay_ : nullptr,
                                    usePeakHold ? &fftPeakHoldDb_ : nullptr);
-            rtaDisplay.setSessionMarker (sessionMarkerValid_, sessionMarkerBin_, sessionMarkerDb_);
+            analyzerBridgeWidget_.setSessionMarker (sessionMarkerValid_, sessionMarkerBin_, sessionMarkerDb_);
             
             // Multi-trace: Feed L/R/Mid/Side/Mono power data if available
             // Logic moved to Step 1b to unify weighting application and ballistics
@@ -1357,7 +1305,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                          << " Mid[0]=" << scratchPowerMid_[0] << " Side[0]=" << scratchPowerSide_[0]);
                  }
 #endif
-                 rtaDisplay.setMultiTraceData (scratchPowerL_.data(), scratchPowerR_.data(),
+                 analyzerBridgeWidget_.setMultiTraceData (scratchPowerL_.data(), scratchPowerR_.data(),
                                                scratchPowerMid_.data(), scratchPowerSide_.data(), scratchPowerMono_.data(),
                                                validBins);
             }
@@ -1376,10 +1324,10 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
 #endif
             
             ++traceDataGen_; // SMOOTHING_RENDERING_STABILITY_V2: data changed
-            rtaDisplay.setGenerations (traceDataGen_, smoothingGen_);
+            analyzerBridgeWidget_.setGenerations (traceDataGen_, smoothingGen_);
             
             // Force repaint after data update
-            rtaDisplay.repaint();
+            analyzerBridgeWidget_.repaint();
             break;
         }
         
@@ -1388,7 +1336,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             // BANDS mode: Convert FFT bins to 1/3-octave bands
             if (fftBinCount <= 0 || snapshot.fftSize <= 0 || snapshot.sampleRate <= 0.0)
             {
-                rtaDisplay.setNoData ("Invalid snapshot for BANDS");
+                analyzerBridgeWidget_.setNoData ("Invalid snapshot for BANDS");
                 break;
             }
             
@@ -1399,7 +1347,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             }
             
             // CRITICAL: Always set band centers before setting band data (ensures size matching)
-            rtaDisplay.setBandCenters (bandCentersHz_);
+            analyzerBridgeWidget_.setBandCenters (bandCentersHz_);
             
             // Convert FFT bins to bands
             convertFFTToBands (snapshot, bandsDb_, bandsPeakDb_);
@@ -1431,11 +1379,11 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                         
                      bandsPeakDbDisplay_[i] = peakDb;
                 }
-                rtaDisplay.setBandData (bandsDb_, &bandsPeakDbDisplay_);
+                analyzerBridgeWidget_.setBandData (bandsDb_, &bandsPeakDbDisplay_);
             }
             else
             {
-                rtaDisplay.setBandData (bandsDb_, nullptr);
+                analyzerBridgeWidget_.setBandData (bandsDb_, nullptr);
             }
             
 #if JUCE_DEBUG
@@ -1464,7 +1412,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             // LOG mode: Convert FFT bins to log-spaced bins
             if (fftBinCount <= 0 || snapshot.fftSize <= 0 || snapshot.sampleRate <= 0.0)
             {
-                rtaDisplay.setNoData ("Invalid snapshot for LOG");
+                analyzerBridgeWidget_.setNoData ("Invalid snapshot for LOG");
                 break;
             }
             
@@ -1494,11 +1442,11 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                          
                      logPeakDbDisplay_[i] = peakDb;
                 }
-                rtaDisplay.setLogData (logDb_, &logPeakDbDisplay_);
+                analyzerBridgeWidget_.setLogData (logDb_, &logPeakDbDisplay_);
             }
             else
             {
-                rtaDisplay.setLogData (logDb_, nullptr);
+                analyzerBridgeWidget_.setLogData (logDb_, nullptr);
             }
             
 #if JUCE_DEBUG
@@ -1529,66 +1477,6 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         }
     }
 
-    mdsp_ui::AnalyzerRenderState rs;
-    rs.viewMode = rtaMode;
-    rs.minHz = 20.0f;
-    rs.maxHz = 20000.0f;
-    rs.topDb = kSpectrumTopDb;
-    // Keep renderer dB mapping aligned with RTADisplay geometry/model mapping.
-    // If these diverge, the FFT crosshair Y and peak trace no longer match.
-    rs.bottomDb = lastAppliedMinDb_;
-#if JUCE_DEBUG
-    jassert(rs.topDb >= 1.0f);
-    jassert(rs.bottomDb < rs.topDb);
-#endif
-    rs.sampleRate = lastMetaSampleRate_ > 0.0 ? lastMetaSampleRate_ : 48000.0;
-    rs.fftSize = lastMetaFftSize_ > 0 ? lastMetaFftSize_ : 2048;
-    rs.status = mdsp_ui::AnalyzerDataStatus::Ok;
-    rs.noDataReason.clear();
-    rs.isHoldOn = isHoldOn_;
-    rs.sessionMarkerVisible = sessionMarkerValid_;
-    rs.sessionMarkerBin = sessionMarkerBin_;
-    rs.sessionMarkerDb = sessionMarkerDb_;
-    rs.hasValidSpectrumFrame = true;
-    // --- RMS / FFT trace ---
-    if (hasSignal (fftDb_, rs.bottomDb))
-        rs.fftDb = fftDb_;
-    else
-        rs.fftDb.clear();
-    // --- PEAK trace ---
-    if (hasSignal (fftPeakDbDisplay_, rs.bottomDb))
-        rs.fftPeakDb = fftPeakDbDisplay_;
-    else
-        rs.fftPeakDb.clear();
-    // --- HOLD trace ---
-    if (rs.isHoldOn && hasSignal (fftPeakHoldDb_, rs.bottomDb))
-        rs.fftPeakHoldDb = fftPeakHoldDb_;
-    else
-        rs.fftPeakHoldDb.clear();
-    rs.bandCentersHz = bandCentersHz_;
-    rs.bandsDb = bandsDb_;
-    rs.bandsPeakDb = bandsPeakDbDisplay_.empty() ? bandsPeakDb_ : bandsPeakDbDisplay_;
-    rs.logDb = logDb_;
-    rs.logPeakDb = logPeakDbDisplay_.empty() ? logPeakDb_ : logPeakDbDisplay_;
-    rs.lrBinCount = static_cast<int> (scratchPowerL_.size());
-    rs.lDbL = scratchPowerL_;
-    rs.lDbR = scratchPowerR_;
-    rs.stereoDb.resize (scratchPowerL_.size());
-    for (size_t i = 0; i < scratchPowerL_.size(); ++i)
-        rs.stereoDb[i] = std::max (scratchPowerL_[i], scratchPowerR_[i]);
-    rs.monoDb = scratchPowerMono_;
-    rs.midDb = scratchPowerMid_;
-    rs.sideDb = scratchPowerSide_;
-    rs.hasValidMultiTraceData = snapshot.multiTraceEnabled && !scratchPowerL_.empty() && scratchPowerL_.size() == scratchPowerR_.size();
-    rs.showLR = lastTraceConfig_.showLR;
-    rs.showL = lastTraceConfig_.showL;
-    rs.showR = lastTraceConfig_.showR;
-    rs.showMid = lastTraceConfig_.showMid;
-    rs.showSide = lastTraceConfig_.showSide;
-    rs.showMono = lastTraceConfig_.showMono;
-    rs.showRMS = lastTraceConfig_.showRMS;
-    renderState_ = rs;
-    model_.setRenderState (rs);
 }
 
 //==============================================================================

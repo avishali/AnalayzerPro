@@ -2,15 +2,12 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <mdsp_gui/analyzer/AnalyzerDisplayWidget.h>
 #include <mdsp_gui/components/SpectrumComponent.h>
 #include <mdsp_ui/Theme.h>
 #include <mdsp_ui/ThemeVariant.h>
-#include <mdsp_ui/analyzer/AnalyzerRenderer.h>
-#include <mdsp_ui/analyzer/AnalyzerController.h>
 #include <array>
 #include <vector>
-#include "RTADisplay.h"
-#include "AnalyzerViewModel.h"
 #include "../../dsp_adapters/AnalyzerSnapshotAdapter.h"
 #include "../../PluginProcessor.h"
 
@@ -79,13 +76,13 @@ public:
     std::function<void(DbRange)> onDbRangeUserChanged;
 
     // Migration step: keep RTADisplay backend hidden from parent views.
-    using TiltMode = RTADisplay::TiltMode;
+    using TiltMode = mdsp::gui::RTADisplay::TiltMode;
     void setDisplayGainDb (float db);
     void setTiltMode (TiltMode mode);
 
     // Transitional API during migration; avoid adding new callers.
-    RTADisplay& getRTADisplay() noexcept { return rtaDisplay; }
-    const RTADisplay& getRTADisplay() const noexcept { return rtaDisplay; }
+    mdsp::gui::RTADisplay& getRTADisplay() noexcept { return analyzerBridgeWidget_.getRTADisplay(); }
+    const mdsp::gui::RTADisplay& getRTADisplay() const noexcept { return analyzerBridgeWidget_.getRTADisplay(); }
 
     /** Forward to shared spectrum engine: FFT order (e.g. 10=1024, 11=2048). */
     void setSpectrumFftOrder (int order);
@@ -98,6 +95,8 @@ public:
 private:
     void timerCallback() override;
     void updateFromSnapshot (const AnalyzerSnapshot& snapshot);
+    void handlePumpedSnapshot (const AnalyzerSnapshot& snapshot);
+    void kickSnapshotPumpImmediate();
     
     // Convert FFT bins to 1/3-octave bands
     void convertFFTToBands (const AnalyzerSnapshot& snapshot, std::vector<float>& bandsDb, std::vector<float>& bandsPeakDb);
@@ -121,11 +120,8 @@ private:
 
     AnalayzerProAudioProcessor& audioProcessor;
     mdsp_ui::Theme theme_ { mdsp_ui::ThemeVariant::Custom };
-    RTADisplay rtaDisplay;
+    // Legacy spectrum component retained during migration.
     mdsp::gui::SpectrumComponent spectrumEngine;
-    AnalyzerViewModel model_;
-    mdsp_ui::AnalyzerRenderState renderState_;
-    mdsp_ui::AnalyzerController controller_;
     Mode currentMode_ = Mode::FFT;
     DbRange dbRange_ = DbRange::Minus120;
     DbRange appliedDbRange_ = DbRange::Minus120;
@@ -149,10 +145,10 @@ private:
     double peakFlashUntilMs_ = 0.0;
     // uint32_t lastSequence_ = 0;  // Unused
     // CLEANUP: DUPLICATE - Removed duplicate commented variable (line 137)
-    AnalyzerSnapshot snapshot_;
     AnalyzerSnapshot lastValidSnapshot_;  // Hold last valid frame for grace period
     bool hasLastValid_ = false;
     bool isHoldOn_ = false;
+    mdsp::gui::AnalyzerDisplayWidget analyzerBridgeWidget_;
     std::vector<float> fftDb_;
     std::vector<float> fftPeakDb_;
     std::vector<float> fftPeakHoldDb_; // NEW: Stores Peak Hold from snapshot for data flow
@@ -160,7 +156,6 @@ private:
     std::vector<float> bandsPeakDb_;
     std::vector<float> logDb_;
     std::vector<float> logPeakDb_;
-    std::vector<float> uiHeldPeak_; // UI-side safety latch for true freeze
     std::vector<float> rmsState_;    // Ballistics state for Main RMS
     // NOTE: Multi-trace ballistics state removed (Fix 3)
     // Engine already applies full RMS ballistics to multi-traces in AnalyzerEngine::computeFFT
@@ -172,7 +167,6 @@ private:
 
     float releaseMs_ = 300.0f; // Parameter cache
     
-    bool uiHoldActive_ = false;     // Track hold state transitions
     std::vector<float> bandCentersHz_;  // Cached 1/3-octave band centers
     float lastPeakDb_ = -1000.0f;
     float lastMinDb_ = 0.0f;
@@ -207,7 +201,7 @@ private:
 
     bool binMismatch_ = false;
     bool isShutdown = false;
-    RTADisplay::TraceConfig lastTraceConfig_;
+    mdsp::gui::RTADisplay::TraceConfig lastTraceConfig_;
     
     // Debug counters for BANDS/LOG mode
 #if JUCE_DEBUG

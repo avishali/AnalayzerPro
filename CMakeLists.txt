@@ -5,6 +5,8 @@ cmake_minimum_required(VERSION 3.22)
 # ==============================================================================
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(MDSP_CONSUMER_BRIDGE_ENFORCEMENT "WARN" CACHE STRING
+    "AnalyzerPro policy mode for mdsp consumer bridge checks")
 
 if(APPLE)
     if(IOS)
@@ -218,6 +220,12 @@ else()
     )
 endif()
 
+# Bridge-consumer policy helper is provided by modern HQ.
+# Fallback: include helper directly when available in older/nonstandard checkouts.
+if (NOT COMMAND mdsp_enforce_bridge_consumer AND EXISTS "${HQ_DIR}/cmake/mdsp_consumer_bridge.cmake")
+    include("${HQ_DIR}/cmake/mdsp_consumer_bridge.cmake")
+endif()
+
 # Read MDSP SDK version:
 # 1) Prefer MDSP_SDK_VERSION target property (modern HQ)
 # 2) Fallback to melechdsp_hq_VERSION (modern HQ project var)
@@ -324,7 +332,6 @@ target_sources(${PLUGIN_NAME}
         Source/control/AnalyzerProParamIdMap.cpp
         Source/control/AnalyzerProControlContext.cpp
         Source/analyzer/AnalyzerEngine.cpp
-        Source/analyzer/StereoScopeAnalyzer.cpp
         Source/ui/analyzer/AnalyzerDisplayView.cpp
         Source/ui/analyzer/AnalyzerViewModel.cpp
         Source/ui/analyzer/StereoScopeView.cpp
@@ -339,7 +346,6 @@ target_sources(${PLUGIN_NAME}
         Source/ui/tooltips/TooltipOverlayComponent.cpp
         Source/presets/PresetManager.cpp
         Source/presets/ABStateManager.cpp
-        Source/loudness/LoudnessAnalyzer.cpp
         Source/ui/loudness/LoudnessNumericPanel.cpp
 )
 
@@ -363,9 +369,16 @@ foreach(t IN LISTS _mdsp_consumer_targets)
         else()
             message(FATAL_ERROR "mdsp SDK target not found (expected mdsp::sdk or mdsp_sdk). Check HQ_DIR/add_subdirectory.")
         endif()
+        if (COMMAND mdsp_enforce_bridge_consumer)
+            mdsp_enforce_bridge_consumer(${t})
+        endif()
         target_compile_definitions(${t} PRIVATE MDSP_SDK_VERSION_STRING="${MDSP_SDK_VERSION}")
     endif()
 endforeach()
+
+if (COMMAND mdsp_report_bridge_consumer_summary)
+    mdsp_report_bridge_consumer_summary()
+endif()
 
 # Temporary: make deprecated-declarations an error for RTADisplay.cpp to pinpoint exact callsite
 set_source_files_properties(
