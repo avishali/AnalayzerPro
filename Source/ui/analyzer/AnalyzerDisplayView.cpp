@@ -43,8 +43,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
 #endif
 {
     addAndMakeVisible (analyzerBridgeWidget_);
-    // Use RTADisplay's native model/renderer path for trace rendering.
-    // The legacy getRenderState delegation does not apply tilt consistently.
+    // Analyzer display widget owns render/model/controller internals.
     analyzerBridgeWidget_.setGetTheme ([this]() -> const mdsp_ui::Theme& { return theme_; });
     // DISABLED: spectrumEngine was causing flat yellow line at maximum
     // addAndMakeVisible (spectrumEngine);
@@ -55,7 +54,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
 
     // DISABLED: Initial FFT order: 4096 (order 12) for high-resolution spectrum
     // spectrumEngine.setFftOrder (mdsp::gui::SpectrumComponent::defaultFftOrder);
-    // Initialize RTADisplay with default ranges
+    // Initialize analyzer display ranges
     analyzerBridgeWidget_.setFrequencyRange (20.0f, 20000.0f);
     targetMinDb_ = dbRangeToMinDb (dbRange_);
     minDbAnim_.reset (60.0, 0.20);
@@ -67,11 +66,8 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     // Initialize band centers
     bandCentersHz_ = generateThirdOctaveBands();
     
-    // Sync initial mode to RTADisplay (currentMode_ defaults to FFT)
+    // Sync initial mode to analyzer display widget (currentMode_ defaults to FFT)
     analyzerBridgeWidget_.setViewMode (toRtaMode (currentMode_));
-#if JUCE_DEBUG
-    lastSentRtaMode_ = toRtaMode (currentMode_);
-#endif
 
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     addAndMakeVisible (modeOverlay_);
@@ -225,28 +221,13 @@ static const char* uiModeToString (AnalyzerDisplayView::Mode m) noexcept
     }
 }
 
-static const char* rtaModeToString (int rtaMode) noexcept
-{
-    // RTADisplay: 0=FFT, 1=LOG, 2=BAND
-    switch (rtaMode)
-    {
-        case 0:
-            return "FFT";
-        case 1:
-            return "LOG";
-        case 2:
-            return "BANDS";
-        default:
-            return "UNKNOWN";
-    }
-}
 #endif
 
 //==============================================================================
 //==============================================================================
 void AnalyzerDisplayView::paint (juce::Graphics& g)
 {
-    // Background is handled by RTADisplay
+    // Background is handled by analyzerBridgeWidget_ child component.
     juce::ignoreUnused (g);
 }
 
@@ -302,7 +283,7 @@ void AnalyzerDisplayView::paintOverChildren (juce::Graphics& g)
 #endif
 
 #if defined(PLUGIN_DEV_MODE) && PLUGIN_DEV_MODE
-    // Temporary debug overlay: UI=mode / RTADisplay=mode / bins / min/max dB
+    // Temporary debug overlay: UI/widget mode / bins / min/max dB
     if (!devModeDebugLine_.isEmpty())
     {
         g.setColour (theme.warning.withAlpha (0.90f));
@@ -585,7 +566,7 @@ void AnalyzerDisplayView::convertFFTToLog (const AnalyzerSnapshot& snapshot, std
 
 int AnalyzerDisplayView::toRtaMode (Mode m) noexcept
 {
-    // RTADisplay: 0=FFT, 1=LOG, 2=BAND
+    // Widget mode mapping: 0=FFT, 1=LOG, 2=BAND
     switch (m)
     {
         case Mode::FFT:
@@ -600,19 +581,10 @@ int AnalyzerDisplayView::toRtaMode (Mode m) noexcept
     }
 }
 
-#if JUCE_DEBUG
-void AnalyzerDisplayView::assertModeSync() const
-{
-    // RTADisplay doesn't expose getMode(), so we assert against cached value
-    jassert (lastSentRtaMode_ == toRtaMode (currentMode_));
-}
-#endif
-
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
 void AnalyzerDisplayView::updateModeOverlayText()
 {
-    const juce::String dbg = juce::String ("UI=") + uiModeToString (currentMode_)
-                           + juce::String (" / RTADisplay=") + rtaModeToString (lastSentRtaMode_);
+    const juce::String dbg = juce::String ("UI=") + uiModeToString (currentMode_);
     modeOverlay_.setText (dbg);
 }
 #endif
@@ -622,15 +594,10 @@ void AnalyzerDisplayView::setMode (Mode mode)
     // UI selection is authoritative - update local mode
     currentMode_ = mode;
     
-    // CRITICAL: Always sync RTADisplay to UI mode immediately
-    // UI mode is authoritative - RTADisplay must match
+    // UI mode is authoritative; push directly into the bridge widget.
     const int rtaMode = toRtaMode (currentMode_);
     analyzerBridgeWidget_.setMode (static_cast<mdsp::gui::AnalyzerDisplayWidget::Mode> (rtaMode));
     analyzerBridgeWidget_.setViewMode (rtaMode);
-#if JUCE_DEBUG
-    lastSentRtaMode_ = rtaMode;
-    assertModeSync();
-#endif
 
     // DISABLED: Sync shared spectrum engine analysis mode (Line / Log / Band)
     // mdsp::gui::SpectrumComponent::AnalysisMode specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Log;
@@ -691,33 +658,36 @@ void AnalyzerDisplayView::timerCallback()
     if (isShutdown)
         return;
 
-    // Read trace configuration from APVTS and pass to RTADisplay
+    // Read analyzer APVTS params used by view-side processing.
     auto& apvts = audioProcessor.getAPVTS();
-    mdsp::gui::RTADisplay::TraceConfig traceConfig;
-    
-    // Helper lambda with null check
-    auto getBoolParam = [&apvts](const char* id) -> bool {
-        auto* param = apvts.getRawParameterValue(id);
-        return (param != nullptr) ? (param->load() > 0.5f) : false;
+
+    auto getBoolParam = [&apvts] (const char* id) -> bool
+    {
+        if (auto* param = apvts.getRawParameterValue (id))
+            return param->load() > 0.5f;
+        return false;
     };
-    
-    traceConfig.showLR   = getBoolParam("TraceShowLR");
-    traceConfig.showMono = getBoolParam("analyzerShowMono");
-    traceConfig.showL    = getBoolParam("analyzerShowL");
-    traceConfig.showR    = getBoolParam("analyzerShowR");
-    traceConfig.showMid  = getBoolParam("analyzerShowMid");
-    traceConfig.showSide = getBoolParam("analyzerShowSide");
-    traceConfig.showRMS  = getBoolParam("analyzerShowRMS");
-    
-    // Read Weighting (Choice 0=None, 1=A, 2=BS.468-4)
-    auto* pWeight = apvts.getRawParameterValue("analyzerWeighting");
-    traceConfig.weightingMode = (pWeight != nullptr) ? (int)pWeight->load() : 0;
-    currentWeightingMode_ = traceConfig.weightingMode; // Store for updateFromSnapshot
-    
+
     // Release Time (PeakDecay): single control for ballistics on all traces (RMS + L/R/Mid/Side/Mono)
     auto* pRelease = apvts.getRawParameterValue("PeakDecay");
     if (pRelease != nullptr)
         releaseMs_ = pRelease->load();
+
+    mdsp::gui::AnalyzerDisplayWidget::TraceConfig traceConfig;
+    traceConfig.showLR = getBoolParam ("TraceShowLR");
+    traceConfig.showMono = getBoolParam ("analyzerShowMono");
+    traceConfig.showL = getBoolParam ("analyzerShowL");
+    traceConfig.showR = getBoolParam ("analyzerShowR");
+    traceConfig.showMid = getBoolParam ("analyzerShowMid");
+    traceConfig.showSide = getBoolParam ("analyzerShowSide");
+    traceConfig.showRMS = getBoolParam ("analyzerShowRMS");
+    traceConfig.holdReleaseMs = releaseMs_;
+
+    // Read Weighting (Choice 0=None, 1=A, 2=BS.468-4)
+    auto* pWeight = apvts.getRawParameterValue ("analyzerWeighting");
+    traceConfig.weightingMode = (pWeight != nullptr) ? static_cast<int> (pWeight->load()) : 0;
+    currentWeightingMode_ = traceConfig.weightingMode;
+    analyzerBridgeWidget_.setTraceConfig (traceConfig);
         
     // Read Smoothing (Fractional Octave)
     auto* pSmoothing = apvts.getRawParameterValue("Averaging");
@@ -784,22 +754,7 @@ void AnalyzerDisplayView::timerCallback()
         // DISABLED: spectrumEngine.setSettings (specSettings);
     }
     
-#if JUCE_DEBUG
-    // One-shot debug logging
-    static bool logged = false;
-    if (!logged)
-    {
-        DBG("TraceConfig: L=" << (int)traceConfig.showL << " R=" << (int)traceConfig.showR 
-            << " Mono=" << (int)traceConfig.showMono << " Mid=" << (int)traceConfig.showMid 
-            << " Side=" << (int)traceConfig.showSide << " RMS=" << (int)traceConfig.showRMS);
-        logged = true;
-    }
-#endif
-    
-    analyzerBridgeWidget_.setTraceConfig(traceConfig);
-    lastTraceConfig_ = traceConfig;
-
-    // Animate dB range changes (grid + FFT + peak mapping all derive from RTADisplay bottomDb).
+    // Animate dB range changes (grid + FFT + peak mapping all derive from widget bottomDb).
     const float minDb = minDbAnim_.getNextValue();
     if (std::abs (minDb - lastAppliedMinDb_) > 1.0e-4f)
     {
@@ -919,14 +874,9 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     if (!snapshot.isValid || fftBinCount <= 0)
         return;
     
-    // CRITICAL: Synchronize RTADisplay mode BEFORE any data feeding
-    // UI mode is authoritative - ensure RTADisplay always matches
+    // Keep widget mode synchronized before any data feeding.
     const int rtaMode = toRtaMode (currentMode_);
     analyzerBridgeWidget_.setViewMode (rtaMode);
-#if JUCE_DEBUG
-    lastSentRtaMode_ = rtaMode;
-    assertModeSync();
-#endif
     
     // ALWAYS call setFftMeta when snapshot has valid meta (required before first data frame)
     if (snapshot.fftSize > 0 && snapshot.sampleRate > 0.0)
@@ -1157,7 +1107,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     {
         case Mode::FFT:
         {
-            // FFT mode: validate data and feed to RTADisplay
+            // FFT mode: validate data and feed to analyzer widget
             
             // Remap peak trace into FFT/grid dB space using the separate Peak Range.
             if (usePeaks)
@@ -1282,7 +1232,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                 }
             }
 
-            // Feed RTADisplay with FFT data (ONLY in FFT mode)
+            // Feed widget with FFT data (ONLY in FFT mode)
             // Send data to Display (including session marker)
             analyzerBridgeWidget_.setFFTData (fftDb_, 
                                    usePeaks ? &fftPeakDbDisplay_ : nullptr,
@@ -1356,7 +1306,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             jassert (bandCentersHz_.size() == bandsDb_.size());
             jassert (bandsDb_.size() == bandsPeakDb_.size());
             
-            // Feed RTADisplay with band data
+            // Feed widget with band data
             const bool useBandPeaks = !bandsPeakDb_.empty() && bandsPeakDb_.size() == bandsDb_.size() && bandsDb_.size() == bandCentersHz_.size();
             if (useBandPeaks)
             {
@@ -1419,7 +1369,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             // Convert FFT bins to log-spaced bins
             convertFFTToLog (snapshot, logDb_, logPeakDb_);
             
-            // Feed RTADisplay with LOG data
+            // Feed widget with LOG data
             const bool useLogPeaks = !logPeakDb_.empty() && logPeakDb_.size() == logDb_.size();
             if (useLogPeaks)
             {
