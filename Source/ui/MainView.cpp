@@ -79,6 +79,14 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         // CLEANUP: DUPLICATE - Removed duplicate parameter listener registration (line 76)
         // apvts->addParameterListener ("DisplayGain", this);
         apvts->addParameterListener ("Tilt", this);
+        apvts->addParameterListener ("TraceShowLR", this);
+        apvts->addParameterListener ("analyzerShowMono", this);
+        apvts->addParameterListener ("analyzerShowL", this);
+        apvts->addParameterListener ("analyzerShowR", this);
+        apvts->addParameterListener ("analyzerShowMid", this);
+        apvts->addParameterListener ("analyzerShowSide", this);
+        apvts->addParameterListener ("analyzerShowRMS", this);
+        apvts->addParameterListener ("analyzerWeighting", this);
         apvts->addParameterListener ("scopeChannelMode", this); // New
         apvts->addParameterListener ("meterChannelMode", this); // New
         apvts->addParameterListener ("meterPeakHold", this); // Peak Hold
@@ -157,6 +165,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
             const float decayNorm = juce::jlimit (0.0f, 1.0f, (ms - 100.0f) / 4900.0f);
             analyzerView_.setSpectrumDecayRate (decayNorm);
         }
+        syncAnalyzerTraceConfig();
     }
         
     // Apply Scope Channel Mode
@@ -221,6 +230,14 @@ void MainView::shutdown()
         apvts_->removeParameterListener ("DbRange", this);
         apvts_->removeParameterListener ("DisplayGain", this);
         apvts_->removeParameterListener ("Tilt", this);
+        apvts_->removeParameterListener ("TraceShowLR", this);
+        apvts_->removeParameterListener ("analyzerShowMono", this);
+        apvts_->removeParameterListener ("analyzerShowL", this);
+        apvts_->removeParameterListener ("analyzerShowR", this);
+        apvts_->removeParameterListener ("analyzerShowMid", this);
+        apvts_->removeParameterListener ("analyzerShowSide", this);
+        apvts_->removeParameterListener ("analyzerShowRMS", this);
+        apvts_->removeParameterListener ("analyzerWeighting", this);
     }
     
     // Shutdown child views that have timers/listeners
@@ -339,6 +356,7 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
         audioProcessor.getAnalyzerEngine().setReleaseTimeMs (newValue);
         const float decayNorm = juce::jlimit (0.0f, 1.0f, (newValue - 100.0f) / 4900.0f);
         analyzerView_.setSpectrumDecayRate (decayNorm);
+        syncAnalyzerTraceConfig();
     }
     else if (parameterID == "DbRange")
     {
@@ -374,6 +392,48 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
         }
         analyzerView_.setTiltMode (tiltMode);
     }
+    else if (parameterID == "TraceShowLR"
+          || parameterID == "analyzerShowMono"
+          || parameterID == "analyzerShowL"
+          || parameterID == "analyzerShowR"
+          || parameterID == "analyzerShowMid"
+          || parameterID == "analyzerShowSide"
+          || parameterID == "analyzerShowRMS"
+          || parameterID == "analyzerWeighting")
+    {
+        juce::ignoreUnused (newValue);
+        syncAnalyzerTraceConfig();
+    }
+}
+
+void MainView::syncAnalyzerTraceConfig()
+{
+    if (apvts_ == nullptr)
+        return;
+
+    auto getBoolParam = [this] (const char* id) -> bool
+    {
+        if (auto* param = apvts_->getRawParameterValue (id))
+            return param->load() > 0.5f;
+        return false;
+    };
+
+    mdsp::gui::AnalyzerDisplayWidget::TraceConfig cfg;
+    cfg.showLR = getBoolParam ("TraceShowLR");
+    cfg.showMono = getBoolParam ("analyzerShowMono");
+    cfg.showL = getBoolParam ("analyzerShowL");
+    cfg.showR = getBoolParam ("analyzerShowR");
+    cfg.showMid = getBoolParam ("analyzerShowMid");
+    cfg.showSide = getBoolParam ("analyzerShowSide");
+    cfg.showRMS = getBoolParam ("analyzerShowRMS");
+
+    if (auto* pWeight = apvts_->getRawParameterValue ("analyzerWeighting"))
+        cfg.weightingMode = juce::roundToInt (pWeight->load());
+
+    if (auto* pRelease = apvts_->getRawParameterValue ("PeakDecay"))
+        cfg.holdReleaseMs = pRelease->load();
+
+    analyzerView_.setTraceConfig (cfg);
 }
 
 bool MainView::keyPressed (const juce::KeyPress& key, juce::Component* originatingComponent)
@@ -737,7 +797,6 @@ void MainView::auditApvtsParameters()
     apvtsParams.insert ("analyzerShowR");
     apvtsParams.insert ("analyzerShowMid");
     apvtsParams.insert ("analyzerShowSide");
-    apvtsParams.insert ("analyzerShowRMS");
     apvtsParams.insert ("analyzerShowRMS");
     apvtsParams.insert ("analyzerWeighting");
     apvtsParams.insert ("scopeChannelMode");

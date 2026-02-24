@@ -64,6 +64,7 @@ public:
 #endif
 
 private:
+    void syncAnalyzerTraceConfig();
     void triggerResetPeaks();
 
     bool isShutdown = false;

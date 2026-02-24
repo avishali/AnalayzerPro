@@ -3,6 +3,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <mdsp_gui/analyzer/AnalyzerDisplayWidget.h>
+#include <mdsp_ui/analyzer/AnalyzerRenderStateProvider.h>
 #include <mdsp_ui/Theme.h>
 #include <mdsp_ui/ThemeVariant.h>
 #include <array>
@@ -80,6 +81,7 @@ public:
 
     void setDisplayGainDb (float db);
     void setTiltMode (TiltMode mode);
+    void setTraceConfig (const mdsp::gui::AnalyzerDisplayWidget::TraceConfig& cfg);
 
     /** Forward to shared spectrum engine: FFT order (e.g. 10=1024, 11=2048). */
     void setSpectrumFftOrder (int order);
@@ -90,20 +92,12 @@ public:
     void shutdown();
 
 private:
+    static void applyLogSmoothingThunk (float* power, int bins, void* userData) noexcept;
     void timerCallback() override;
     void updateFromSnapshot (const AnalyzerSnapshot& snapshot);
     void handlePumpedSnapshot (const AnalyzerSnapshot& snapshot);
     void kickSnapshotPumpImmediate();
-    
-    // Convert FFT bins to 1/3-octave bands
-    void convertFFTToBands (const AnalyzerSnapshot& snapshot, std::vector<float>& bandsDb, std::vector<float>& bandsPeakDb);
-    
-    // Convert FFT bins to log-spaced bins
-    void convertFFTToLog (const AnalyzerSnapshot& snapshot, std::vector<float>& logDb, std::vector<float>& logPeakDb);
-    
-    // Generate standard 1/3-octave band centers (20 Hz to 20 kHz)
-    static std::vector<float> generateThirdOctaveBands();
-    
+
     // Map AnalyzerDisplayView::Mode to widget mode (0=FFT, 1=LOG, 2=BAND)
     static int toRtaMode (Mode m) noexcept;
 
@@ -130,7 +124,6 @@ private:
     std::vector<float> fftPeakDbDisplay_;
     std::vector<float> bandsPeakDbDisplay_;
     std::vector<float> logPeakDbDisplay_;
-    std::vector<float> peakHoldDbDisplay_; // M_2026_01_19_PEAK_HOLD_PROFESSIONAL_BEHAVIOR
 
     bool peakFlashActive_ = false;
     double peakFlashUntilMs_ = 0.0;
@@ -140,9 +133,9 @@ private:
     bool hasLastValid_ = false;
     bool isHoldOn_ = false;
     mdsp::gui::AnalyzerDisplayWidget analyzerBridgeWidget_;
+    mdsp::gui::AnalyzerRenderStateProvider renderStateProvider_;
     std::vector<float> fftDb_;
     std::vector<float> fftPeakDb_;
-    std::vector<float> fftPeakHoldDb_; // NEW: Stores Peak Hold from snapshot for data flow
     std::vector<float> bandsDb_;
     std::vector<float> bandsPeakDb_;
     std::vector<float> logDb_;
@@ -157,6 +150,7 @@ private:
     std::vector<float> scratchPowerMono_;
 
     float releaseMs_ = 300.0f; // Parameter cache
+    mdsp::gui::AnalyzerDisplayWidget::TraceConfig traceConfig_;
     
     std::vector<float> bandCentersHz_;  // Cached 1/3-octave band centers
     float lastPeakDb_ = -1000.0f;
@@ -183,12 +177,6 @@ private:
     // Helper to apply time-domain ballistics to a buffer
     // releaseMs allows parameter-driven release time (attack is fixed at 60ms for now)
     void applyBallistics (float* data, std::vector<float>& state, size_t numBins, float releaseMs);
-    
-    // Peak Hold Session Marker
-    bool sessionMarkerValid_ = false;
-    int sessionMarkerBin_ = -1;
-    float sessionMarkerDb_ = -1000.0f; // -inf sentinel
-    bool lastHoldState_ = false;
 
     bool binMismatch_ = false;
     bool isShutdown = false;

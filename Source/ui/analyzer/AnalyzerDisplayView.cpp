@@ -35,6 +35,18 @@ static inline bool isInvalidPeakDb (float db) noexcept
     return db <= kUiPeakInvalidSentinelDb;
 }
 
+void AnalyzerDisplayView::applyLogSmoothingThunk (float* power, int bins, void* userData) noexcept
+{
+#if JUCE_DEBUG
+    jassert (userData != nullptr);
+#endif
+    if (power == nullptr || bins <= 0 || userData == nullptr)
+        return;
+
+    auto* self = static_cast<AnalyzerDisplayView*> (userData);
+    self->logGaussian_.process (power, bins);
+}
+
 AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     : audioProcessor (processor)
 #if JUCE_DEBUG
@@ -58,7 +70,8 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     appliedDbRange_ = dbRange_;
     
     // Initialize band centers
-    bandCentersHz_ = generateThirdOctaveBands();
+    bandCentersHz_ = mdsp_ui::analyzer::makeStandardThirdOctaveCenters();
+    renderStateProvider_.setBandCenters (bandCentersHz_);
     
     // Sync initial mode to analyzer display widget (currentMode_ defaults to FFT)
     analyzerBridgeWidget_.setViewMode (toRtaMode (currentMode_));
@@ -125,9 +138,7 @@ void AnalyzerDisplayView::setPeakDbRange (DbRange r)
 
 void AnalyzerDisplayView::resetSessionMarker()
 {
-    sessionMarkerValid_ = false;
-    sessionMarkerDb_ = -1000.0f;
-    sessionMarkerBin_ = -1;
+    renderStateProvider_.resetSessionMarker();
     // Force immediate update to display
     analyzerBridgeWidget_.setSessionMarker (false, -1, -1000.0f);
 }
@@ -142,6 +153,7 @@ void AnalyzerDisplayView::resetViewPeaks()
     std::fill (fftPeakDb_.begin(), fftPeakDb_.end(), -120.0f);
     std::fill (fftDb_.begin(), fftDb_.end(), -120.0f);
     std::fill (fftPeakDbDisplay_.begin(), fftPeakDbDisplay_.end(), -120.0f);
+    renderStateProvider_.resetPeakCache();
 
     // Clear multi-trace UI buffers
     std::fill (scratchPowerL_.begin(), scratchPowerL_.end(), -120.0f);
@@ -365,198 +377,6 @@ void AnalyzerDisplayView::resized()
     // auto r = getLocalBounds().reduced (10);
 }
 
-//==============================================================================
-//==============================================================================
-std::vector<float> AnalyzerDisplayView::generateThirdOctaveBands()
-{
-    // Standard 1/3-octave band centers from ~20 Hz to ~20 kHz (31 bands)
-    // ISO 266:1997 standard frequencies
-    std::vector<float> centers;
-    centers.reserve (31);
-    
-    // 1/3-octave centers: f = 1000 * 10^(n/10) where n ranges from -20 to +10
-    // Filter to 20 Hz - 20 kHz range
-    const float bandCenters[] = {
-        20.0f, 25.0f, 31.5f, 40.0f, 50.0f, 63.0f, 80.0f, 100.0f, 125.0f, 160.0f,
-        200.0f, 250.0f, 315.0f, 400.0f, 500.0f, 630.0f, 800.0f, 1000.0f, 1250.0f, 1600.0f,
-        2000.0f, 2500.0f, 3150.0f, 4000.0f, 5000.0f, 6300.0f, 8000.0f, 10000.0f, 12500.0f, 16000.0f, 20000.0f
-    };
-    
-    for (float center : bandCenters)
-    {
-        if (center >= 20.0f && center <= 20000.0f)
-            centers.push_back (center);
-    }
-    
-    return centers;
-}
-
-//==============================================================================
-void AnalyzerDisplayView::convertFFTToBands (const AnalyzerSnapshot& snapshot, std::vector<float>& bandsDb, std::vector<float>& bandsPeakDb)
-{
-    if (bandCentersHz_.empty())
-    {
-        bandCentersHz_ = generateThirdOctaveBands();
-        analyzerBridgeWidget_.setBandCenters (bandCentersHz_);
-    }
-    
-    const size_t numBands = bandCentersHz_.size();
-    bandsDb.resize (numBands, -120.0f);
-    bandsPeakDb.resize (numBands, -120.0f);
-    
-    const double sampleRate = snapshot.sampleRate;
-    const int fftSize = snapshot.fftSize;
-    const int fftBinCount = (snapshot.fftBinCount > 0) ? snapshot.fftBinCount : snapshot.numBins;
-    const double binWidthHz = sampleRate / static_cast<double> (fftSize);
-    
-    // For each band, compute lower and upper frequency edges
-    // 1/3-octave: lower = center / 10^(1/6), upper = center * 10^(1/6)
-    const double thirdOctaveRatio = std::pow (10.0, 1.0 / 6.0);  // ~1.122462
-    
-    for (size_t bandIdx = 0; bandIdx < numBands; ++bandIdx)
-    {
-        const float centerFreq = bandCentersHz_[bandIdx];
-        const double lowerFreq = centerFreq / thirdOctaveRatio;
-        const double upperFreq = centerFreq * thirdOctaveRatio;
-        
-        // Find FFT bins that fall within this band
-        int lowerBin = static_cast<int> (std::floor (lowerFreq / binWidthHz));
-        int upperBin = static_cast<int> (std::ceil (upperFreq / binWidthHz));
-        
-        // Clamp to valid bin range
-        lowerBin = juce::jmax (0, lowerBin);
-        upperBin = juce::jmin (fftBinCount - 1, upperBin);
-        
-        // If lowerBin > upperBin, collapse to nearest valid bin
-        if (lowerBin > upperBin)
-        {
-            const int centerBin = (lowerBin + upperBin) / 2;
-            lowerBin = juce::jlimit (0, fftBinCount - 1, centerBin);
-            upperBin = lowerBin;
-        }
-        
-        // Sum power (not dB) of bins within band for average level
-        double sumPower = 0.0;
-        int binCount = 0;
-        float maxPeakDb = -120.0f;
-        
-        for (int bin = lowerBin; bin <= upperBin; ++bin)
-        {
-            // Convert dB to linear power for averaging
-            const std::size_t idx = static_cast<std::size_t> (bin);
-            const float db = snapshot.fftDb[idx];
-            const float power = std::pow (10.0f, db / 10.0f);
-            sumPower += power;
-            binCount++;
-            
-            // For peak: use maximum (not sum) - more stable and correct
-            if (bin < static_cast<int> (fftPeakDb_.size()))
-            {
-                maxPeakDb = juce::jmax (maxPeakDb, fftPeakDb_[idx]);
-            }
-        }
-        
-        // Convert summed power back to dB (use average for proper band level)
-        if (binCount > 0 && sumPower > 0.0)
-        {
-            const double avgPower = sumPower / static_cast<double> (binCount);
-            bandsDb[bandIdx] = 10.0f * static_cast<float> (std::log10 (avgPower));
-        }
-        else
-        {
-            bandsDb[bandIdx] = -120.0f;  // Floor
-        }
-        
-        // Peak is already in dB, just use the maximum
-        bandsPeakDb[bandIdx] = maxPeakDb;
-    }
-}
-
-//==============================================================================
-void AnalyzerDisplayView::convertFFTToLog (const AnalyzerSnapshot& snapshot, std::vector<float>& logDb, std::vector<float>& logPeakDb)
-{
-    constexpr int numLogBins = 256;
-    constexpr float minFreq = 20.0f;
-    constexpr float maxFreq = 20000.0f;
-    constexpr float powerFloor = 1.0e-20f;
-    constexpr float dbFloor = -120.0f;
-    
-    logDb.resize (numLogBins, dbFloor);
-    logPeakDb.resize (numLogBins, dbFloor);
-    
-    const double sampleRate = snapshot.sampleRate;
-    const int fftBinCount = (snapshot.fftBinCount > 0) ? snapshot.fftBinCount : snapshot.numBins;
-    const double binWidthHz = sampleRate / static_cast<double> (snapshot.fftSize);
-    
-    const double logMin = std::log10 (static_cast<double> (minFreq));
-    const double logMax = std::log10 (static_cast<double> (maxFreq));
-    const double logRange = logMax - logMin;
-    
-    std::array<float, numLogBins> logPower;
-    std::fill (logPower.begin(), logPower.end(), powerFloor);
-    
-    for (int logIdx = 0; logIdx < numLogBins; ++logIdx)
-    {
-        const double logPos = logMin + (logRange * static_cast<double> (logIdx)) / static_cast<double> (numLogBins - 1);
-        const double centerFreq = std::pow (10.0, logPos);
-        const double nextLogPos = (logIdx < numLogBins - 1) 
-            ? (logMin + (logRange * static_cast<double> (logIdx + 1)) / static_cast<double> (numLogBins - 1))
-            : logMax;
-        const double prevLogPos = (logIdx > 0)
-            ? (logMin + (logRange * static_cast<double> (logIdx - 1)) / static_cast<double> (numLogBins - 1))
-            : logMin;
-        const double lowerFreq = std::pow (10.0, (logPos + prevLogPos) / 2.0);
-        const double upperFreq = std::pow (10.0, (logPos + nextLogPos) / 2.0);
-        
-        int lowerBin = static_cast<int> (std::floor (lowerFreq / binWidthHz));
-        int upperBin = static_cast<int> (std::ceil (upperFreq / binWidthHz));
-        lowerBin = juce::jmax (0, lowerBin);
-        upperBin = juce::jmin (fftBinCount - 1, upperBin);
-        
-        if (lowerBin > upperBin)
-        {
-            const int centerBin = static_cast<int> (std::round (centerFreq / binWidthHz));
-            lowerBin = juce::jlimit (0, fftBinCount - 1, centerBin);
-            upperBin = lowerBin;
-        }
-        
-        double sumPower = 0.0;
-        int binCount = 0;
-        for (int bin = lowerBin; bin <= upperBin; ++bin)
-        {
-            const std::size_t idx = static_cast<std::size_t> (bin);
-            const float db = snapshot.fftDb[idx];
-            const float power = std::pow (10.0f, db / 10.0f);
-            sumPower += power;
-            binCount++;
-        }
-        
-        if (binCount > 0 && sumPower > 0.0)
-            logPower[static_cast<std::size_t> (logIdx)] = static_cast<float> (sumPower / static_cast<double> (binCount));
-        
-        float maxPeakDb = dbFloor;
-        for (int bin = lowerBin; bin <= upperBin && bin < static_cast<int> (fftPeakDb_.size()); ++bin)
-            maxPeakDb = juce::jmax (maxPeakDb, fftPeakDb_[static_cast<std::size_t> (bin)]);
-        logPeakDb[static_cast<std::size_t> (logIdx)] = maxPeakDb;
-    }
-    
-    const float octaves = snapshot.smoothingOctaves;
-    const bool applyGaussian = (!snapshot.engineDidSpectralSmooth && octaves > 0.0f);
-    if (applyGaussian)
-    {
-        logGaussian_.setConfig (octaves);
-        logGaussian_.process (logPower.data(), numLogBins);
-    }
-    
-    for (int logIdx = 0; logIdx < numLogBins; ++logIdx)
-    {
-        const float p = juce::jmax (powerFloor, logPower[static_cast<std::size_t> (logIdx)]);
-        logDb[static_cast<std::size_t> (logIdx)] = (p > powerFloor) 
-            ? juce::jmax (dbFloor, 10.0f * std::log10 (p)) 
-            : dbFloor;
-    }
-}
-
 int AnalyzerDisplayView::toRtaMode (Mode m) noexcept
 {
     // Widget mode mapping: 0=FFT, 1=LOG, 2=BAND
@@ -591,6 +411,18 @@ void AnalyzerDisplayView::setMode (Mode mode)
     const int rtaMode = toRtaMode (currentMode_);
     analyzerBridgeWidget_.setMode (static_cast<mdsp::gui::AnalyzerDisplayWidget::Mode> (rtaMode));
     analyzerBridgeWidget_.setViewMode (rtaMode);
+    mdsp::gui::AnalyzerRenderStateProviderConfig providerCfg;
+    providerCfg.mode = rtaMode;
+    providerCfg.showLR = traceConfig_.showLR;
+    providerCfg.showMono = traceConfig_.showMono;
+    providerCfg.showL = traceConfig_.showL;
+    providerCfg.showR = traceConfig_.showR;
+    providerCfg.showMid = traceConfig_.showMid;
+    providerCfg.showSide = traceConfig_.showSide;
+    providerCfg.showRMS = traceConfig_.showRMS;
+    providerCfg.weightingMode = traceConfig_.weightingMode;
+    providerCfg.holdReleaseMs = traceConfig_.holdReleaseMs;
+    renderStateProvider_.setConfig (providerCfg);
 
     // DISABLED: Sync shared spectrum engine analysis mode (Line / Log / Band)
     // mdsp::gui::SpectrumComponent::AnalysisMode specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Log;
@@ -633,6 +465,27 @@ void AnalyzerDisplayView::setTiltMode (TiltMode mode)
     analyzerBridgeWidget_.setTiltMode (static_cast<int> (mode));
 }
 
+void AnalyzerDisplayView::setTraceConfig (const mdsp::gui::AnalyzerDisplayWidget::TraceConfig& cfg)
+{
+    traceConfig_ = cfg;
+    releaseMs_ = cfg.holdReleaseMs;
+    currentWeightingMode_ = cfg.weightingMode;
+    analyzerBridgeWidget_.setTraceConfig (traceConfig_);
+    mdsp::gui::AnalyzerRenderStateProviderConfig providerCfg;
+    providerCfg.mode = toRtaMode (currentMode_);
+    providerCfg.showLR = traceConfig_.showLR;
+    providerCfg.showMono = traceConfig_.showMono;
+    providerCfg.showL = traceConfig_.showL;
+    providerCfg.showR = traceConfig_.showR;
+    providerCfg.showMid = traceConfig_.showMid;
+    providerCfg.showSide = traceConfig_.showSide;
+    providerCfg.showRMS = traceConfig_.showRMS;
+    providerCfg.weightingMode = traceConfig_.weightingMode;
+    providerCfg.holdReleaseMs = traceConfig_.holdReleaseMs;
+    renderStateProvider_.setConfig (providerCfg);
+    kickSnapshotPumpImmediate();
+}
+
 void AnalyzerDisplayView::kickSnapshotPumpImmediate()
 {
     if (isShutdown)
@@ -651,34 +504,6 @@ void AnalyzerDisplayView::timerCallback()
     // Read analyzer APVTS params used by view-side processing.
     auto& apvts = audioProcessor.getAPVTS();
 
-    auto getBoolParam = [&apvts] (const char* id) -> bool
-    {
-        if (auto* param = apvts.getRawParameterValue (id))
-            return param->load() > 0.5f;
-        return false;
-    };
-
-    // Release Time (PeakDecay): single control for ballistics on all traces (RMS + L/R/Mid/Side/Mono)
-    auto* pRelease = apvts.getRawParameterValue("PeakDecay");
-    if (pRelease != nullptr)
-        releaseMs_ = pRelease->load();
-
-    mdsp::gui::AnalyzerDisplayWidget::TraceConfig traceConfig;
-    traceConfig.showLR = getBoolParam ("TraceShowLR");
-    traceConfig.showMono = getBoolParam ("analyzerShowMono");
-    traceConfig.showL = getBoolParam ("analyzerShowL");
-    traceConfig.showR = getBoolParam ("analyzerShowR");
-    traceConfig.showMid = getBoolParam ("analyzerShowMid");
-    traceConfig.showSide = getBoolParam ("analyzerShowSide");
-    traceConfig.showRMS = getBoolParam ("analyzerShowRMS");
-    traceConfig.holdReleaseMs = releaseMs_;
-
-    // Read Weighting (Choice 0=None, 1=A, 2=BS.468-4)
-    auto* pWeight = apvts.getRawParameterValue ("analyzerWeighting");
-    traceConfig.weightingMode = (pWeight != nullptr) ? static_cast<int> (pWeight->load()) : 0;
-    currentWeightingMode_ = traceConfig.weightingMode;
-    analyzerBridgeWidget_.setTraceConfig (traceConfig);
-        
     // Read Smoothing (Fractional Octave)
     auto* pSmoothing = apvts.getRawParameterValue("Averaging");
     if (pSmoothing != nullptr)
@@ -728,6 +553,7 @@ void AnalyzerDisplayView::timerCallback()
                 const bool hasPeaks = (!fftPeakDb_.empty() && fftPeakDb_.size() == fftDb_.size());
                 if (hasPeaks)
                 {
+                    const auto& peakHoldDb = renderStateProvider_.peakHoldDb();
                     fftPeakDbDisplay_.resize (fftPeakDb_.size());
                     for (size_t i = 0; i < fftPeakDb_.size(); ++i)
                     {
@@ -742,7 +568,7 @@ void AnalyzerDisplayView::timerCallback()
                     }
                     analyzerBridgeWidget_.setFFTData (fftDb_, 
                                            &fftPeakDbDisplay_,
-                                           !peakHoldDbDisplay_.empty() ? &peakHoldDbDisplay_ : nullptr);
+                                           !peakHoldDb.empty() ? &peakHoldDb : nullptr);
                 }
                 break;
             }
@@ -880,8 +706,6 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
 
     // Centralized Latch: Apply True Freeze logic to fftPeakDb_ BEFORE mode conversion
     // This ensures BAND and LOG modes also inherit the frozen peak values.
-    const bool holdOn = snapshot.isHoldOn;
-    
     juce::ignoreUnused (validBinsSize);
     
     // -------------------------------------------------------------------------
@@ -900,58 +724,6 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     //    already include weighting. No UI-side weighting addition needed.
 
     // Sanitization now handled by mdsp_gui::analyzer::AnalyzerRenderStateBuilder
-    
-    // -------------------------------------------------------------------------
-    // Session Marker Logic (Calculate on Peak Data)
-    // -------------------------------------------------------------------------
-    // const bool holdOn = snapshot.isHoldOn; // Already defined above
-    
-    // Detect new session (off -> on)
-    if (holdOn && !lastHoldState_)
-    {
-        sessionMarkerValid_ = false;
-        sessionMarkerDb_ = -1000.0f;
-    }
-    // Detect clear (on -> off)
-    else if (!holdOn && lastHoldState_)
-    {
-        sessionMarkerValid_ = false; 
-    }
-    
-    // Reset if meta changed
-    if (snapshot.fftSize != lastFftSize_ || 
-        std::abs(snapshot.sampleRate - lastMetaSampleRate_) > 1.0)
-    {
-        sessionMarkerValid_ = false;
-        sessionMarkerDb_ = -1000.0f;
-    }
-    
-    lastHoldState_ = holdOn;
-    
-    // Scan for new max if Hold is active
-    if (holdOn && usePeaks && !fftPeakDb_.empty())
-    {
-        float currentMax = -1000.0f;
-        int maxBin = -1;
-        
-        for (size_t i = 0; i < fftPeakDb_.size(); ++i)
-        {
-            if (fftPeakDb_[i] > currentMax)
-            {
-                currentMax = fftPeakDb_[i];
-                maxBin = (int)i;
-            }
-        }
-        
-        // Update session max if we found a higher peak
-        // Use epsilon to avoid noise updates
-        if (currentMax > (sessionMarkerDb_ + 0.1f))
-        {
-            sessionMarkerDb_ = currentMax;
-            sessionMarkerBin_ = maxBin;
-            sessionMarkerValid_ = true;
-        }
-    }
     
     // C. Min/Max Stats (Post-Weighting)
     float minVal = std::numeric_limits<float>::max(); // Re-declare with type
@@ -1072,97 +844,18 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                 // Peak Hold logic moved outside to be independent
             }
             
-            // Extract Peak Hold from snapshot (Independent of Peak Trace)
-            // Floor init so unmapped / tail bins never draw at top (0 dB); fix for "flat line at top"
-            static constexpr float kPeakHoldDbFloor = -200.0f;
-            auto hasAnyFiniteHold = [](const std::vector<float>& db) noexcept
-            {
-                for (float v : db)
-                    if (std::isfinite (v) && v > -199.0f)
-                        return true;
-                return false;
-            };
-            bool usePeakHold = false;
-            const std::vector<float> prevPeakHoldDb = fftPeakHoldDb_;
-            fftPeakHoldDb_.resize (validBinsSize);
-            std::fill (fftPeakHoldDb_.begin(), fftPeakHoldDb_.end(), kPeakHoldDbFloor);
-
-            {
-                const size_t safeHoldBins = std::min (validBinsSize,
-                                                      std::min (static_cast<size_t> (AnalyzerSnapshot::kMaxFFTBins),
-                                                                snapshot.fftPeakHoldDb.size()));
-                jassert (fftPeakHoldDb_.size() >= safeHoldBins);
-                if (safeHoldBins > 0)
-                {
-                    std::copy (snapshot.fftPeakHoldDb.begin(),
-                               snapshot.fftPeakHoldDb.begin() + static_cast<std::ptrdiff_t> (safeHoldBins),
-                               fftPeakHoldDb_.begin());
-                    usePeakHold = true;
-
-#if JUCE_DEBUG
-                    float holdMin = std::numeric_limits<float>::max();
-                    float holdMax = -std::numeric_limits<float>::max();
-                    for (size_t i = 0; i < safeHoldBins; ++i)
-                    {
-                        const float v = fftPeakHoldDb_[i];
-                        if (v < holdMin) holdMin = v;
-                        if (v > holdMax) holdMax = v;
-                    }
-                    DBG ("HOLD raw min=" << holdMin << " max=" << holdMax);
-#endif
-                    // Auto-detect: if all hold values in [0..2], treat as linear power and convert to dB
-                    bool allInPowerRange = true;
-                    for (size_t i = 0; i < safeHoldBins && allInPowerRange; ++i)
-                    {
-                        const float v = fftPeakHoldDb_[i];
-                        if (v < 0.0f || v > 2.0f)
-                            allInPowerRange = false;
-                    }
-                    if (allInPowerRange)
-                    {
-                        for (size_t i = 0; i < safeHoldBins; ++i)
-                        {
-                            const float p = fftPeakHoldDb_[i];
-                            fftPeakHoldDb_[i] = (p > 0.0f)
-                                ? juce::jmax (kPeakHoldDbFloor, 10.0f * static_cast<float> (std::log10 (static_cast<double> (p))))
-                                : kPeakHoldDbFloor;
-                        }
-#if JUCE_DEBUG
-                        holdMin = std::numeric_limits<float>::max();
-                        holdMax = -std::numeric_limits<float>::max();
-                        for (size_t i = 0; i < safeHoldBins; ++i)
-                        {
-                            const float v = fftPeakHoldDb_[i];
-                            if (v < holdMin) holdMin = v;
-                            if (v > holdMax) holdMax = v;
-                        }
-                        DBG ("HOLD after power->dB min=" << holdMin << " max=" << holdMax);
-#endif
-                    }
-                    // Clamp hold >= current peak per bin when peaks are available
-                    if (usePeaks && fftPeakDbDisplay_.size() == validBinsSize)
-                    {
-                        for (size_t i = 0; i < safeHoldBins && i < fftPeakDbDisplay_.size(); ++i)
-                            fftPeakHoldDb_[i] = juce::jmax (fftPeakHoldDb_[i], fftPeakDbDisplay_[i]);
-                    }
-
-                    // If hold is active and incoming hold vector is shorter than expected,
-                    // preserve the previous tail instead of forcing floor.
-                    if (holdOn && prevPeakHoldDb.size() == validBinsSize && safeHoldBins < validBinsSize)
-                    {
-                        std::copy (prevPeakHoldDb.begin() + static_cast<std::ptrdiff_t> (safeHoldBins),
-                                   prevPeakHoldDb.end(),
-                                   fftPeakHoldDb_.begin() + static_cast<std::ptrdiff_t> (safeHoldBins));
-                    }
-                }
-                else if (holdOn && prevPeakHoldDb.size() == validBinsSize)
-                {
-                    // No incoming hold bins on this frame (common right after signal cut).
-                    // Keep last hold curve so visual hold trace remains visible.
-                    fftPeakHoldDb_ = prevPeakHoldDb;
-                    usePeakHold = hasAnyFiniteHold (fftPeakHoldDb_);
-                }
-            }
+            renderStateProvider_.updateFromSnapshot (snapshot.isValid,
+                                                     fftBinCount,
+                                                     snapshot.fftSize,
+                                                     snapshot.sampleRate,
+                                                     snapshot.isHoldOn,
+                                                     snapshot.fftDb,
+                                                     snapshot.fftPeakHoldDb,
+                                                     fftPeakDb_,
+                                                     usePeaks,
+                                                     fftPeakDbDisplay_);
+            const bool usePeakHold = renderStateProvider_.usePeakHold();
+            const auto& fftPeakHoldDb = renderStateProvider_.peakHoldDb();
 
             // Keep RMS under peak, but leave multi-traces untouched to avoid clipped/squared tops.
             if (usePeaks && fftPeakDbDisplay_.size() == validBinsSize)
@@ -1179,8 +872,10 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             // Send data to Display (including session marker)
             analyzerBridgeWidget_.setFFTData (fftDb_, 
                                    usePeaks ? &fftPeakDbDisplay_ : nullptr,
-                                   usePeakHold ? &fftPeakHoldDb_ : nullptr);
-            analyzerBridgeWidget_.setSessionMarker (sessionMarkerValid_, sessionMarkerBin_, sessionMarkerDb_);
+                                   usePeakHold ? &fftPeakHoldDb : nullptr);
+            analyzerBridgeWidget_.setSessionMarker (renderStateProvider_.sessionMarkerVisible(),
+                                                    renderStateProvider_.sessionMarkerBin(),
+                                                    renderStateProvider_.sessionMarkerDb());
             
             // Multi-trace: Feed L/R/Mid/Side/Mono power data if available
             // Logic moved to Step 1b to unify weighting application and ballistics
@@ -1233,17 +928,19 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                 break;
             }
             
-            // Initialize band centers if needed (band centers are independent of FFT size)
-            if (bandCentersHz_.empty())
-            {
-                bandCentersHz_ = generateThirdOctaveBands();
-            }
-            
-            // CRITICAL: Always set band centers before setting band data (ensures size matching)
+            renderStateProvider_.updateFromSnapshot (snapshot.isValid,
+                                                     fftBinCount,
+                                                     snapshot.fftSize,
+                                                     snapshot.sampleRate,
+                                                     snapshot.isHoldOn,
+                                                     snapshot.fftDb,
+                                                     snapshot.fftPeakHoldDb,
+                                                     fftPeakDb_,
+                                                     usePeaks);
+            bandCentersHz_ = renderStateProvider_.bandCenters();
+            bandsDb_ = renderStateProvider_.bandsDb();
+            bandsPeakDb_ = renderStateProvider_.bandsPeakDb();
             analyzerBridgeWidget_.setBandCenters (bandCentersHz_);
-            
-            // Convert FFT bins to bands
-            convertFFTToBands (snapshot, bandsDb_, bandsPeakDb_);
             
             // CRITICAL: Ensure sizes match exactly (bandCentersHz.size() == bandsDb.size() == bandsPeakDb.size())
             jassert (bandCentersHz_.size() == bandsDb_.size());
@@ -1309,8 +1006,23 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                 break;
             }
             
-            // Convert FFT bins to log-spaced bins
-            convertFFTToLog (snapshot, logDb_, logPeakDb_);
+            const float octaves = snapshot.smoothingOctaves;
+            const bool applyGaussian = (!snapshot.engineDidSpectralSmooth && octaves > 0.0f);
+            logGaussian_.setConfig (octaves);
+            renderStateProvider_.updateFromSnapshot (snapshot.isValid,
+                                                     fftBinCount,
+                                                     snapshot.fftSize,
+                                                     snapshot.sampleRate,
+                                                     snapshot.isHoldOn,
+                                                     snapshot.fftDb,
+                                                     snapshot.fftPeakHoldDb,
+                                                     fftPeakDb_,
+                                                     usePeaks,
+                                                     {},
+                                                     applyGaussian ? &AnalyzerDisplayView::applyLogSmoothingThunk : nullptr,
+                                                     applyGaussian ? this : nullptr);
+            logDb_ = renderStateProvider_.logDb();
+            logPeakDb_ = renderStateProvider_.logPeakDb();
             
             // Feed widget with LOG data
             const bool useLogPeaks = !logPeakDb_.empty() && logPeakDb_.size() == logDb_.size();
