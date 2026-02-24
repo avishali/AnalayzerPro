@@ -1,0 +1,82 @@
+# MultiBand File Tree
+
+Source path: `../MultiBand`
+
+```text
+MultiBand
+- .clangd
+- CMakeLists.txt
+- ui_core
+  - CMakeLists.txt
+- Source
+  - PluginEditor.h
+  - PluginProcessor.h
+  - parameters
+    - Parameters.h
+  - PluginProcessor.cpp
+  - PluginEditor.cpp
+  - dsp
+    - CompressorEngine.cpp
+    - CompressorEngine.h
+    - FrequencyBandProcessor.h
+    - VerificationRunner.cpp
+    - FrequencyBandProcessor.cpp
+- .gitmodules
+- README.md
+- third_party
+  - melechdsp-hq
+    - HANDOFF_UPGRADE_THEME.md
+    - HANDOFF_FIX_CMake_SOURCES.md
+    - SMOKE_TEST_HANDOFF.md
+    - shared
+      - smoke_test
+      - mdsp_dsp
+      - mdsp_core
+      - README.md
+      - mdsp_ui
+    - docs
+      - ARCHITECTURE.md
+      - BUILD_AND_CI.md
+      - DIAGRAMS
+      - RELEASE_PROCESS.md
+      - AUDIO_DSP_STANDARDS.md
+      - DECISIONS
+      - DESIGN_SYSTEM.md
+      - ROADMAP.md
+      - PRODUCTS.md
+      - SECURITY_AND_IP.md
+    - .editorconfig
+    - README.md
+    - HANDOFF_PACKAGE.md
+    - .gitignore
+    - .github
+      - CODEOWNERS
+      - workflows
+      - PULL_REQUEST_TEMPLATE.md
+    - .gitattributes
+    - prompts
+      - 00_SYSTEM_RULES.txt
+      - TASK_PROMPTS
+      - AGENT_SYSTEM_PROMPT.md
+      - HANDOFF_PACKAGE.md
+      - PROMPTS_INDEX.md
+      - TEMPLATE_task.txt
+    - HANDOFF_FIX_BUILD_RELIABILITY.md
+    - templates
+      - plugin_ui
+      - PLUGIN_TEMPLATE_CHECKLIST.md
+      - PULL_REQUEST_TEMPLATE.md
+      - ISSUE_TEMPLATE
+    - HANDOFF_FIX_SMOKE_TEST.md
+    - AGENTS.md
+- .gitignore
+- testdir
+- PROMPTS
+  - MISSIONS
+    - IMPLEMENTER_RESULT.md
+    - LAST_RESULT.md
+    - VERIFIER_RESULT.md
+    - CURRENT_MISSION.txt
+    - implementation_plan.md
+- test.txt
+```

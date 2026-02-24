@@ -327,7 +327,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     // DECOUPLED: Analysis buffer always carries Stereo L/R.
     // Downstream consumers (Scope, Meters) can decide how to view it.
-    // RTADisplay derives its own Mid/Side/Mono traces from this L/R data.
+    // Analyzer display path derives Mid/Side/Mono traces from this L/R data.
     juce::ignoreUnused (pTraceShowLR_, pTraceShowMono_, pTraceShowMid_, pTraceShowSide_, pTraceShowRMS_);
 
     // Input meters: measure RAW buffer (pre-mode-transform, pre-gain)

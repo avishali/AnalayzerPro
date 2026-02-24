@@ -1,0 +1,263 @@
+# AnalyzerPro File Tree
+
+Source path: `../AnalyzerPro`
+
+```text
+AnalyzerPro
+- .clangd
+- CMakeLists.txt
+- FOLDER_STRUCTURE.md
+- Source
+  - ui
+    - ControlPanel.h
+    - MainView.cpp
+    - rta
+    - layout
+      - HeaderBar.cpp
+      - LayoutConstants.h
+      - PixelSnap.h
+      - DraggableParamValueLabel.h
+      - DraggableParamValueLabel.cpp
+      - FooterBar.h
+      - HeaderBar.h
+      - ControlRail.h
+      - FooterBar.cpp
+      - ControlRail.cpp
+    - DebugGridOverlay.h
+    - loudness
+      - LoudnessNumericPanel.h
+      - LoudnessNumericPanel.cpp
+    - ControlPanel.cpp
+    - meters
+      - MeterGroupComponent.h
+      - StereoScopeComponent.cpp
+      - MeterGroupComponent.cpp
+      - PhaseFanScopeComponent.h
+      - MeterComponent.h
+      - PhaseFanScopeComponent.cpp
+      - StereoScopeComponent.h
+      - MeterComponent.cpp
+    - MainView.h
+    - tooltips
+      - TooltipData.h
+      - TooltipOverlayComponent.h
+      - TooltipOverlayComponent.cpp
+      - TooltipManager.h
+      - TooltipManager.cpp
+    - analyzer
+      - StereoScopeView.h
+      - StereoScopeView.cpp
+      - AnalyzerDisplayView.cpp
+      - AnalyzerViewModel.cpp
+      - AnalyzerDisplayView.h
+      - AnalyzerViewModel.h
+  - hardware
+    - SoftwareMeterSink.h
+    - HardwareMeterMapper.h
+    - HardwareMeterMapper.cpp
+    - IHardwareMeterSink.h
+    - SoftwareMeterSink.cpp
+  - PluginEditor.h
+  - PluginProcessor.h
+  - config
+    - DevFlags.h
+  - dsp_adapters
+    - AnalyzerSnapshotAdapter.h
+  - audio
+    - DeviceRoutingHelper.h
+    - IStereoScopeSink.h
+    - DeviceRoutingHelper.cpp
+  - loudness
+    - LoudnessAnalyzer.h
+  - parameters
+    - Parameters.cpp
+    - Parameters.h
+  - PluginProcessor.cpp
+  - presets
+    - ABStateManager.h
+    - PresetManager.h
+    - ABStateManager.cpp
+    - PresetManager.cpp
+  - PluginEditor.cpp
+  - analyzer
+    - AnalyzerEngine.h
+    - AnalyzerEngine.cpp
+    - StereoScopeAnalyzer.h
+  - control
+    - AnalyzerProParamIdMap.h
+    - AnalyzerProControlContext.h
+    - AnalyzerProParamIdMap.cpp
+    - ControlSpecs.cpp
+    - ControlIds.h
+    - ControlBinder.h
+    - ControlSpecs.h
+    - AnalyzerProControlContext.cpp
+    - ControlBinder.cpp
+- .claude
+  - settings.local.json
+- The
+- docs
+  - SVG_TROUBLESHOOTING.md
+  - VERIFICATION_PHASE_2_5.md
+  - TEMPLATE_PHILOSOPHY.md
+  - MACOS15_COMPATIBILITY.md
+  - PROJECT_TREE.md
+  - SIGNAL_FLOW_CODEMAP.md
+  - ARCHITECTURE.md
+  - SLICE_C_DIFFS.md
+  - terminal_out.md
+  - analyzer_engine_slice_c_analyzerpro.diff
+  - CONTROL_IDS.md
+  - MISSION_VALID_FRAME_CONTENT_AND_HOLD_GATE.diff
+  - MISSION_ANALYZER_RENDERER_POLYLINE.diff
+  - HANDOFF_PACKAGE_NEXT.txt
+  - DIAGNOSTICS_INVARIANTS.md
+  - MISSION_PEAK_HOLD_FLAT_LINE_PATCH.diff
+  - HARDWARE_ADAPTER.md
+  - INSTALLATION_INSTRUCTIONS_FOR_TESTERS.txt
+  - SIGNAL_FLOW.md
+  - VERIFICATION_SLICE_C.md
+  - PHASE2_SLICE_B_RESULT.txt
+  - PHASE_2_5_STABILIZATION.md
+  - MISSION_SNAPSHOT_DB_ONLY_PATCH.diff
+  - WORK_TREE.md
+  - analyzer_engine_slice_a.diff
+  - RELEASE_QUICKSTART.md
+  - VERIFICATION_SLICE_B.md
+  - PHASE2_SLICE_C_RESULT.md
+  - FIGMA_GETTING_STARTED.md
+  - TWO_PARAMETER_FOCUS.md
+  - UI_Gemini_Ideas.md
+  - eager-percolating-flurry.md
+  - VERIFICATION.md
+  - repo-trees
+    - melechdsp-hq-tree.md
+    - AnalyzerPro-tree.md
+    - Sperctrogram-tree.md
+    - Dheter-tree.md
+    - MultiBand-tree.md
+    - VoxScript-tree.md
+  - METER_MODULE_AND_ANALYZERPRO_INTEGRATION.md
+  - RENDER_AUDITS.md
+  - analyzer_snapshot_slice_b.diff
+  - CONTRIBUTING.md
+  - WORKTREE_ASSESSMENT_2026-02-21.md
+  - PHASE3_5_PATCH.txt
+  - VERIFICATION_SLICE_D.md
+  - HARDWARE_OUTPUT.md
+  - HANDOFF_PACKAGE.txt
+  - UI_CORE_INTEGRATION.md
+  - DISTRIBUTING_UNSIGNED_BUILDS.md
+  - SPEC.md
+  - MISSION_CROSSHAIR_GATE.diff
+  - RELEASE_GUIDE.md
+  - FOCUS_PERSISTENCE.md
+  - ONE_PAGE_SOP.md
+  - FIGMA_SETUP.md
+  - HANDOFF_TEMPLATE.md
+  - NEW_PLUGIN_CHECKLIST.md
+  - PHASE3_SLICE_D_PLAN_AND_PATCH.txt
+  - VERIFICATION_HOLD.md
+  - JUCE_SETUP.md
+  - INSTRUCTIONS.md
+  - analyzer_engine_slice_c_melechdsp.diff
+  - MISSION_HOLD_FLAT_LINE_PATCH.txt
+  - VERIFICATION_GLOW.md
+  - EXTRACTION_MAP.md
+  - fft-trace-fixes-summary.md
+  - FIGMA_SVG_WORKFLOW.md
+- .cursorrules
+- .gitmodules
+- README.md
+- CMakePresets.json
+- .gitignore
+- package-lock.json
+- scripts
+  - new_plugin.sh
+  - check-no-manual-axes.sh
+  - create_installer.sh
+  - sign_and_notarize.sh
+  - create_simple_installer.sh
+  - figma-export.config.json
+  - clean_build.sh
+  - FIGMA_ASSETS_README.md
+  - README.md
+  - package-lock.json
+  - package.json
+  - .env
+  - check-no-warnings.sh
+  - export-manifest.json
+  - process-svgs.js
+  - .env.example
+  - run_standalone.sh
+  - figma-export.js
+- PROMPTS
+  - MISSIONS
+    - VERIFIER.txt
+    - DUAL_FFT_IMPLEMENTATION_PLAN.md
+    - IMPLEMENTER_RESULT.md
+    - LAST_RESULT.md
+    - VERIFIER_RESULT.md
+    - GLOW_RENDERER_DELIVERABLE.txt
+    - 05_REFACTOR_GUARDS
+      - 03_ui_owns_mapping_engine_owns_math.txt
+      - 02_no_cpp_class_redefinition.txt
+      - 01_no_rt_allocations_rules.txt
+    - CURRENT_MISSION.txt
+    - MISSION_RENDER_STATE_PROVIDER_RESULT.txt
+    - FIX_DECIMATED_CROSSHAIR.md
+    - FIX_CROSSHAIR_DB_LABEL.md
+    - PEAK_HOLD_UNIFY_FIX.md
+    - MISSION_PEAK_HOLD_TRACE_RESULT.txt
+    - ARCHITECTURE_ANALYSIS.md
+    - MISSION_MELECHDSP_HQ_ROOT_RESULT.txt
+  - CHECKLISTS
+    - PRE_COMMIT_UI_DESIGN_SYSTEM_COMPLIANCE.md
+    - PRE_COMMIT_UI_DESIGN_SYSTEM.md
+  - RUNBOOKS
+    - FFT_TRACE_STYLE_UNIFY_V1.txt
+    - ANALYZERPRO_UI_V1.txt
+    - MULTI_TRACE_DATA_PIPELINE_FIX_V2_IMPLEMENTER.txt
+    - SCOPE_CHANNEL_MODE_MAPPING_FIX_V1.txt
+    - MULTI_AGENT_EXECUTION_V1.txt
+    - RUNBOOK_INDEX.txt
+    - SCOPE_MODE_VISUAL_APPLY_V3.txt
+    - FFT_TRACE_TOGGLE_ATOMIC_REBUILD_V1.txt
+    - PLUGIN_UI_TEMPLATE_V1_REFERENCE.md
+    - SCOPE_CHANNEL_MODE_SWITCH_CRASH_AND_INVERSION_FIX_V2.txt
+    - CONTROL_PRIMITIVES_EXTRACTION_V1.txt
+    - FFT_NO_DATA_GUARD_V1.txt
+    - SMOOTHING_RENDERING_STABILITY_V2.txt
+    - UI_METER_ANALYZER_FFT_FIXES_V1.txt
+    - CHANGE RELEASE TIME CONTROL.md
+    - HOVER_TOOLTIP_SYSTEM_V1.txt
+    - PRESETS_AB_BYPASS_V1.txt
+    - FFT_WEIGHTING_ARTIFACT_GUARD_V1.txt
+    - CONTROL_PRIMITIVES_ANALYSIS.md
+    - INCLUDE_PATH_FIX.md
+    - ADD_STEREO_SCOPE_V1.txt
+    - PLUGIN_UI_TEMPLATE_V1
+    - FIGMA_TOKEN_IMPORT_STATUS.md
+    - FIGMA_TOKEN_IMPORT_V1.txt
+    - METER_MODE_LINK_RMS_PEAK_V1.txt
+  - SYSTEM
+    - 00_SYSTEM_RULES.txt
+    - SAFETY_GUARDRAILS_ANTIGRAVITY.txt
+  - INDEX
+    - PROMPTS_INDEX.md
+    - RUNBOOK_INDEX.md
+    - PRE_COMMIT_CHECKLIST.md
+    - PRE_COMMIT_CHECKLIST_UI.txt
+  - TEMPLATES
+    - TEMPLATE_REFACTOR_GUARD.txt
+    - TEMPLATE_PERFORMANCE_TASK.txt
+    - TEMPLATE_UI_ANALYZER_TASK.txt
+    - TEMPLATE_UI_CONTROLS_TASK.txt
+    - MASTER_CURSOR_PROMPT.txt.
+    - TEMPLATE_ENGINE_TASK.txt
+    - TEMPLATE_MULTI_STEP_FEATURE.txt
+  - README.txt
+- installer
+- AnalyzerPro.code-workspace
+- multi_trace_flow.md
+```

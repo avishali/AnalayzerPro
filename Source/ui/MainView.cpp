@@ -63,10 +63,10 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     };
 
     // Wire parameter changes to AnalyzerEngine and AnalyzerDisplayView.
-    // Spectrum engine wiring (HeaderBar controls -> APVTS -> parameterChanged -> display view):
+    // Analyzer widget wiring (HeaderBar controls -> APVTS -> parameterChanged -> display view):
     //   fftSizeComboBox (AnalyzerFftSize) -> FftSize -> analyzerView_.setSpectrumFftOrder(order)
     //   decaySlider (PeakDecay)          -> PeakDecay -> analyzerView_.setSpectrumDecayRate(decayNorm)
-    //   viewModeButton (Mode)            -> Mode -> analyzerView_.setMode(...) -> spectrumEngine.setAnalysisMode(...)
+    //   viewModeButton (Mode)            -> Mode -> analyzerView_.setMode(...)
     if (apvts != nullptr)
     {
         apvts->addParameterListener ("Mode", this);
@@ -289,7 +289,7 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     {
         // Averaging is fractional octave smoothing (Off, 1/24, 1/12, 1/6, 1/3, 1 Oct).
         // PluginProcessor::processBlock applies it via setSmoothingOctaves.
-        // AnalyzerDisplayView::timerCallback pushes it to spectrumEngine via AnalyzerSettings.
+        // AnalyzerDisplayView::timerCallback pushes it to the analyzer bridge widget.
         // No message-thread action needed here.
     }
     else if (parameterID == "scopeChannelMode")
@@ -348,12 +348,12 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     }
     else if (parameterID == "DisplayGain")
     {
-        // Display gain is UI-only, applied to RTADisplay (not AnalyzerEngine)
+        // Display gain is UI-only, applied to analyzer display (not AnalyzerEngine)
         analyzerView_.setDisplayGainDb (newValue);
     }
     else if (parameterID == "Tilt")
     {
-        // Tilt is UI-only, applied to RTADisplay (not AnalyzerEngine)
+        // Tilt is UI-only, applied to analyzer display (not AnalyzerEngine)
         // Convert choice index to TiltMode (Flat=0, Pink=1, White=2)
         const int index = juce::roundToInt (newValue);
         AnalyzerDisplayView::TiltMode tiltMode = AnalyzerDisplayView::TiltMode::Flat;
@@ -411,8 +411,6 @@ bool MainView::keyPressed (const juce::KeyPress& key, juce::Component* originati
 
         analyzerView_.setDbRange (next);
 
-        analyzerView_.setDbRange (next);
-
         // Header update removed (control removed)
         return true;
     }
@@ -423,7 +421,6 @@ bool MainView::keyPressed (const juce::KeyPress& key, juce::Component* originati
 void MainView::triggerResetPeaks()
 {
     audioProcessor.getAnalyzerEngine().resetPeaks();
-    audioProcessor.resetMeterClipLatches();
     audioProcessor.resetMeterClipLatches();
     analyzerView_.resetViewPeaks();
     analyzerView_.repaint();

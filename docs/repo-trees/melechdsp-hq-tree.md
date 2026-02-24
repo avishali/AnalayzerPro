@@ -1,0 +1,297 @@
+# melechdsp-hq File Tree
+
+Source path: `../melechdsp-hq`
+
+```text
+melechdsp-hq
+- .clangd
+- CMakeLists.txt
+- cmake
+  - mdsp_sdkConfig.cmake.in
+  - mdsp_consumer_bridge.cmake
+- compile_commands.json
+- SMOKE_TEST_HANDOFF.md
+- CROSSHAIR_VERIFY.md
+- MCP
+  - DELIVERABLE.txt
+  - claude_desktop_config.json
+  - tools
+    - mcp
+      - common
+  - pyrightconfig.json
+  - requirements.txt
+  - config
+    - local_paths.example.json
+    - local_paths.json
+  - docs
+    - MCP_FOLDER_DIAGRAM.md
+  - .cursorrules
+  - .gitmodules
+  - README.md
+  - SETUP_ENV.md
+  - juce_api_server
+    - server.py
+    - ingest_juce.py
+    - schema.json
+  - juce-rag-server
+    - server.py
+    - melechdsp-hq.code-workspace
+    - __pycache__
+      - server.cpython-313.pyc
+    - FOLDER_TREE.md
+    - rag_client.py
+    - .gitignore
+    - .env
+    - mcp_juce_bridge.py
+    - agent.py
+    - stress_test.py
+    - .env.example
+  - melech_internal_server
+    - ingest_projects.py
+    - server.py
+    - project_structure.json
+    - schema.json
+  - .gitignore
+  - dsp_algorithms_server
+    - ingest.py
+    - server.py
+    - dsp_index.json
+    - schema.json
+  - scripts
+    - dev_up.sh
+  - TEMPLATES
+    - mcp_server_template
+      - server.py
+  - .env.example
+  - MCP.code-workspace
+- shared
+  - smoke_test
+    - CMakeLists.txt
+    - Source
+      - probe_dsp.cpp
+      - probe_ui.cpp
+      - probe_gui.cpp
+      - Main.cpp
+    - README.md
+  - mdsp_dsp
+    - CMakeLists.txt
+    - include
+      - mdsp_dsp
+    - README.md
+    - src
+      - Smoother.cpp
+      - MeterBallistics.cpp
+      - loudness
+      - spectrogram
+      - scopes
+      - analyzer
+  - mdsp_core
+    - CMakeLists.txt
+    - include
+      - mdsp_core
+    - README.md
+    - src
+      - Version.cpp
+      - containers
+  - mdsp_gui
+    - CMakeLists.txt
+    - include
+      - mdsp_gui
+    - README.md
+    - src
+      - components
+      - dsp
+      - analyzer
+  - README.md
+  - melech_spectral
+    - Melech_SpectralFingerprint.h
+    - Test_SpectralMatching.cpp
+    - Melech_SpectralComparator.h
+  - mdsp_ui
+    - CMakeLists.txt
+    - include
+      - mdsp_ui
+    - ui_tokens
+      - WORKFLOW.md
+      - scripts
+      - tokens.json
+    - ui_assets
+      - icons
+      - scripts
+      - ICONS_WORKFLOW.md
+    - README.md
+    - src
+      - GridRenderer.cpp
+      - ui
+      - PeakSnapController.cpp
+      - AxisInteraction.cpp
+      - ScaleLabelRenderer.cpp
+      - rta
+      - IconPaint.cpp
+      - IconCache.cpp
+      - ButtonStyle.cpp
+      - LegendRenderer.cpp
+      - TextOverlayRenderer.cpp
+      - CursorReadoutRenderer.cpp
+      - ThemeTokens.generated.cpp
+      - MarkerRenderer.cpp
+      - LookAndFeel.cpp
+      - PlotFrameRenderer.cpp
+      - Theme.cpp
+      - controls
+      - meters
+      - UiContext.cpp
+      - ButtonPaint.cpp
+      - AxisHoverController.cpp
+      - FocusRing.cpp
+      - SeriesRenderer.cpp
+      - HoverPairController.cpp
+      - BarsRenderer.cpp
+      - analyzer
+      - ValueReadoutRenderer.cpp
+      - AxisRenderer.cpp
+- docs
+  - ARCHITECTURE.md
+  - COMPANY_MANIFEST.md
+  - BUILD_AND_CI.md
+  - DIAGRAMS
+    - docs-map.md
+  - RELEASE_PROCESS.md
+  - DHETER_ROADMAP.md
+  - AUDIO_DSP_STANDARDS.md
+  - SYSTEM_FLOW.md
+  - DECISIONS
+    - 0001-company-architecture.md
+    - ADR-0002-shared-modules.md
+    - ADR-0001-repo-structure.md
+    - ADR-0003-analyzerpro-first-product.md
+    - ADR-TEMPLATE.md
+  - AI_INFRASTRUCTURE.md
+  - DESIGN_SYSTEM.md
+  - RAG_INDEX.md
+  - ROADMAP.md
+  - INDEX.md
+  - TOOLING_MCP_RAG.md
+  - WORKTREE_ASSESSMENT_2026-02-21.md
+  - PLUGIN_LIFECYCLE.md
+  - MCP_RAG_OPERATIONS.md
+  - ENGINEERING_PLAYBOOK.md
+  - PRODUCTS.md
+  - SECURITY_AND_IP.md
+  - Figma setup
+  - WORK_TREE_HQ.md
+- melechdsp-project.json
+- .cursorrules
+- .gitmodules
+- .editorconfig
+- README.md
+- AI_GOVERNANCE.md
+- .gitignore
+- scripts
+  - check_module_boundaries.py
+- .github
+  - CODEOWNERS
+  - workflows
+    - ci.yml
+  - PULL_REQUEST_TEMPLATE.md
+  - ISSUE_TEMPLATE
+    - feature_request.md
+    - bug_report.md
+    - custom.md
+- .gitattributes
+- PROMPTS
+  - RAG_IMPLEMENT_gate.txt
+  - 00_SYSTEM_RULES.txt
+  - HARDWARE_task.txt
+  - AGENT_SYSTEM_PROMPT.md
+  - HANDOFF_PACKAGE.md
+  - PROMPTS_INDEX.md
+  - VERIFY_task.txt
+  - FIX_DECIMATED_QUERY_SPACE.md
+  - UI_task.txt
+  - NEW_TASK.md
+  - PREPROMPT.md
+  - TEMPLATE_task.txt
+  - DSP_task.txt
+  - ARCHITECT_task.txt
+- TEMPLATES
+  - ISSUE_TEMPLATE
+    - feature_request.md
+    - plugin-template
+      - ADR
+      - ARCHITECTURE.md
+      - CHANGELOG.md
+      - HARDWARE_MODEL.md
+      - SYSTEM_FLOW.md
+      - README.md
+      - PARAMETER_MAP.md
+      - ROADMAP.md
+      - PROMPTS
+      - UI_MODEL.md
+      - DSP_MODEL.md
+    - bug_report.md
+  - plugin-docs-skeleton
+    - ADR
+      - 0001-template.md
+    - ARCHITECTURE.md
+    - PluginEditor_template.cpp
+    - HARDWARE_MODEL.md
+    - PluginProcessor_template.h
+    - SYSTEM_FLOW.md
+    - README.md
+    - PARAMETER_MAP.md
+    - ROADMAP.md
+    - PluginEditor_template.h
+    - PluginProcessor_template.cpp
+    - UI_MODEL.md
+    - DSP_MODEL.md
+- _install
+  - include
+    - mdsp_dsp
+      - Smoother.h
+      - spectrogram
+      - analyzer
+      - MeterBallistics.h
+    - mdsp_core
+      - Version.h
+      - containers
+      - Assert.h
+    - mdsp_gui
+      - dsp.bak
+      - components
+      - dsp
+    - mdsp_ui
+      - LegendRenderer.h
+      - Theme.h
+      - PeakSnapController.h
+      - CursorReadoutRenderer.h
+      - ThemeTokens.generated.h
+      - rta
+      - HoverPairController.h
+      - ThemeVariant.h
+      - TextOverlayRenderer.h
+      - Typography.h
+      - ButtonStyle.h
+      - IconCache.h
+      - ScaleLabelRenderer.h
+      - AxisRenderer.h
+      - AreaFillRenderer.h
+      - ButtonPaint.h
+      - ValueReadoutRenderer.h
+      - controls
+      - FocusRing.h
+      - GridRenderer.h
+      - IconIds.generated.h
+      - MarkerRenderer.h
+      - SeriesRenderer.h
+      - BarsRenderer.h
+      - UiContext.h
+      - Metrics.h
+      - IconPaint.h
+      - PlotFrameRenderer.h
+      - AxisHoverController.h
+      - AxisInteraction.h
+      - LookAndFeel.h
+      - analyzer
+  - lib
+```

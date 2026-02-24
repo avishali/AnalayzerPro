@@ -1,0 +1,286 @@
+# VoxScript File Tree
+
+Source path: `../VoxScript`
+
+```text
+VoxScript
+- .cursorignore
+- check-crash-log.sh
+- VERIFIER_RESULT_CORRECTED.md
+- peaks
+  - 1_All Falls Down_(Vocals).wav.reapeaks
+- PROJECT_STATUS.md
+- project_tree.txt
+- CMakeLists.txt
+- commands_for_builds.txt
+- ARCHIVE
+  - AudioExtractor.cpp.txt
+  - BUILD_SUCCESS.md
+  - ARA_API_FIXES_NEEDED.md
+- CMake
+  - install_JUCE_ARA.cmake
+  - FetchWhisper.cmake
+- compile_commands.json
+- SDK_BUILD_FIX.md
+- CHANGELOG.md
+- com.apple.compilers.llvm.clang.1_0.compiler
+- VERIFIER_RESULT.md
+- DEBUG_VERIFICATION.md
+- Source
+  - ui
+    - DetailView.h
+    - ScriptView.cpp
+    - ScriptView.h
+    - DetailView.cpp
+  - PluginEditor.h
+  - JuceHeader.h
+  - util
+    - VoxLogger.h
+  - transcription
+    - WhisperEngine.h
+    - VoxSequence.cpp
+    - VoxSequence.h
+    - AudioExtractor.h
+    - WhisperEngine.cpp
+    - AudioExtractor.cpp
+  - PluginProcessor.h
+  - ara
+    - VoxScriptDocumentStore.h
+    - VoxScriptDocumentStore.cpp
+    - VoxScriptAudioSource.h.backup
+    - VoxScriptPlaybackRenderer.cpp
+    - VoxScriptAudioSource.h
+    - VoxScriptPlaybackRenderer.h
+    - VoxScriptAudioSource.cpp
+    - VoxScriptDocumentController.cpp
+    - VoxScriptDocumentController.h
+    - VoxScriptAudioSource.cpp.backup
+  - PluginProcessor.cpp
+  - engine
+    - TranscriptionJobQueue.cpp
+    - AudioCache.h
+    - AudioCache.cpp
+    - TranscriptionJobQueue.h
+  - PluginEditor.cpp
+- DEBUG_SETUP.md
+- QUICKSTART.md
+- CMakeLists_backup.txt
+- .gitmodules
+- JUCE8_FIXES_APPLIED.md
+- README.md
+- CMakeLists.txt.backup
+- third_party
+  - whisper.cpp
+    - ggml-quants.c
+    - whisper.h
+    - CMakeLists.txt
+    - .devops
+      - main.Dockerfile
+      - cublas.Dockerfile
+      - main-cuda.Dockerfile
+    - ggml-opencl.h
+    - LICENSE
+    - cmake
+      - BuildTypes.cmake
+      - DefaultTargetOptions.cmake
+      - GitVars.cmake
+    - Makefile
+    - ggml-alloc.c
+    - tests
+      - CMakeLists.txt
+      - run-tests.sh
+      - es-0-ref.txt
+      - en-1-ref.txt
+      - .gitignore
+      - en-0-ref.txt
+      - en-2-ref.txt
+      - test-whisper.js
+    - openvino
+      - whisper-openvino-encoder.h
+      - whisper-openvino-encoder.cpp
+    - ggml-metal.metal
+    - ggml.c
+    - ggml-opencl.cpp
+    - models
+      - for-tests-ggml-tiny.en.bin
+      - for-tests-ggml-medium.bin
+      - for-tests-ggml-tiny.bin
+      - convert-h5-to-ggml.py
+      - for-tests-ggml-base.en.bin
+      - download-ggml-model.cmd
+      - for-tests-ggml-large.bin
+      - generate-coreml-model.sh
+      - for-tests-ggml-small.bin
+      - convert-pt-to-ggml.py
+      - README.md
+      - for-tests-ggml-base.bin
+      - convert-h5-to-coreml.py
+      - generate-coreml-interface.sh
+      - download-ggml-model.sh
+      - .gitignore
+      - for-tests-ggml-small.en.bin
+      - download-coreml-model.sh
+      - ggml_to_pt.py
+      - convert-whisper-to-openvino.py
+      - for-tests-ggml-medium.en.bin
+      - openvino-conversion-requirements.txt
+      - convert-whisper-to-coreml.py
+    - ggml-metal.m
+    - ggml-backend.h
+    - whisper.cpp
+    - .gitmodules
+    - README.md
+    - coreml
+      - whisper-encoder-impl.m
+      - whisper-encoder.h
+      - whisper-encoder.mm
+      - whisper-decoder-impl.h
+      - whisper-encoder-impl.h
+      - whisper-decoder-impl.m
+    - grammars
+      - chess.gbnf
+      - assistant.gbnf
+      - colors.gbnf
+    - samples
+      - README.md
+      - .gitignore
+      - jfk.wav
+    - .gitignore
+    - ggml-quants.h
+    - extra
+      - sync-ggml-am.sh
+      - convert-all.sh
+      - bench-wts.sh
+      - sync-ggml.sh
+      - sha-all.sh
+      - bench.py
+      - bench-all.sh
+      - sync-ggml.last
+      - sync-llama.sh
+      - quantize-all.sh
+      - deploy-wasm.sh
+    - examples
+      - quantize
+      - common.cpp
+      - bench
+      - grammar-parser.h
+      - CMakeLists.txt
+      - command.wasm
+      - stream
+      - addon.node
+      - livestream.sh
+      - whisper.nvim
+      - server
+      - lsp
+      - whisper.wasm
+      - twitch.sh
+      - dr_wav.h
+      - grammar-parser.cpp
+      - common.h
+      - bench.wasm
+      - whisper.swiftui
+      - talk-llama
+      - helpers.js
+      - talk.wasm
+      - wchess
+      - stream.wasm
+      - generate-karaoke.sh
+      - whisper.android.java
+      - command
+      - common-ggml.cpp
+      - common-ggml.h
+      - yt-wsp.sh
+      - common-sdl.h
+      - common-sdl.cpp
+      - main
+      - whisper.objc
+      - whisper.android
+      - talk
+    - .github
+      - workflows
+    - Package.swift
+    - ggml-cuda.h
+    - ggml-impl.h
+    - ggml-alloc.h
+    - bindings
+      - go
+      - CMakeLists.txt
+      - java
+      - ios
+      - javascript
+      - ruby
+    - .swiftpm
+      - xcode
+    - ggml-backend-impl.h
+    - ggml-metal.h
+    - ggml-backend.c
+    - ggml-cuda.cu
+    - spm-headers
+      - whisper.h
+      - ggml.h
+    - ggml.h
+- .gitignore
+- rebuild-voxscript.sh
+- gemini responsetxt.txt
+- fix-build.sh
+- linker_log.txt
+- PROMPTS
+  - ARCHIVE
+    - DIAGNOSTIC_PHASE_III.md
+    - IMMEDIATE_ACTION_PHASE_III_FIX.md
+    - PHASE_III_TO_IV_TRANSITION_SUMMARY.md
+    - PHASE_III_FIX_V2_ACTION.md
+    - ADD_FILE_LOGGING.md
+    - QUICK_REBUILD_INSTRUCTIONS.txt
+    - QUICK_REFERENCE_PHASE_III_VERIFICATION.md
+  - MISSIONS
+    - VERIFIER.txt
+    - IMPLEMENTER_RESULT.md
+    - ARCHIVE
+      - DECISION_REQUIRED.md
+      - BUILD_FIX_REPORT.md
+      - ARCHITECT_SUMMARY.md
+      - MILESTONE_COMPLETE.md
+      - PHASE_II_COMPLETE.md
+      - AUDIOEXTRACTOR_TEST_INSTRUCTIONS.md
+      - FX_PASSTHROUGH_FIX.md
+      - LAST_RESULT_FAILED_PHASE3.md
+      - MISSION_SUMMARY.md
+      - AudioExtractor.h
+      - ARCHITECT_DECISION.md
+      - VERIFIER_MISSION_PHASE_III.txt
+      - PHASE_III_RESEARCH_COMPLETE.md
+      - AUDIO_PASSTHROUGH_FIX.md
+      - PHASE_III_PLANNING.md
+      - PHASE_III_QUICKSTART.md
+      - IMPLEMENTER_KICKSTART.md
+      - ARCHITECT_DECISION_PHASE_III_FIX_V2.md
+      - EXECUTIVE_SUMMARY.md
+      - AUDIOEXTRACTOR_VALIDATION.md
+      - APPLY_CRASH_FIX.md
+      - PHASE_III_TASK_1_COMPLETE.md
+      - AUDIO_OFFLINE_FIX.md
+      - ARCHITECT_DECISION_PHASE_III_REJECTION.md
+      - CURRENT_MISSION_CORRECTED.txt
+      - PHASE_III_STATUS_UPDATE.md
+      - QUICK_REFERENCE.md
+      - RUNTIME_TEST_PROTOCOL_PHASE_III.md
+      - PHASE_III_TASK_2_PLAN.md
+      - CURRENT_MISSION_FAILED_PHASE3.txt
+      - AudioExtractor.cpp
+      - CRASH_FIX.md
+      - PHASE_III_READY.md
+    - LAST_RESULT.md
+    - VERIFIER_RESULT.md
+    - CURRENT_MISSION.txt
+  - PLANNING
+    - PHASE_IV_TEXT_EDITING_ARCHITECTURE.md
+- rebuild-with-logging.sh
+- VoxScript.code-workspace
+- rebuild-ninja.sh
+- REAPER_DEBUG_GUIDE.md
+- project_status.txt
+- setup_and_test.sh
+- diagnose-voxscript.sh
+- 1_All Falls Down_(Vocals).wav
+```

@@ -335,7 +335,6 @@ target_sources(${PLUGIN_NAME}
         Source/ui/analyzer/AnalyzerDisplayView.cpp
         Source/ui/analyzer/AnalyzerViewModel.cpp
         Source/ui/analyzer/StereoScopeView.cpp
-        Source/ui/analyzer/RTADisplay.cpp
         Source/ui/layout/HeaderBar.cpp
         Source/ui/layout/ControlRail.cpp
         Source/ui/layout/DraggableParamValueLabel.cpp
@@ -379,13 +378,6 @@ endforeach()
 if (COMMAND mdsp_report_bridge_consumer_summary)
     mdsp_report_bridge_consumer_summary()
 endif()
-
-# Temporary: make deprecated-declarations an error for RTADisplay.cpp to pinpoint exact callsite
-set_source_files_properties(
-    Source/ui/analyzer/RTADisplay.cpp
-    PROPERTIES
-        COMPILE_OPTIONS "-Werror=deprecated-declarations"
-)
 
 target_compile_features(${PLUGIN_NAME} PUBLIC cxx_std_17)
 

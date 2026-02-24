@@ -1,0 +1,94 @@
+# Dheter File Tree
+
+Source path: `../Dheter`
+
+```text
+Dheter
+- CMakeLists.txt
+- test
+  - Untitled.RPP
+  - Backups
+    - Untitled-2026-02-06_053349.rpp-bak
+- Source
+  - PluginEditor.h
+  - JuceHeader.h
+  - PluginProcessor.h
+  - PluginProcessor.cpp
+  - PluginEditor.cpp
+- shared
+  - melechdsp-hq
+    - SMOKE_TEST_HANDOFF.md
+    - MCP
+      - DELIVERABLE.txt
+      - claude_desktop_config.json
+      - tools
+      - pyrightconfig.json
+      - requirements.txt
+      - config
+      - docs
+      - .cursorrules
+      - README.md
+      - SETUP_ENV.md
+      - juce_api_server
+      - juce-rag-server
+      - melech_internal_server
+      - .gitignore
+      - dsp_algorithms_server
+      - scripts
+      - TEMPLATES
+      - .env.example
+      - MCP.code-workspace
+    - shared
+      - smoke_test
+      - mdsp_dsp
+      - mdsp_core
+      - mdsp_gui
+      - README.md
+      - melech_spectral
+      - mdsp_ui
+    - docs
+      - ARCHITECTURE.md
+      - BUILD_AND_CI.md
+      - DIAGRAMS
+      - RELEASE_PROCESS.md
+      - AUDIO_DSP_STANDARDS.md
+      - DECISIONS
+      - DESIGN_SYSTEM.md
+      - RAG_INDEX.md
+      - ROADMAP.md
+      - INDEX.md
+      - MCP_RAG_OPERATIONS.md
+      - PRODUCTS.md
+      - SECURITY_AND_IP.md
+    - .cursorrules
+    - .gitmodules
+    - .editorconfig
+    - README.md
+    - .gitignore
+    - .github
+      - CODEOWNERS
+      - workflows
+      - PULL_REQUEST_TEMPLATE.md
+      - ISSUE_TEMPLATE
+    - .gitattributes
+    - PROMPTS
+      - 00_SYSTEM_RULES.txt
+      - TASK_PROMPTS
+      - AGENT_SYSTEM_PROMPT.md
+      - HANDOFF_PACKAGE.md
+      - PROMPTS_INDEX.md
+      - TEMPLATE_task.txt
+    - templates
+      - plugin_ui
+      - ISSUE_TEMPLATE
+    - AGENTS.md
+- docs
+  - ARCHITECTURE.md
+  - PARAMETER_MAP.md
+  - ROADMAP.md
+  - DSP_MODEL.md
+- .gitmodules
+- README.md
+- .gitignore
+- TREE.txt
+```

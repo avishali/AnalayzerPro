@@ -3,12 +3,10 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <mdsp_gui/analyzer/AnalyzerDisplayWidget.h>
-#include <mdsp_gui/components/SpectrumComponent.h>
 #include <mdsp_ui/Theme.h>
 #include <mdsp_ui/ThemeVariant.h>
 #include <array>
 #include <vector>
-#include "../../dsp_adapters/AnalyzerSnapshotAdapter.h"
 #include "../../PluginProcessor.h"
 
 #if !defined(ANALYZERPRO_MODE_DEBUG_OVERLAY)
@@ -25,7 +23,7 @@
 
 //==============================================================================
 /**
-    AnalyzerDisplayView wraps RTADisplay with mode switching.
+    AnalyzerDisplayView hosts analyzer display widget with mode switching.
     Provides FFT / BAND / LOG mode selection.
 */
 class AnalyzerDisplayView : public juce::Component,
@@ -67,7 +65,12 @@ public:
     void resetSessionMarker();
     void resetViewPeaks();
 
-    // Helper to convert internal Mode enum to RTADisplay view mode (0=FFT, 1=Log, 2=Bands)
+    enum class TiltMode
+    {
+        Flat = 0,
+        Pink = 1,
+        White = 2
+    };
 
     void setPeakDbRange (DbRange r);
     DbRange getPeakDbRange() const noexcept { return peakDbRange_; }
@@ -75,14 +78,8 @@ public:
     
     std::function<void(DbRange)> onDbRangeUserChanged;
 
-    // Migration step: keep RTADisplay backend hidden from parent views.
-    using TiltMode = mdsp::gui::RTADisplay::TiltMode;
     void setDisplayGainDb (float db);
     void setTiltMode (TiltMode mode);
-
-    // Transitional API during migration; avoid adding new callers.
-    mdsp::gui::RTADisplay& getRTADisplay() noexcept { return analyzerBridgeWidget_.getRTADisplay(); }
-    const mdsp::gui::RTADisplay& getRTADisplay() const noexcept { return analyzerBridgeWidget_.getRTADisplay(); }
 
     /** Forward to shared spectrum engine: FFT order (e.g. 10=1024, 11=2048). */
     void setSpectrumFftOrder (int order);
@@ -107,12 +104,8 @@ private:
     // Generate standard 1/3-octave band centers (20 Hz to 20 kHz)
     static std::vector<float> generateThirdOctaveBands();
     
-    // Map AnalyzerDisplayView::Mode to RTADisplay view mode (0=FFT, 1=LOG, 2=BAND)
+    // Map AnalyzerDisplayView::Mode to widget mode (0=FFT, 1=LOG, 2=BAND)
     static int toRtaMode (Mode m) noexcept;
-    
-#if JUCE_DEBUG
-    void assertModeSync() const;
-#endif
 
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     void updateModeOverlayText();
@@ -120,8 +113,6 @@ private:
 
     AnalayzerProAudioProcessor& audioProcessor;
     mdsp_ui::Theme theme_ { mdsp_ui::ThemeVariant::Custom };
-    // Legacy spectrum component retained during migration.
-    mdsp::gui::SpectrumComponent spectrumEngine;
     Mode currentMode_ = Mode::FFT;
     DbRange dbRange_ = DbRange::Minus120;
     DbRange appliedDbRange_ = DbRange::Minus120;
@@ -201,8 +192,6 @@ private:
 
     bool binMismatch_ = false;
     bool isShutdown = false;
-    mdsp::gui::RTADisplay::TraceConfig lastTraceConfig_;
-    
     // Debug counters for BANDS/LOG mode
 #if JUCE_DEBUG
     int bandsFedCount_ = 0;
@@ -217,13 +206,12 @@ private:
     int expectedBins_ = 0;
 #if JUCE_DEBUG
     juce::String dropReason_;
-    int lastSentRtaMode_ = 0;  // Cache for mode sync assertion
 #endif
 #if JUCE_DEBUG && ANALYZERPRO_FFT_DEBUG_LINE
     juce::String fftDebugLine_;
 #endif
 #if defined(PLUGIN_DEV_MODE) && PLUGIN_DEV_MODE
-    juce::String devModeDebugLine_;  // Temporary: UI=mode / RTADisplay=mode / bins / min/max dB
+    juce::String devModeDebugLine_;  // Temporary: UI/widget mode / bins / min/max dB
 #endif
 
     // Helper for fractional octave smoothing
