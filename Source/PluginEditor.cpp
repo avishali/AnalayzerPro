@@ -20,8 +20,6 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
 
     addAndMakeVisible (mainView);
 
-    audioProcessor.setStereoScopeSink (&mainView.getPhaseFanScopeComponent());
-
 #if JUCE_DEBUG
     setWantsKeyboardFocus (true);
     addAndMakeVisible (debugGrid);
@@ -73,7 +71,6 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
 
 AnalayzerProAudioProcessorEditor::~AnalayzerProAudioProcessorEditor()
 {
-    audioProcessor.setStereoScopeSink (nullptr);
     // Shutdown MainView BEFORE destruction to stop timers and clear callbacks
     mainView.shutdown();
     

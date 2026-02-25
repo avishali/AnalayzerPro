@@ -942,9 +942,43 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             bandsPeakDb_ = renderStateProvider_.bandsPeakDb();
             analyzerBridgeWidget_.setBandCenters (bandCentersHz_);
             
-            // CRITICAL: Ensure sizes match exactly (bandCentersHz.size() == bandsDb.size() == bandsPeakDb.size())
-            jassert (bandCentersHz_.size() == bandsDb_.size());
-            jassert (bandsDb_.size() == bandsPeakDb_.size());
+            // Guard against transient provider/snapshot size skew in debug/runtime.
+            // Recover by clamping all arrays to a common minimum size instead of asserting.
+            const size_t bandCount = std::min (bandCentersHz_.size(), std::min (bandsDb_.size(), bandsPeakDb_.size()));
+            if (bandCount == 0)
+            {
+#if JUCE_DEBUG
+                static bool warnedEmptyBands = false;
+                if (! warnedEmptyBands)
+                {
+                    DBG ("BANDS skipped: empty data (centers=" << bandCentersHz_.size()
+                         << " db=" << bandsDb_.size()
+                         << " peaks=" << bandsPeakDb_.size() << ")");
+                    warnedEmptyBands = true;
+                }
+#endif
+                analyzerBridgeWidget_.setNoData ("No BANDS data");
+                break;
+            }
+
+            if (bandCentersHz_.size() != bandCount || bandsDb_.size() != bandCount || bandsPeakDb_.size() != bandCount)
+            {
+#if JUCE_DEBUG
+                static bool warnedBandSizeMismatch = false;
+                if (! warnedBandSizeMismatch)
+                {
+                    DBG ("BANDS size mismatch: centers=" << bandCentersHz_.size()
+                         << " db=" << bandsDb_.size()
+                         << " peaks=" << bandsPeakDb_.size()
+                         << " -> clamping to " << bandCount);
+                    warnedBandSizeMismatch = true;
+                }
+#endif
+                bandCentersHz_.resize (bandCount);
+                bandsDb_.resize (bandCount);
+                bandsPeakDb_.resize (bandCount);
+                analyzerBridgeWidget_.setBandCenters (bandCentersHz_);
+            }
             
             // Feed widget with band data
             const bool useBandPeaks = !bandsPeakDb_.empty() && bandsPeakDb_.size() == bandsDb_.size() && bandsDb_.size() == bandCentersHz_.size();

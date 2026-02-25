@@ -2,102 +2,42 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <mdsp_ui/UiContext.h>
-#include <atomic>
+#include <mdsp_ui/meters/MeterRenderState.h>
 
-class MeterComponent : public juce::Component,
-                      private juce::Timer
+class MeterComponent : public juce::Component
 {
 public:
-    enum class DisplayMode
-    {
-        RMS = 0,
-        Peak = 1
-    };
+    using MeterRenderState = mdsp_ui::meters::MeterRenderState;
+    using Callback = void (*) (void*) noexcept;
 
-    enum class ScaleMode
-    {
-        FullRange = 0,  // -120 dB to +6 dB (as now)
-        Top24Db   = 1,  // -18 dB to +6 dB (focus on top 24 dB)
-        Top12Db   = 2   // -6 dB to +6 dB (focus on top 12 dB)
-    };
-
-    MeterComponent (mdsp_ui::UiContext& ui,
-                    const std::atomic<float>* peakDb,
-                    const std::atomic<float>* rmsDb,
-                    const std::atomic<bool>* clipLatched,
-                    juce::String labelText);
-    ~MeterComponent() override;
+    MeterComponent (mdsp_ui::UiContext& ui, juce::String labelText);
+    ~MeterComponent() override = default;
 
     void setLabelText (juce::String labelText);
-    void setBypassed (bool bypassed);
-    
-    // Direct drive (for M/S processing in parent)
-    void setLevels (float peakDb, float rmsDb, bool clipped);
-
-    void setDisplayMode (DisplayMode mode);
-    DisplayMode getDisplayMode() const noexcept { return displayMode_; }
-
-    void setScaleMode (ScaleMode mode);
-    ScaleMode getScaleMode() const noexcept { return scaleMode_; }
-
-    // Pull latest values from atomics (safe on message thread).
-    void updateFromAtomics();
-    
-    // Explicitly reset the visual peak hold (linked reset support)
-    void resetPeakHold();
-    
-    // Enable/disable true-freeze hold (independent from analyzer hold)
-    void setHoldEnabled (bool hold);
-
-    // Callbacks for linked behavior
-    std::function<void()> onClipReset;
-    std::function<void()> onPeakReset;
+    void setRenderState (const MeterRenderState& state);
+    void setClipResetCallback (Callback cb, void* ctx) noexcept;
+    void setPeakResetCallback (Callback cb, void* ctx) noexcept;
 
     void mouseDown (const juce::MouseEvent&) override;
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    void timerCallback() override;
-
 private:
-    float getScaleMinDb() const noexcept;
-    float getScaleMaxDb() const noexcept;
-    float clampForRenderDb (float db) const noexcept;
-    float dbToNorm (float db) const noexcept;
+    static float dbToNormForScale (float db, mdsp_ui::meters::MeterScaleMode mode) noexcept;
 
     mdsp_ui::UiContext& ui_;
-
-    const std::atomic<float>* peakDb_ = nullptr;
-    const std::atomic<float>* rmsDb_ = nullptr;
-    const std::atomic<bool>* clipLatched_ = nullptr;
+    MeterRenderState renderState_ {};
 
     juce::String label_;
-    juce::String numericTextPeak_;
-    juce::String numericTextRms_;
-
-    float cachedPeakDb_ = -120.0f;
-    float cachedRmsDb_  = -120.0f;
-    bool  cachedClip_   = false;
-    bool  isBypassed_   = false;
-
-    float cachedPeakNorm_ = 0.0f;
-    float cachedRmsNorm_  = 0.0f;
-    float maxPeakNorm_    = 0.0f;  // Normalized max peak for rendering hold marker
-
-    // Max Holds for Numeric Display
-    float maxPeakDb_ = -120.0f;
-    float maxRmsDb_  = -120.0f;
-
-    DisplayMode displayMode_ = DisplayMode::RMS;
-    ScaleMode scaleMode_ = ScaleMode::FullRange;
-    bool holdEnabled_ = false; // True-freeze peak hold
-
-    // Peak hold decay: time when peak last met or exceeded max (ms)
-    juce::int64 lastTimePeakAtOrAboveMax_ = 0;
+    juce::String numericTextPeak_ { "-inf" };
+    juce::String numericTextRms_ { "-inf" };
+    Callback onClipReset_ = nullptr;
+    Callback onPeakReset_ = nullptr;
+    void* onClipResetCtx_ = nullptr;
+    void* onPeakResetCtx_ = nullptr;
 
     juce::Rectangle<int> labelArea_;
     juce::Rectangle<int> ledArea_;
     juce::Rectangle<int> meterArea_;
     juce::Rectangle<int> numericArea_;
 };
-

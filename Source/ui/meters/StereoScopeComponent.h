@@ -1,60 +1,55 @@
 #pragma once
 
-#include <juce_gui_basics/juce_gui_basics.h>
-#include <juce_audio_basics/juce_audio_basics.h>
-#include <mdsp_ui/UiContext.h>
-#include "../../audio/IStereoScopeSink.h"
-#include <atomic>
+#include <array>
 
-class StereoScopeComponent : public juce::Component,
-                             public IStereoScopeSink,
-                             private juce::Timer
+#include <juce_gui_basics/juce_gui_basics.h>
+#include <mdsp_ui/UiContext.h>
+#include <mdsp_ui/scopes/StereoScopeRenderState.h>
+
+class StereoScopeComponent : public juce::Component
 {
 public:
+    using ScopeActionFn = void (*) (void*) noexcept;
+
     static constexpr int kDefaultMaxViewportSize = 360;
-    static constexpr int kFifoCapacity = 8192;
-    static constexpr int kMaxPointsPerFrame = 2048;
 
     explicit StereoScopeComponent (mdsp_ui::UiContext& ui);
-    ~StereoScopeComponent() override;
+    ~StereoScopeComponent() override = default;
 
     void setEnabled (bool enabled) noexcept;
-    bool isEnabled() const noexcept { return enabled_.load (std::memory_order_relaxed); }
-
-    void setPersistence (float p) noexcept;
-    float getPersistence() const noexcept { return persistence_.load (std::memory_order_relaxed); }
-
-    void setPointStride (int stride) noexcept;
-    int getPointStride() const noexcept { return pointStride_.load (std::memory_order_relaxed); }
+    bool isEnabled() const noexcept { return enabled_; }
 
     void setMaxViewportSize (int maxSize) noexcept;
 
-    void pushAudioBlock (const juce::AudioBuffer<float>& buffer, int startSample, int numSamples) noexcept override;
+    void setRenderState (const mdsp_ui::scopes::StereoScopeRenderState& state);
+    const mdsp_ui::scopes::StereoScopeRenderState& getRenderState() const noexcept { return state_; }
 
-    float getCorrelation() const noexcept { return correlation_.load (std::memory_order_relaxed); }
+    float getCorrelation() const noexcept { return state_.correlation; }
+
+    void setFreezeToggleCallback (ScopeActionFn fn, void* ctx) noexcept;
+    void setResetCallback (ScopeActionFn fn, void* ctx) noexcept;
+    void triggerFreezeToggle() noexcept;
+    void triggerReset() noexcept;
 
     void paint (juce::Graphics& g) override;
     void resized() override;
 
 private:
-    void timerCallback() override;
-    void drainFifoAndRender();
-    float computeCorrelation (const float* lr, int numPairs) const noexcept;
+    void rebuildCachedPaths();
 
     mdsp_ui::UiContext& ui_;
-    juce::AbstractFifo fifo_;
-    std::vector<float> fifoBuffer_;
-    std::vector<float> workBuffer_;
-    juce::Path tracePath_;
-
-    juce::Image accumImage_;
+    mdsp_ui::scopes::StereoScopeRenderState state_ {};
+    std::array<juce::Path, mdsp_ui::scopes::StereoScopeRenderState::kHistoryFrames> cachedHistoryPaths_ {};
+    juce::Path cachedLivePath_;
+    juce::Path cachedHoldPath_;
     juce::Rectangle<int> viewportRect_;
     int maxViewportSize_ = kDefaultMaxViewportSize;
+    bool enabled_ = true;
 
-    std::atomic<bool> enabled_ { true };
-    std::atomic<float> persistence_ { 0.85f };
-    std::atomic<int> pointStride_ { 1 };
-    std::atomic<float> correlation_ { 0.0f };
+    ScopeActionFn onFreezeToggle_ = nullptr;
+    void* freezeCtx_ = nullptr;
+    ScopeActionFn onReset_ = nullptr;
+    void* resetCtx_ = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StereoScopeComponent)
 };

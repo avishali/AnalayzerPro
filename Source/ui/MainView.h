@@ -3,6 +3,8 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <mdsp_ui/UiContext.h>
+#include <mdsp_ui/scopes/StereoScopeRenderStateProvider.h>
+#include <mdsp_ui/scopes/PhaseFanRenderStateProvider.h>
 #include "ui/tooltips/TooltipManager.h" // Added include
 #include "../PluginProcessor.h" // Added include
 #include "../control/AnalyzerProControlContext.h"
@@ -11,10 +13,11 @@
 #include "layout/ControlRail.h"
 #include "layout/FooterBar.h"
 #include "analyzer/AnalyzerDisplayView.h"
-#include "analyzer/StereoScopeView.h"
 #include "meters/MeterGroupComponent.h"
+#include "meters/StereoScopeComponent.h"
 #include "meters/PhaseFanScopeComponent.h"
 #include "loudness/LoudnessNumericPanel.h"
+#include <array>
 
 //==============================================================================
 /**
@@ -23,7 +26,8 @@
 */
 class MainView : public juce::Component,
                   public juce::AudioProcessorValueTreeState::Listener,
-                  public juce::KeyListener
+                  public juce::KeyListener,
+                  private juce::Timer
 {
 public:
     explicit MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce::AudioProcessorValueTreeState* apvts);
@@ -45,8 +49,6 @@ public:
     
     void setTooltipManager (mdsp_ui::TooltipManager* manager);
 
-    PhaseFanScopeComponent& getPhaseFanScopeComponent() noexcept { return phaseFanScopeComponent_; }
-
     enum class LayoutMode { Compact, Normal, Wide };
     static LayoutMode getLayoutMode (int width) noexcept;
 
@@ -66,6 +68,7 @@ public:
 private:
     void syncAnalyzerTraceConfig();
     void triggerResetPeaks();
+    void timerCallback() override;
 
     bool isShutdown = false;
     AnalayzerProAudioProcessor& audioProcessor;
@@ -86,11 +89,15 @@ private:
     void toggleRail();
     void animateRailWidth (int targetWidth);
     AnalyzerDisplayView analyzerView_;
-    StereoScopeView stereoScopeView_;
+    StereoScopeComponent stereoScopeComponent_;
     PhaseFanScopeComponent phaseFanScopeComponent_;
     LoudnessNumericPanel loudnessPanel_; // New Loudness Panel
     MeterGroupComponent outputMeters_;
     MeterGroupComponent inputMeters_;
+    mdsp_ui::scopes::StereoScopeRenderStateProvider stereoScopeProvider_;
+    mdsp_ui::scopes::PhaseFanRenderStateProvider phaseFanProvider_;
+    std::array<float, mdsp_ui::scopes::StereoScopeRenderState::kMaxPoints> scopeLeftScratch_ {};
+    std::array<float, mdsp_ui::scopes::StereoScopeRenderState::kMaxPoints> scopeRightScratch_ {};
 
 #if JUCE_DEBUG
     DebugRectCallback debugRectCallback_;

@@ -2,6 +2,8 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <mdsp_ui/UiContext.h>
+#include <mdsp_ui/meters/MeterRenderState.h>
+#include <mdsp_ui/meters/MeterRenderStateProvider.h>
 #include "../../PluginProcessor.h"
 #include "MeterComponent.h"
 
@@ -9,6 +11,9 @@ class MeterGroupComponent : public juce::Component,
                             private juce::Timer
 {
 public:
+    using DisplayMode = mdsp_ui::meters::MeterDisplayMode;
+    using ScaleMode = mdsp_ui::meters::MeterScaleMode;
+
     enum class GroupType
     {
         Output = 0,
@@ -30,14 +35,20 @@ public:
     // Enable/disable peak hold for both meters
     void setHoldEnabled (bool hold);
 
-    void setScaleMode (MeterComponent::ScaleMode mode);
-    MeterComponent::ScaleMode getScaleMode() const noexcept { return scaleMode_; }
+    void setScaleMode (ScaleMode mode);
+    ScaleMode getScaleMode() const noexcept { return scaleMode_; }
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
-    void setDisplayMode (MeterComponent::DisplayMode mode);
+    static void clipResetThunk (void* ctx) noexcept;
+    static void peakResetThunk (void* ctx) noexcept;
+
+    void handleClipReset() noexcept;
+    void handlePeakReset() noexcept;
+    void pushRenderStates();
+    void setDisplayMode (DisplayMode mode);
     void timerCallback() override;
 
     mdsp_ui::UiContext& ui_;
@@ -45,8 +56,8 @@ private:
     const GroupType type_;
 
     int channelCount_ = 2;
-    MeterComponent::DisplayMode displayMode_ = MeterComponent::DisplayMode::RMS;
-    MeterComponent::ScaleMode scaleMode_ = MeterComponent::ScaleMode::FullRange;
+    DisplayMode displayMode_ = DisplayMode::Rms;
+    ScaleMode scaleMode_ = ScaleMode::FullRange;
     ChannelMode channelMode_ = ChannelMode::Stereo; // Default Stereo
 
     juce::TextButton rmsButton_ { "RMS" };
@@ -57,6 +68,10 @@ private:
 
     std::unique_ptr<MeterComponent> meter0_;
     std::unique_ptr<MeterComponent> meter1_;
+    mdsp_ui::meters::MeterRenderStateProvider provider0_;
+    mdsp_ui::meters::MeterRenderStateProvider provider1_;
+    mdsp_ui::meters::MeterRenderState renderState0_ {};
+    mdsp_ui::meters::MeterRenderState renderState1_ {};
 
     juce::Rectangle<int> headerArea_;
     juce::Rectangle<int> labelArea_;
@@ -65,4 +80,3 @@ private:
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MeterGroupComponent)
 };
-

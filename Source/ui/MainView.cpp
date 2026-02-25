@@ -2,6 +2,7 @@
 #include "layout/LayoutConstants.h"
 #include "../PluginProcessor.h"
 #include <mdsp_ui/UiContext.h>
+#include <span>
 
 using namespace AnalyzerPro::Layout;
 
@@ -15,7 +16,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
       rail_ (ui_),
       footer_ (ui_),
       analyzerView_ (p),
-      stereoScopeView_ (ui, p.getAnalyzerEngine().getStereoScopeAnalyzer()),
+      stereoScopeComponent_ (ui_),
       phaseFanScopeComponent_ (ui),
       loudnessPanel_ (ui, p),
       outputMeters_ (ui_, p, MeterGroupComponent::GroupType::Output),
@@ -34,7 +35,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     railViewport_.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::never);
     addAndMakeVisible (footer_);
     addAndMakeVisible (analyzerView_);
-    addAndMakeVisible (stereoScopeView_);
+    addAndMakeVisible (stereoScopeComponent_);
     addAndMakeVisible (phaseFanScopeComponent_);
     addAndMakeVisible (loudnessPanel_);
     addAndMakeVisible (outputMeters_);
@@ -51,15 +52,13 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     });
     rail_.onPreferredHeightChanged = [this] { resized(); };
 
-    rail_.onScopeModeChanged = [this] (int id)
+    rail_.onScopeModeChanged = [] (int id)
     {
-        stereoScopeView_.setScopeMode (id == 2 ? StereoScopeView::ScopeMode::RMS : StereoScopeView::ScopeMode::Peak);
-        stereoScopeView_.repaint();
+        juce::ignoreUnused (id);
     };
-    rail_.onScopeShapeChanged = [this] (int id)
+    rail_.onScopeShapeChanged = [] (int id)
     {
-        stereoScopeView_.setScopeShape (id == 2 ? StereoScopeView::ScopeShape::Scatter : StereoScopeView::ScopeShape::Lissajous);
-        stereoScopeView_.repaint();
+        juce::ignoreUnused (id);
     };
 
     // Wire parameter changes to AnalyzerEngine and AnalyzerDisplayView.
@@ -173,8 +172,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     {
         if (auto* raw = apvts_->getRawParameterValue ("scopeChannelMode"))
         {
-            const int val = juce::roundToInt (raw->load());
-            stereoScopeView_.setChannelMode (val == 0 ? StereoScopeView::ChannelMode::Stereo : StereoScopeView::ChannelMode::MidSide);
+            juce::ignoreUnused (raw);
         }
         if (auto* raw = apvts_->getRawParameterValue ("meterChannelMode"))
         {
@@ -194,9 +192,14 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         if (auto* raw = apvts_->getRawParameterValue ("scopePeakHold"))
         {
             const bool hold = raw->load() > 0.5f;
-            phaseFanScopeComponent_.setPeakHoldEnabled (hold);  // Scope peak hold applies to PhaseFanScope only, not StereoScopeView
+            stereoScopeProvider_.setHoldEnabled (hold);
+            stereoScopeComponent_.setRenderState (stereoScopeProvider_.state());
+            phaseFanProvider_.setHoldEnabled (hold);
+            phaseFanScopeComponent_.setRenderState (phaseFanProvider_.state());
         }
     }
+
+    startTimerHz (30);
 
     //setSize (900, 650);  // Slightly bigger to fit all controls
 
@@ -238,9 +241,14 @@ void MainView::shutdown()
         apvts_->removeParameterListener ("analyzerShowSide", this);
         apvts_->removeParameterListener ("analyzerShowRMS", this);
         apvts_->removeParameterListener ("analyzerWeighting", this);
+        apvts_->removeParameterListener ("scopeChannelMode", this);
+        apvts_->removeParameterListener ("meterChannelMode", this);
+        apvts_->removeParameterListener ("meterPeakHold", this);
+        apvts_->removeParameterListener ("scopePeakHold", this);
     }
     
     // Shutdown child views that have timers/listeners
+    stopTimer();
     analyzerView_.shutdown();
     
     // Clear control binder attachments (must happen before controls are destroyed)
@@ -313,11 +321,9 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     {
         const int raw = juce::roundToInt (newValue);
         const int val = juce::jlimit (0, 1, raw);
-        juce::MessageManager::callAsync ([this, val]
+        juce::MessageManager::callAsync ([val]
         {
-            stereoScopeView_.resetHold();
-            stereoScopeView_.setChannelMode (val == 0 ? StereoScopeView::ChannelMode::Stereo : StereoScopeView::ChannelMode::MidSide);
-            stereoScopeView_.repaint();
+            juce::ignoreUnused (val);
         });
     }
     else if (parameterID == "meterChannelMode")
@@ -344,7 +350,10 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
         const bool hold = newValue > 0.5f;
         juce::MessageManager::callAsync ([this, hold]
         {
-            phaseFanScopeComponent_.setPeakHoldEnabled (hold);  // Scope peak hold: PhaseFanScope only
+            stereoScopeProvider_.setHoldEnabled (hold);
+            stereoScopeComponent_.setRenderState (stereoScopeProvider_.state());
+            phaseFanProvider_.setHoldEnabled (hold);
+            phaseFanScopeComponent_.setRenderState (phaseFanProvider_.state());
         });
     }
     else if (parameterID == "HoldPeaks")
@@ -482,8 +491,35 @@ void MainView::triggerResetPeaks()
 {
     audioProcessor.getAnalyzerEngine().resetPeaks();
     audioProcessor.resetMeterClipLatches();
+    stereoScopeProvider_.reset();
+    stereoScopeComponent_.setRenderState (stereoScopeProvider_.state());
+    phaseFanProvider_.resetPeakHold();
+    phaseFanScopeComponent_.setRenderState (phaseFanProvider_.state());
     analyzerView_.resetViewPeaks();
     analyzerView_.repaint();
+}
+
+void MainView::timerCallback()
+{
+    const int pulled = audioProcessor.pullStereoScopeSamples (scopeLeftScratch_.data(),
+                                                              scopeRightScratch_.data(),
+                                                              static_cast<int> (scopeLeftScratch_.size()));
+    if (pulled <= 0)
+    {
+        phaseFanProvider_.advanceNoSignal (1.0 / 30.0);
+        phaseFanScopeComponent_.setRenderState (phaseFanProvider_.state());
+        return;
+    }
+
+    stereoScopeProvider_.pushSamples (std::span<const float> (scopeLeftScratch_.data(), static_cast<size_t> (pulled)),
+                                      std::span<const float> (scopeRightScratch_.data(), static_cast<size_t> (pulled)),
+                                      audioProcessor.getStereoScopeSampleRate());
+    stereoScopeComponent_.setRenderState (stereoScopeProvider_.state());
+
+    phaseFanProvider_.pushSamples (std::span<const float> (scopeLeftScratch_.data(), static_cast<size_t> (pulled)),
+                                   std::span<const float> (scopeRightScratch_.data(), static_cast<size_t> (pulled)),
+                                   audioProcessor.getStereoScopeSampleRate());
+    phaseFanScopeComponent_.setRenderState (phaseFanProvider_.state());
 }
 
 void MainView::toggleRail()
@@ -714,7 +750,7 @@ void MainView::resized()
             auto stereoBounds = juce::Rectangle<int> (squareSize, squareSize)
                 .withPosition (scopeArea.getX(), scopeArea.getCentreY() - squareSize / 2);
             auto phaseFanArea = scopeArea.withTrimmedLeft (squareSize + gap);
-            stereoScopeView_.setBounds (stereoBounds);
+            stereoScopeComponent_.setBounds (stereoBounds);
             phaseFanScopeComponent_.setBounds (phaseFanArea);
         }
         if (bottomArea.getWidth() > 0 && bottomArea.getHeight() > 0)
@@ -735,7 +771,7 @@ void MainView::resized()
         debugRectCallback_ ("ControlRail", debugRail, juce::Colours::magenta);
         debugRectCallback_ ("InputMeters", inputMeters_.getBoundsInParent(), juce::Colours::green);
         debugRectCallback_ ("OutputMeters", outputMeters_.getBoundsInParent(), juce::Colours::green);
-        debugRectCallback_ ("StereoScope", stereoScopeView_.getBoundsInParent(), juce::Colours::lightblue);
+        debugRectCallback_ ("StereoScope", stereoScopeComponent_.getBoundsInParent(), juce::Colours::lightblue);
         debugRectCallback_ ("PhaseFanScope", phaseFanScopeComponent_.getBoundsInParent(), juce::Colours::lightgreen);
         debugRectCallback_ ("Loudness", loudnessPanel_.getBoundsInParent(), juce::Colours::orange);
     }
@@ -749,7 +785,7 @@ void MainView::setTooltipManager (mdsp_ui::TooltipManager* manager)
     // Register tooltips for known components
     if (tooltipManager_ != nullptr)
     {
-        tooltipManager_->registerTooltip (&stereoScopeView_, {
+        tooltipManager_->registerTooltip (&stereoScopeComponent_, {
             "stereoscope",
             "Stereo Scope",
             "Lissajous vectorscope showing stereo width and phase correlation.",

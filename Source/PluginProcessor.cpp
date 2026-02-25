@@ -324,6 +324,13 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     // Push mono (L+R mix) to spectrum queue for UI visualization
     spectrumBufferQueue_.push (buffer, 0, numAnalChannels > 1 ? 1 : -1);
+    if (numAnalChannels > 0)
+    {
+        stereoScopeQueueL_.push (analysisBuffer.getReadPointer (0), n);
+        const float* right = (numAnalChannels > 1) ? analysisBuffer.getReadPointer (1)
+                                                   : analysisBuffer.getReadPointer (0);
+        stereoScopeQueueR_.push (right, n);
+    }
 
     // DECOUPLED: Analysis buffer always carries Stereo L/R.
     // Downstream consumers (Scope, Meters) can decide how to view it.
@@ -485,8 +492,6 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         {
              analyzerEngine.processBlock (analysisBuffer); // Feed transformed buffer
              loudnessAnalyzer.process (analysisBuffer);    // Feed transformed buffer
-             if (auto* sink = stereoScopeSink_.load (std::memory_order_relaxed))
-                 sink->pushAudioBlock (analysisBuffer, 0, n);
         }
         
 
@@ -576,9 +581,21 @@ int AnalayzerProAudioProcessor::getMeterOutputChannelCount() const noexcept
     return juce::jlimit (1, 2, getTotalNumOutputChannels());
 }
 
-void AnalayzerProAudioProcessor::setStereoScopeSink (IStereoScopeSink* sink) noexcept
+int AnalayzerProAudioProcessor::pullStereoScopeSamples (float* left, float* right, int maxSamples) noexcept
 {
-    stereoScopeSink_.store (sink, std::memory_order_release);
+    if (left == nullptr || right == nullptr || maxSamples <= 0)
+        return 0;
+
+    const int leftCount = stereoScopeQueueL_.pull (left, maxSamples);
+    const int rightCount = stereoScopeQueueR_.pull (right, maxSamples);
+    const int count = juce::jmin (leftCount, rightCount);
+
+    for (int i = count; i < leftCount; ++i)
+        left[i] = 0.0f;
+    for (int i = count; i < rightCount; ++i)
+        right[i] = 0.0f;
+
+    return count;
 }
 
 void AnalayzerProAudioProcessor::resetMeterClipLatches() noexcept

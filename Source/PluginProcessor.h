@@ -4,7 +4,6 @@
 #include <atomic>
 #include "parameters/Parameters.h"
 #include "analyzer/AnalyzerEngine.h" 
-#include "audio/IStereoScopeSink.h"
 #include "hardware/HardwareMeterMapper.h"
 #include "hardware/SoftwareMeterSink.h"
 #include "presets/PresetManager.h"
@@ -104,10 +103,11 @@ public:
     /** Lock-free queue of mono samples for spectrum visualization (UI reads, processBlock pushes). */
     mdsp::core::AudioBufferQueue& getSpectrumBufferQueue() noexcept { return spectrumBufferQueue_; }
     const mdsp::core::AudioBufferQueue& getSpectrumBufferQueue() const noexcept { return spectrumBufferQueue_; }
+    int pullStereoScopeSamples (float* left, float* right, int maxSamples) noexcept;
+    double getStereoScopeSampleRate() const noexcept { return meterSampleRate_; }
 
     void setEditorSize (int width, int height) noexcept { parameters.setEditorSize (width, height); }
 
-    void setStereoScopeSink (IStereoScopeSink* sink) noexcept;
     int getEditorWidth() const noexcept { return parameters.getEditorWidth(); }
     int getEditorHeight() const noexcept { return parameters.getEditorHeight(); }
     
@@ -164,9 +164,10 @@ private:
     // Queue for spectrum: audio thread pushes mono, message thread pulls and runs FFT
     static constexpr int kSpectrumQueueCapacity = 8192;
     mdsp::core::AudioBufferQueue spectrumBufferQueue_ { kSpectrumQueueCapacity };
+    static constexpr int kStereoScopeQueueCapacity = 16384;
+    mdsp::core::AudioBufferQueue stereoScopeQueueL_ { kStereoScopeQueueCapacity };
+    mdsp::core::AudioBufferQueue stereoScopeQueueR_ { kStereoScopeQueueCapacity };
 
-    std::atomic<IStereoScopeSink*> stereoScopeSink_ { nullptr };
-    
     // Cached parameter pointers
     std::atomic<float>* pFftSize_ = nullptr;
     std::atomic<float>* pAveraging_ = nullptr;
