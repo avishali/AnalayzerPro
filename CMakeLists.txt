@@ -43,6 +43,7 @@ set(NEEDS_MIDI_INPUT FALSE CACHE BOOL "Does the plugin need MIDI input?")
 set(NEEDS_MIDI_OUTPUT FALSE CACHE BOOL "Does the plugin need MIDI output?")
 set(IS_MIDI_EFFECT FALSE CACHE BOOL "Is this a MIDI effect?")
 set(EDITOR_WANTS_KEYBOARD_FOCUS FALSE CACHE BOOL "Does the editor need keyboard focus?")
+set(AAX_SDK_PATH "" CACHE PATH "Path to AAX SDK root (contains Interfaces/ACF)")
 
 # ==============================================================================
 # DEV MODE (define BEFORE first use)
@@ -184,6 +185,17 @@ endif()
 # ==============================================================================
 
 add_subdirectory("${JUCE_PATH}" "${CMAKE_CURRENT_BINARY_DIR}/JUCE" EXCLUDE_FROM_ALL)
+
+# Prefer explicit AAX SDK path for reproducible local/CI builds.
+# Fallback to env var when cache variable is not provided.
+if ((AAX_SDK_PATH STREQUAL "") AND DEFINED ENV{AAX_SDK_PATH})
+    set(AAX_SDK_PATH "$ENV{AAX_SDK_PATH}")
+endif()
+
+if (NOT AAX_SDK_PATH STREQUAL "")
+    juce_set_aax_sdk_path("${AAX_SDK_PATH}")
+    message(STATUS "AnalyzerPro: using AAX SDK from: ${AAX_SDK_PATH}")
+endif()
 
 # ==============================================================================
 # MelechDSP SDK (from HQ_DIR)

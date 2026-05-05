@@ -24,6 +24,10 @@
                 "JUCE_PATH": {
                     "type": "PATH",
                     "value": "$env{JUCE_PATH}"
+                },
+                "AAX_SDK_PATH": {
+                    "type": "PATH",
+                    "value": "$env{AAX_SDK_PATH}"
                 }
             }
         },
@@ -45,6 +49,10 @@
                 "JUCE_PATH": {
                     "type": "PATH",
                     "value": "$env{JUCE_PATH}"
+                },
+                "AAX_SDK_PATH": {
+                    "type": "PATH",
+                    "value": "$env{AAX_SDK_PATH}"
                 }
             }
         },
@@ -63,6 +71,10 @@
                 "JUCE_PATH": {
                     "type": "PATH",
                     "value": "$env{JUCE_PATH}"
+                },
+                "AAX_SDK_PATH": {
+                    "type": "PATH",
+                    "value": "$env{AAX_SDK_PATH}"
                 }
             }
         },
@@ -87,6 +99,10 @@
                 "JUCE_PATH": {
                     "type": "PATH",
                     "value": "$env{JUCE_PATH}"
+                },
+                "AAX_SDK_PATH": {
+                    "type": "PATH",
+                    "value": "$env{AAX_SDK_PATH}"
                 }
             }
         },
@@ -107,6 +123,10 @@
                 "JUCE_PATH": {
                     "type": "PATH",
                     "value": "$env{JUCE_PATH}"
+                },
+                "AAX_SDK_PATH": {
+                    "type": "PATH",
+                    "value": "$env{AAX_SDK_PATH}"
                 }
             }
         },
@@ -127,6 +147,10 @@
                 "JUCE_PATH": {
                     "type": "PATH",
                     "value": "$env{JUCE_PATH}"
+                },
+                "AAX_SDK_PATH": {
+                    "type": "PATH",
+                    "value": "$env{AAX_SDK_PATH}"
                 }
             }
         }
