@@ -11,13 +11,14 @@ cd "$PROJECT_ROOT"
 
 # Configuration
 PLUGIN_NAME="AnalyzerPro"
-PLUGIN_VERSION="1.0.0"
+PLUGIN_VERSION="1.1.1"
 COMPANY_NAME="MelecDSP"
-BUILD_DIR="build-release"
+BUILD_DIR="build-release-macos-universal"
 ARTIFACTS_DIR="$BUILD_DIR/${PLUGIN_NAME}_artefacts/Release"
 INSTALLER_DIR="$PROJECT_ROOT/installer"
 TEMP_DIR="$INSTALLER_DIR/temp"
 PAYLOAD_DIR="$TEMP_DIR/payload"
+INSTALL_DOMAIN="${INSTALL_DOMAIN:-user}" # user|system
 
 echo "=========================================="
 echo "  AnalyzerPro Installer Creator"
@@ -38,10 +39,22 @@ echo "🧹 Preparing installer directories..."
 rm -rf "$INSTALLER_DIR"
 mkdir -p "$PAYLOAD_DIR"
 
-# Create standard plugin directories in payload
-mkdir -p "$PAYLOAD_DIR/Library/Audio/Plug-Ins/Components"
-mkdir -p "$PAYLOAD_DIR/Library/Audio/Plug-Ins/VST3"
-mkdir -p "$PAYLOAD_DIR/Applications"
+# Create payload tree (domain-aware)
+if [ "$INSTALL_DOMAIN" = "system" ]; then
+    INSTALL_LOCATION="/"
+    DEST_COMPONENTS="Library/Audio/Plug-Ins/Components"
+    DEST_VST3="Library/Audio/Plug-Ins/VST3"
+    DEST_APPS="Applications"
+else
+    INSTALL_LOCATION="\$HOME"
+    DEST_COMPONENTS="Library/Audio/Plug-Ins/Components"
+    DEST_VST3="Library/Audio/Plug-Ins/VST3"
+    DEST_APPS="Applications"
+fi
+
+mkdir -p "$PAYLOAD_DIR/$DEST_COMPONENTS"
+mkdir -p "$PAYLOAD_DIR/$DEST_VST3"
+mkdir -p "$PAYLOAD_DIR/$DEST_APPS"
 
 # Copy plugins to payload
 echo ""
@@ -51,19 +64,19 @@ echo ""
 # Copy AU
 if [ -d "$ARTIFACTS_DIR/AU/${PLUGIN_NAME}.component" ]; then
     echo "  ✓ Copying AU..."
-    cp -R "$ARTIFACTS_DIR/AU/${PLUGIN_NAME}.component" "$PAYLOAD_DIR/Library/Audio/Plug-Ins/Components/"
+    cp -R "$ARTIFACTS_DIR/AU/${PLUGIN_NAME}.component" "$PAYLOAD_DIR/$DEST_COMPONENTS/"
 fi
 
 # Copy VST3
 if [ -d "$ARTIFACTS_DIR/VST3/${PLUGIN_NAME}.vst3" ]; then
     echo "  ✓ Copying VST3..."
-    cp -R "$ARTIFACTS_DIR/VST3/${PLUGIN_NAME}.vst3" "$PAYLOAD_DIR/Library/Audio/Plug-Ins/VST3/"
+    cp -R "$ARTIFACTS_DIR/VST3/${PLUGIN_NAME}.vst3" "$PAYLOAD_DIR/$DEST_VST3/"
 fi
 
 # Copy Standalone
 if [ -d "$ARTIFACTS_DIR/Standalone/${PLUGIN_NAME}.app" ]; then
     echo "  ✓ Copying Standalone..."
-    cp -R "$ARTIFACTS_DIR/Standalone/${PLUGIN_NAME}.app" "$PAYLOAD_DIR/Applications/"
+    cp -R "$ARTIFACTS_DIR/Standalone/${PLUGIN_NAME}.app" "$PAYLOAD_DIR/$DEST_APPS/"
 fi
 
 # AAX requires special handling (Pro Tools signing)
@@ -88,12 +101,12 @@ This installer will copy the following components:
 
 1. AU (Audio Unit): ~/Library/Audio/Plug-Ins/Components/
 2. VST3: ~/Library/Audio/Plug-Ins/VST3/
-3. Standalone App: /Applications/
+3. Standalone App: ~/Applications/
 
 SYSTEM REQUIREMENTS
 ===================
 
-- macOS 10.13 or later
+- macOS 10.15 or later
 - Intel or Apple Silicon Mac
 - Compatible DAW (for AU/VST3 plugins)
 
@@ -117,6 +130,7 @@ echo "🔨 Creating macOS installer package..."
 echo ""
 
 PKG_OUTPUT="$INSTALLER_DIR/${PLUGIN_NAME}-${PLUGIN_VERSION}-macOS.pkg"
+COMPONENT_PKG="$TEMP_DIR/${PLUGIN_NAME}-component.pkg"
 
 # Create component plist for better compatibility with macOS 15+
 COMPONENT_PLIST="$TEMP_DIR/component.plist"
@@ -135,7 +149,7 @@ cat > "$COMPONENT_PLIST" << EOF
         <key>BundleOverwriteAction</key>
         <string>upgrade</string>
         <key>RootRelativeBundlePath</key>
-        <string>Library/Audio/Plug-Ins/Components/${PLUGIN_NAME}.component</string>
+        <string>${DEST_COMPONENTS}/${PLUGIN_NAME}.component</string>
     </dict>
 </array>
 </plist>
@@ -145,10 +159,36 @@ pkgbuild \
     --root "$PAYLOAD_DIR" \
     --identifier "com.melechdsp.${PLUGIN_NAME}" \
     --version "$PLUGIN_VERSION" \
-    --install-location "/" \
+    --install-location "$INSTALL_LOCATION" \
     --component-plist "$COMPONENT_PLIST" \
-    --min-os-version "10.13" \
-    "$PKG_OUTPUT"
+    --min-os-version "10.15" \
+    "$COMPONENT_PKG"
+
+if [ "$INSTALL_DOMAIN" = "user" ]; then
+    DIST_XML="$TEMP_DIR/Distribution.xml"
+    cat > "$DIST_XML" << EOF
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+  <title>${PLUGIN_NAME} ${PLUGIN_VERSION}</title>
+  <options customize="never" require-scripts="false"/>
+  <domains enable_anywhere="false" enable_currentUserHome="true" enable_localSystem="false"/>
+  <choices-outline>
+    <line choice="default"/>
+  </choices-outline>
+  <choice id="default" visible="false" title="${PLUGIN_NAME}">
+    <pkg-ref id="com.melechdsp.${PLUGIN_NAME}"/>
+  </choice>
+  <pkg-ref id="com.melechdsp.${PLUGIN_NAME}" version="${PLUGIN_VERSION}" onConclusion="none">${PLUGIN_NAME}-component.pkg</pkg-ref>
+</installer-gui-script>
+EOF
+
+    productbuild \
+        --distribution "$DIST_XML" \
+        --package-path "$TEMP_DIR" \
+        "$PKG_OUTPUT"
+else
+    cp "$COMPONENT_PKG" "$PKG_OUTPUT"
+fi
 
 if [ $? -ne 0 ]; then
     echo "❌ Package creation failed!"
