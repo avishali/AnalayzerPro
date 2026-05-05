@@ -98,6 +98,45 @@ installer/
 
 ---
 
+#### `release_sign_macos.sh`
+**Fast macOS signing helper for release artifacts.**
+
+```bash
+export DEVELOPER_ID_APP="Developer ID Application: Your Name (TEAMID)"
+./scripts/release_sign_macos.sh
+```
+
+Signs in-place:
+- `Standalone/.app`
+- `AU/.component`
+- `VST3/.vst3`
+- `AAX/.aaxplugin`
+
+---
+
+#### `release_sign_windows.ps1`
+**Windows Authenticode signing helper template.**
+
+```powershell
+.\scripts\release_sign_windows.ps1 -CertThumbprint <YOUR_CERT_THUMBPRINT>
+```
+
+Signs in-place:
+- Standalone `.exe`
+- VST3 binary
+- AAX binary
+
+---
+
+#### `release_publish_github.sh`
+**Create git tag and GitHub release from master.**
+
+```bash
+./scripts/release_publish_github.sh v1.1.1 "AnalyzerPro v1.1.1" docs/QA_AAX_V1_1_1.md
+```
+
+---
+
 ### Utility Scripts
 
 #### `clean_build.sh`
