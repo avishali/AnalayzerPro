@@ -124,8 +124,26 @@ void MeterComponent::paint (juce::Graphics& g)
     if (mainH > 0.5f)
     {
         auto mainRect = meterArea_.withTop (static_cast<int> (std::round (mainTop)));
+        const auto mainRectF = mainRect.toFloat();
+
+        // Keep incoming signal visually in front with a subtle soft glow.
+        juce::ColourGradient signalGlow (theme.accent.withAlpha (0.34f),
+                                         xLeft + (width * 0.5f), mainTop,
+                                         theme.accent.withAlpha (0.05f),
+                                         xLeft + (width * 0.5f), yMax,
+                                         false);
+        g.setGradientFill (signalGlow);
+        g.fillRoundedRectangle (mainRectF.expanded (1.0f, 0.0f), m.rSmall);
+
         g.setColour (theme.accent.withAlpha (0.85f));
-        g.fillRoundedRectangle (mainRect.toFloat(), m.rSmall);
+        g.fillRoundedRectangle (mainRectF, m.rSmall);
+
+        g.setColour (theme.accent.brighter (0.22f).withAlpha (0.72f));
+        g.drawLine (xLeft + 1.0f,
+                    mainTop + 0.5f,
+                    xRight - 1.0f,
+                    mainTop + 0.5f,
+                    m.strokeThin);
     }
 
     const float peakTop = yMax - (renderState_.peakNorm * h);
@@ -179,7 +197,7 @@ void MeterComponent::paint (juce::Graphics& g)
             const float norm = dbToNormForScale (db, renderState_.scaleMode);
             const float y = yMax - (norm * h);
             const bool isZero = (i == 0);
-            g.setColour (isZero ? theme.text.withAlpha (0.95f) : theme.text.withAlpha (0.6f));
+            g.setColour (isZero ? theme.text.withAlpha (0.50f) : theme.text.withAlpha (0.26f));
             g.drawLine (xLeft, y, xRight, y, isZero ? kDbScaleLine0Db : kDbScaleLineDense);
 
             if ((i % 3) == 0)
@@ -198,7 +216,7 @@ void MeterComponent::paint (juce::Graphics& g)
                 }
                 if (label != nullptr)
                 {
-                    g.setColour (theme.text);
+                    g.setColour (theme.text.withAlpha (0.44f));
                     g.drawText (label,
                                 juce::Rectangle<float> (xLeft, y - 5.0f, width, 10.0f),
                                 juce::Justification::centred);
@@ -214,7 +232,7 @@ void MeterComponent::paint (juce::Graphics& g)
             const float norm = dbToNormForScale (db, renderState_.scaleMode);
             const float y = yMax - (norm * h);
             const bool isZero = (i == 0);
-            g.setColour (isZero ? theme.text.withAlpha (0.95f) : theme.text.withAlpha (0.6f));
+            g.setColour (isZero ? theme.text.withAlpha (0.50f) : theme.text.withAlpha (0.26f));
             g.drawLine (xLeft, y, xRight, y, isZero ? kDbScaleLine0Db : kDbScaleLineDense);
 
             if ((i % 2) == 0)
@@ -233,7 +251,7 @@ void MeterComponent::paint (juce::Graphics& g)
                 }
                 if (label != nullptr)
                 {
-                    g.setColour (theme.text);
+                    g.setColour (theme.text.withAlpha (0.44f));
                     g.drawText (label,
                                 juce::Rectangle<float> (xLeft, y - 5.0f, width, 10.0f),
                                 juce::Justification::centred);
@@ -251,7 +269,7 @@ void MeterComponent::paint (juce::Graphics& g)
             const float lineW = nearTick (db, 0.0f) ? kDbScaleLine0Db : kDbScaleLineThin;
             if (nearTick (db, 0.0f))
             {
-                g.setColour (theme.text.withAlpha (0.95f));
+                g.setColour (theme.text.withAlpha (0.55f));
                 g.drawLine (xLeft, y, xRight, y, lineW);
             }
             else if (db > 0.0f)
@@ -261,7 +279,7 @@ void MeterComponent::paint (juce::Graphics& g)
             }
             else
             {
-                g.setColour (theme.text.withAlpha (0.75f));
+                g.setColour (theme.text.withAlpha (0.32f));
                 g.drawLine (xLeft, y, xRight, y, lineW);
             }
 
@@ -276,7 +294,7 @@ void MeterComponent::paint (juce::Graphics& g)
 
             if (label != nullptr)
             {
-                g.setColour (db >= 0.0f ? theme.danger : theme.text);
+                g.setColour (db >= 0.0f ? theme.danger.withAlpha (0.72f) : theme.text.withAlpha (0.46f));
                 g.drawText (label,
                             juce::Rectangle<float> (xLeft, y - 5.0f, width, 10.0f),
                             juce::Justification::centred);
