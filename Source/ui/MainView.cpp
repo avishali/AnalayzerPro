@@ -45,6 +45,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     header_.setControlBinder (controls_.getBinder());
     header_.setManagers (&p.getPresetManager(), &p.getABStateManager());
     header_.onRailToggleClicked = [this] { toggleRail(); };
+    header_.setRailOpen (railIsOpen_);
     rail_.setControlBinder (controls_.getBinder());
     rail_.setResetPeaksCallback ([this]
     {
@@ -524,7 +525,9 @@ void MainView::timerCallback()
 
 void MainView::toggleRail()
 {
+    railAnimator_.cancelAnimation (&railViewport_, false);
     railIsOpen_ = !railIsOpen_;
+    header_.setRailOpen (railIsOpen_);
     
     // Calculate target width based on state
     auto mode = getLayoutMode (getWidth());
@@ -542,18 +545,17 @@ void MainView::toggleRail()
 
 void MainView::animateRailWidth (int targetWidth)
 {
-    // Use ComponentAnimator to smoothly animate the viewport bounds
     auto currentBounds = railViewport_.getBounds();
-    auto targetBounds = currentBounds.withWidth (targetWidth);
+    const int rightEdge = currentBounds.getRight();
+    auto targetBounds = currentBounds.withX (rightEdge - targetWidth).withWidth (targetWidth);
     
-    // Animate the viewport - ComponentAnimator will update bounds during animation
     railAnimator_.animateComponent (&railViewport_,
                                     targetBounds,
                                     1.0f,
-                                    300, // 300ms animation duration
-                                    false, // don't use proxy
-                                    0.0,  // start speed (ease in)
-                                    0.0); // end speed (ease out)
+                                    300,
+                                    false,
+                                    0.0,
+                                    0.0);
     
     // Set up a timer to update layout during animation
     // ComponentAnimator updates the viewport bounds, but we need to update other components
@@ -694,17 +696,14 @@ void MainView::resized()
     if (bounds.isEmpty())
         return;
 
-    // Calculate rail width - use animated width if animating, otherwise calculate normally
     auto mode = getLayoutMode (bounds.getWidth());
     int railWidth;
     if (railAnimator_.isAnimating (&railViewport_))
     {
-        // During animation, use the current viewport width
         railWidth = railViewport_.getWidth();
     }
     else
     {
-        // Normal calculation
         railWidth = railIsOpen_ ? AnalyzerPro::Layout::railNormalWidth : 0;
         if (railIsOpen_ && mode == LayoutMode::Wide)
             railWidth = juce::jmin (AnalyzerPro::Layout::railWideWidth, bounds.getWidth() / 4);
@@ -713,16 +712,21 @@ void MainView::resized()
         animatedRailWidth_ = railWidth; // Update stored width
     }
 
-    auto railArea = bounds.removeFromRight (railWidth);
-    if (railArea.getWidth() > 0 && railArea.getHeight() > 0)
+    auto railArea = bounds.removeFromRight (juce::jmax (0, railWidth));
+    rail_.setLayoutMode (static_cast<int> (mode));
+    railViewport_.setVisible (railArea.getWidth() > 0 && railArea.getHeight() > 0);
+    railViewport_.setBounds (railArea);
+    if (railViewport_.isVisible())
     {
         const int viewY = railViewport_.getViewPosition().getY();
-        rail_.setLayoutMode (static_cast<int> (mode));
-        railViewport_.setBounds (railArea);
         const int preferredH = rail_.getPreferredHeight();
         rail_.setBounds (0, 0, railViewport_.getWidth(), preferredH);
         const int maxY = juce::jmax (0, preferredH - railArea.getHeight());
         railViewport_.setViewPosition (0, juce::jlimit (0, maxY, viewY));
+    }
+    else
+    {
+        rail_.setBounds (0, 0, 0, 0);
     }
 #if JUCE_DEBUG
     debugRail = railArea;

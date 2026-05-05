@@ -53,6 +53,9 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     , lastDebugLogTime_ (juce::Time::getCurrentTime())
 #endif
 {
+    theme_.seriesRms = juce::Colours::lightblue.withAlpha (theme_.seriesRms.getFloatAlpha());
+    theme_.seriesPeak = juce::Colour (0xffffff33).withAlpha (theme_.seriesPeak.getFloatAlpha());
+    theme_.seriesHold = theme_.seriesPeak;
     addAndMakeVisible (analyzerBridgeWidget_);
     // Analyzer display widget owns render/model/controller internals.
     analyzerBridgeWidget_.setGetTheme ([this]() -> const mdsp_ui::Theme& { return theme_; });

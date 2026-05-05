@@ -96,6 +96,25 @@ public:
     {
         const juce::Rectangle<float> fillR = snapRectToPixels (button.getLocalBounds().toFloat());
 
+        // Rail toggle: compact icon button with centered chevron.
+        if (button.getComponentID() == "rail-toggle")
+        {
+            const float radius = snapRadius (juce::jmin (ui_.metrics().rMed, fillR.getHeight() * 0.5f));
+            const float strokeRadius = snapRadius (juce::jmax (0.0f, radius - 0.5f));
+            const juce::Rectangle<float> strokeR = insetForInsideStroke (fillR, kInsideStrokePx);
+            auto style = mdsp_ui::makeToggleButtonStyle (ui_, button.getToggleState(), button.isEnabled());
+            juce::Colour bgColour, borderColour;
+            getStateColours (button, style, bgColour, borderColour);
+            g.setColour (bgColour);
+            g.fillRoundedRectangle (fillR, radius);
+            g.setColour (borderColour);
+            g.drawRoundedRectangle (strokeR, strokeRadius, kInsideStrokePx);
+            g.setColour (button.isEnabled() ? style.text : style.textDisabled);
+            g.setFont (ui_.type().labelFont());
+            g.drawFittedText (button.getButtonText(), fillR.toNearestInt(), juce::Justification::centred, 1);
+            return;
+        }
+
         // Bypass button: icon-only pill. For ToggleButton, JUCE draws via drawToggleButton (not drawButtonBackground).
         if (button.getComponentID() == "bypass")
         {
@@ -315,12 +334,11 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     addAndMakeVisible (bypassButton);
 
     // Control Rail Toggle
-    railToggleButton.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x98\xb0")));  // ☰ hamburger
+    railToggleButton.setComponentID ("rail-toggle");
     railToggleButton.setClickingTogglesState (true);
-    railToggleButton.setToggleState (true, juce::dontSendNotification); // Default: rail is open
     railToggleButton.setColour (juce::ToggleButton::tickColourId, theme.accent);
     railToggleButton.setColour (juce::TextButton::buttonColourId, theme.panel);
-    railToggleButton.setTooltip ("Toggle control rail visibility");
+    setRailOpen (true);
     railToggleButton.onClick = [this]
     {
         if (onRailToggleClicked)
@@ -357,6 +375,7 @@ void HeaderBar::resized()
     const int gapX = 8;
     const int comboW = 112;
     const int smallBtnW = 22;
+    const int railBtnW = juce::jmax (60, juce::jlimit (1, 999, m.headerButtonW));
     const int presetW = juce::jlimit (1, 999, m.headerButtonW);
     const int bypassW = juce::jlimit (1, 999, m.headerButtonW);
 
@@ -369,12 +388,17 @@ void HeaderBar::resized()
     const int rowCentreY = row.getCentreY();
     const int y = static_cast<int> (std::round (static_cast<float> (rowCentreY) - buttonH * 0.5f));
 
-    const int rightZoneWidth = comboW + gapX + presetW + gapX + smallBtnW + gapX + smallBtnW + gapX + bypassW + gapX + smallBtnW;
+    const bool hasPeakRange = peakRangeBox_.getParentComponent() == this;
+    const int peakRangeW = hasPeakRange ? (comboW + gapX) : 0;
+    const int rightZoneWidth = peakRangeW + presetW + gapX + presetW + gapX + smallBtnW + gapX + smallBtnW + gapX + bypassW + gapX + railBtnW;
     const juce::Rectangle<int> rightZone (row.getRight() - rightZoneWidth, row.getY(), rightZoneWidth, row.getHeight());
     int x = rightZone.getX();
 
-    peakRangeBox_.setBounds (x, y, comboW, buttonH);
-    x += comboW + gapX;
+    if (hasPeakRange)
+    {
+        peakRangeBox_.setBounds (x, y, comboW, buttonH);
+        x += comboW + gapX;
+    }
 
     presetButton.setBounds (x, y, presetW, buttonH);
     x += presetW + gapX;
@@ -391,7 +415,7 @@ void HeaderBar::resized()
     bypassButton.setBounds (x, y, bypassW, buttonH);
     x += bypassW + gapX;
 
-    const int railW = juce::jmin (smallBtnW, rightZone.getRight() - x);
+    const int railW = juce::jmin (railBtnW, rightZone.getRight() - x);
     railToggleButton.setBounds (x, y, railW, buttonH);
 
     const juce::Rectangle<int> area (row.getX(), row.getY(), rightZone.getX() - row.getX(), row.getHeight());
@@ -455,4 +479,11 @@ void HeaderBar::updateActiveSlot()
 void HeaderBar::setPeakRangeSelectedId (int id)
 {
     peakRangeBox_.setSelectedId (id, juce::dontSendNotification);
+}
+
+void HeaderBar::setRailOpen (bool isOpen)
+{
+    railToggleButton.setToggleState (isOpen, juce::dontSendNotification);
+    railToggleButton.setButtonText (isOpen ? "Hide" : "Show");
+    railToggleButton.setTooltip (isOpen ? "Collapse right control rail" : "Expand right control rail");
 }

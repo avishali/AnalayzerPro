@@ -735,14 +735,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
         "Averaging", "Smoothing",
         juce::StringArray { "Off", "1/24 Oct", "1/12 Oct", "1/6 Oct", "1/3 Oct", "1 Octave" },
-        3,  // Default: 1/6 Oct (index 3)
+        0,  // Default: Off (matches saved Default preset)
         "Smoothing"));
     
     // Analyzer Hold Peaks (bool, default false - normal decay)
     // Consolidates old "PeakHold" (enable) and "Hold" (freeze)
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         "HoldPeaks", "Hold Peaks",
-        false,  // Default: off (decaying peaks)
+        true,  // Default: on (matches saved Default preset)
         "Hold Peaks"));
     
     // Analyzer Peak Decay (Re-purposed as "Release Time" - 100ms to 5000ms)
@@ -751,14 +751,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
         // Actually, let's keep ID "PeakDecay" to avoid breaking ALL presets if not required, but strict read says "Rename parameter".
         // I will change ID to "ReleaseTime" to reflect the shift from dB/s to ms.
         juce::NormalisableRange<float> (100.0f, 5000.0f, 10.0f),
-        450.0f,  // Default: 450ms
+        190.0f,  // Default: 190ms (matches saved Default preset)
         "Release Time (ms)"));
 
     // Analyzer Display Gain (-24..+24 dB, default 0.0 dB, step 0.5 dB)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "DisplayGain", "Display Gain",
         juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), // Changed step to 0.1 for precision
-        0.0f,  // Default: -0 dB
+        -2.5f,  // Default: -2.5 dB (matches saved Default preset)
         "Display Gain (dB)"));
     
     // Analyzer Tilt (choice: Flat=0, Pink=1, White=2)
@@ -846,13 +846,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
     // Meter Peak Hold
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         "meterPeakHold", "Meter Peak Hold",
-        true,  // Default: On
+        false,  // Default: Off (matches saved Default preset)
         "Meter Peak Hold"));
 
     // Scope Peak Hold
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         "scopePeakHold", "Scope Peak Hold",
-        false,  // Default: Off
+        true,  // Default: On (matches saved Default preset)
         "Scope Peak Hold"));
 
     

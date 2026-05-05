@@ -26,6 +26,7 @@ public:
 
     std::function<void (int)> onPeakRangeChanged;
     void setPeakRangeSelectedId (int id);
+    void setRailOpen (bool isOpen);
 
     // Control Rail Toggle
     std::function<void()> onRailToggleClicked;

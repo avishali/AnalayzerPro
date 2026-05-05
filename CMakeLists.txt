@@ -30,9 +30,9 @@ endif()
 # ==============================================================================
 
 set(PLUGIN_NAME "AnalyzerPro" CACHE STRING "Plugin name")
-set(PLUGIN_VERSION_MAJOR 1 CACHE STRING "Plugin version major")
-set(PLUGIN_VERSION_MINOR 0 CACHE STRING "Plugin version minor")
-set(PLUGIN_VERSION_PATCH 0 CACHE STRING "Plugin version patch")
+set(PLUGIN_VERSION_MAJOR 1 CACHE STRING "Plugin version major" FORCE)
+set(PLUGIN_VERSION_MINOR 1 CACHE STRING "Plugin version minor" FORCE)
+set(PLUGIN_VERSION_PATCH 1 CACHE STRING "Plugin version patch" FORCE)
 set(COMPANY_NAME "MelecDSP" CACHE STRING "Company name")
 set(PLUGIN_CODE "AnPr" CACHE STRING "4-character plugin code (e.g., Tmpl)")
 set(MANUFACTURER_CODE "Melc" CACHE STRING "4-character manufacturer code (e.g., Tmpl) - must have at least one uppercase letter")
