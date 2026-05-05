@@ -24,6 +24,10 @@
                 "JUCE_PATH": {
                     "type": "PATH",
                     "value": "$env{JUCE_PATH}"
+                },
+                "AAX_SDK_PATH": {
+                    "type": "PATH",
+                    "value": "$env{AAX_SDK_PATH}"
                 }
             }
         },
@@ -45,6 +49,10 @@
                 "JUCE_PATH": {
                     "type": "PATH",
                     "value": "$env{JUCE_PATH}"
+                },
+                "AAX_SDK_PATH": {
+                    "type": "PATH",
+                    "value": "$env{AAX_SDK_PATH}"
                 }
             }
         },
@@ -63,9 +71,90 @@
                 "JUCE_PATH": {
                     "type": "PATH",
                     "value": "$env{JUCE_PATH}"
+                },
+                "AAX_SDK_PATH": {
+                    "type": "PATH",
+                    "value": "$env{AAX_SDK_PATH}"
+                }
+            }
+        },
+        {
+            "name": "release-macos-universal",
+            "displayName": "Release macOS Universal",
+            "description": "Release build for macOS 10.15+ (arm64 + x86_64), AU/VST3/AAX/Standalone",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build-release-macos-universal",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "PLUGIN_DEV_MODE": "OFF",
+                "UniversalBinary": "ON",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "10.15",
+                "MELECHDSP_HQ_ROOT": {
+                    "type": "PATH",
+                    "value": "${sourceDir}/../melechdsp-hq"
+                },
+                "JUCE_PATH": {
+                    "type": "PATH",
+                    "value": "$env{JUCE_PATH}"
+                },
+                "AAX_SDK_PATH": {
+                    "type": "PATH",
+                    "value": "$env{AAX_SDK_PATH}"
+                }
+            }
+        },
+        {
+            "name": "release-windows-x64",
+            "displayName": "Release Windows x64",
+            "description": "Release build for Windows x64, VST3/AAX/Standalone",
+            "generator": "Visual Studio 17 2022",
+            "architecture": "x64",
+            "binaryDir": "${sourceDir}/build-release-windows-x64",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "PLUGIN_DEV_MODE": "OFF",
+                "MELECHDSP_HQ_ROOT": {
+                    "type": "PATH",
+                    "value": "${sourceDir}/../melechdsp-hq"
+                },
+                "JUCE_PATH": {
+                    "type": "PATH",
+                    "value": "$env{JUCE_PATH}"
+                },
+                "AAX_SDK_PATH": {
+                    "type": "PATH",
+                    "value": "$env{AAX_SDK_PATH}"
+                }
+            }
+        },
+        {
+            "name": "release-windows-arm64",
+            "displayName": "Release Windows ARM64",
+            "description": "Release build for Windows ARM64, VST3/AAX/Standalone",
+            "generator": "Visual Studio 17 2022",
+            "architecture": "ARM64",
+            "binaryDir": "${sourceDir}/build-release-windows-arm64",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "PLUGIN_DEV_MODE": "OFF",
+                "MELECHDSP_HQ_ROOT": {
+                    "type": "PATH",
+                    "value": "${sourceDir}/../melechdsp-hq"
+                },
+                "JUCE_PATH": {
+                    "type": "PATH",
+                    "value": "$env{JUCE_PATH}"
+                },
+                "AAX_SDK_PATH": {
+                    "type": "PATH",
+                    "value": "$env{AAX_SDK_PATH}"
                 }
             }
         }
+        
     ],
     "buildPresets": [
         {
@@ -75,6 +164,20 @@
         {
             "name": "debug",
             "configurePreset": "debug"
+        },
+        {
+            "name": "release-macos-universal",
+            "configurePreset": "release-macos-universal"
+        },
+        {
+            "name": "release-windows-x64",
+            "configurePreset": "release-windows-x64",
+            "configuration": "Release"
+        },
+        {
+            "name": "release-windows-arm64",
+            "configurePreset": "release-windows-arm64",
+            "configuration": "Release"
         }
     ]
 }
