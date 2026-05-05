@@ -14,7 +14,7 @@ CONFIG="Release"
 
 # Plugin information
 PLUGIN_NAME="AnalyzerPro"
-PLUGIN_VERSION="1.0.0"
+PLUGIN_VERSION="1.1.1"
 COMPANY_NAME="MelecDSP"
 
 echo "=========================================="
@@ -57,7 +57,7 @@ cmake -S "$PROJECT_ROOT" -B "$BUILD_DIR" \
     -DJUCE_PATH="$JUCE_PATH" \
     -DPLUGIN_DEV_MODE=OFF \
     -DUniversalBinary=ON \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET="10.13"
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="10.15"
 
 if [ $? -ne 0 ]; then
     echo "❌ CMake configuration failed!"
