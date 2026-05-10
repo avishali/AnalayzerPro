@@ -9,16 +9,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# Configuration - UPDATE THESE WITH YOUR APPLE DEVELOPER CREDENTIALS
-DEVELOPER_ID_APP="Developer ID Application: YOUR NAME (TEAM_ID)"
-DEVELOPER_ID_INSTALLER="Developer ID Installer: YOUR NAME (TEAM_ID)"
-APPLE_ID="your@email.com"
-TEAM_ID="YOUR_TEAM_ID"
+# Configuration
+DEVELOPER_ID_APP="Developer ID Application: AVISHAY LIDANI (C5UC779LGC)"
+DEVELOPER_ID_INSTALLER="Developer ID Installer: AVISHAY LIDANI (C5UC779LGC)"
+APPLE_ID="avishay.lidani@gmail.com"
+TEAM_ID="C5UC779LGC"
 APP_SPECIFIC_PASSWORD="@keychain:AC_PASSWORD"  # Store in keychain!
 
 # Plugin information
 PLUGIN_NAME="AnalyzerPro"
-PLUGIN_VERSION="1.0.0"
+PLUGIN_VERSION="1.1.1"
 INSTALLER_DIR="$PROJECT_ROOT/installer"
 BUILD_DIR="build-release"
 ARTIFACTS_DIR="$BUILD_DIR/${PLUGIN_NAME}_artefacts/Release"
@@ -28,26 +28,6 @@ echo "  AnalyzerPro Code Signing & Notarization"
 echo "=========================================="
 echo ""
 
-# Check if credentials are configured
-if [[ "$DEVELOPER_ID_APP" == *"YOUR NAME"* ]]; then
-    echo "⚠️  WARNING: Developer credentials not configured!"
-    echo ""
-    echo "Please edit this script and update:"
-    echo "  - DEVELOPER_ID_APP"
-    echo "  - DEVELOPER_ID_INSTALLER"
-    echo "  - APPLE_ID"
-    echo "  - TEAM_ID"
-    echo "  - APP_SPECIFIC_PASSWORD"
-    echo ""
-    echo "To store password in keychain:"
-    echo "  xcrun notarytool store-credentials AC_PASSWORD \\"
-    echo "    --apple-id your@email.com \\"
-    echo "    --team-id TEAM_ID \\"
-    echo "    --password app-specific-password"
-    echo ""
-    exit 1
-fi
-
 # Check if artifacts exist
 if [ ! -d "$ARTIFACTS_DIR" ]; then
     echo "❌ Error: Release artifacts not found!"
@@ -55,27 +35,34 @@ if [ ! -d "$ARTIFACTS_DIR" ]; then
     exit 1
 fi
 
+STANDALONE_ENTITLEMENTS="$PROJECT_ROOT/resources/AnalyzerPro-standalone.entitlements"
+
 echo "Step 1: Signing Plugins"
 echo "========================"
 echo ""
 
-# Function to sign a bundle
+# Sign a bundle. Pass a second argument (entitlements path) for Hardened Runtime targets.
 sign_bundle() {
     local bundle_path="$1"
+    local entitlements="$2"
     local bundle_name=$(basename "$bundle_path")
-    
+
     echo "🔏 Signing: $bundle_name"
-    
+
+    local entitlements_flag=""
+    if [ -n "$entitlements" ]; then
+        entitlements_flag="--entitlements $entitlements"
+    fi
+
     codesign --deep --force --verify --verbose \
         --sign "$DEVELOPER_ID_APP" \
         --options runtime \
         --timestamp \
+        $entitlements_flag \
         "$bundle_path"
-    
+
     if [ $? -eq 0 ]; then
         echo "✅ Signed: $bundle_name"
-        
-        # Verify signature
         codesign --verify --deep --strict --verbose=2 "$bundle_path"
         spctl --assess --verbose=4 --type install "$bundle_path" 2>&1 | head -n 3
     else
@@ -95,9 +82,9 @@ if [ -d "$ARTIFACTS_DIR/VST3/${PLUGIN_NAME}.vst3" ]; then
     sign_bundle "$ARTIFACTS_DIR/VST3/${PLUGIN_NAME}.vst3"
 fi
 
-# Sign Standalone
+# Sign Standalone — must include entitlements so Hardened Runtime allows mic access
 if [ -d "$ARTIFACTS_DIR/Standalone/${PLUGIN_NAME}.app" ]; then
-    sign_bundle "$ARTIFACTS_DIR/Standalone/${PLUGIN_NAME}.app"
+    sign_bundle "$ARTIFACTS_DIR/Standalone/${PLUGIN_NAME}.app" "$STANDALONE_ENTITLEMENTS"
 fi
 
 # Sign AAX (if present)

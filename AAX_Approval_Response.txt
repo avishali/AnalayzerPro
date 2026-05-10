@@ -1,0 +1,16 @@
+Hi [Avid Contact Name],
+
+Thanks for your email. Please find the requested details below:
+
+- Company name: MelechDSP
+- Admin full name: Avishay Lidani
+- Admin email address: avishay.lidani@gmail.com
+- Telephone number (including international dialling code): +972524764973
+- Website: None at the moment
+- Brief description of plugin: AnalyzerPro is a professional real-time audio analysis plugin for music production and post-production workflows. It provides high-precision spectral and level metering to help engineers make faster, better mix decisions.
+- Avid Developer email address: avishay.lidani@gmail.com
+
+Please let me know if any additional information is required.
+
+Regards,
+Avishay Lidani

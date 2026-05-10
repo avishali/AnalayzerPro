@@ -46,3 +46,4 @@ node_modules/
 scripts/node_modules/
 scripts/.env
 !scripts/.env.example
+beta-dist/
