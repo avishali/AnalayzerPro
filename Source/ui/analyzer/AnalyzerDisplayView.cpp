@@ -112,9 +112,6 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
         },
         [this] { zoomFrequency (0.5f, std::sqrt (viewFreqMin_ * viewFreqMax_)); });
 
-    // Separator before reset
-    navOverlay_.setSeparatorsBefore ({ 4 });
-
     // ↺  Reset
     navOverlay_.addButton ("Reset to full range (20 Hz \xe2\x80\x93 20 kHz)",
         [] (juce::Graphics& g, juce::Rectangle<float> r)
@@ -139,6 +136,9 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
             g.fillPath (head);
         },
         [this] { resetFrequencyView(); });
+
+    // Separator between zoom and reset — must be called after all buttons are added
+    navOverlay_.setSeparatorsBefore ({ 4 });
 
     addAndMakeVisible (navOverlay_);
 
