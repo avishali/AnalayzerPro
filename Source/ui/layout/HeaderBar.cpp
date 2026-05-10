@@ -256,6 +256,20 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
 
     peakRangeBox_.setTooltip ("Peak display range (dB). Drag analyzer vertical axis to change.");
 
+    // FFT Zoom (dB range) combo
+    dbRangeBox_.addItem ("-60 dB",  1);
+    dbRangeBox_.addItem ("-90 dB",  2);
+    dbRangeBox_.addItem ("-120 dB", 3);
+    dbRangeBox_.setSelectedId (3, juce::dontSendNotification);
+    dbRangeBox_.setTooltip ("FFT vertical zoom range. Also cycle with 'D'.");
+    addAndMakeVisible (dbRangeBox_);
+
+    // Zoom reset button — returns range to -120 dB default
+    zoomResetButton_.setButtonText (juce::CharPointer_UTF8 ("\xe2\x86\xba")); // ↺
+    zoomResetButton_.setTooltip ("Reset zoom to -120 dB");
+    zoomResetButton_.onClick = [this] { if (onZoomReset) onZoomReset(); };
+    addAndMakeVisible (zoomResetButton_);
+
     // Preset & State Buttons
     presetButton.setButtonText ("Preset");
     presetButton.setTooltip ("Load Preset");
@@ -390,7 +404,8 @@ void HeaderBar::resized()
 
     const bool hasPeakRange = peakRangeBox_.getParentComponent() == this;
     const int peakRangeW = hasPeakRange ? (comboW + gapX) : 0;
-    const int rightZoneWidth = peakRangeW + presetW + gapX + presetW + gapX + smallBtnW + gapX + smallBtnW + gapX + bypassW + gapX + railBtnW;
+    const int zoomResetW = smallBtnW;
+    const int rightZoneWidth = peakRangeW + comboW + gapX + zoomResetW + gapX + presetW + gapX + presetW + gapX + smallBtnW + gapX + smallBtnW + gapX + bypassW + gapX + railBtnW;
     const juce::Rectangle<int> rightZone (row.getRight() - rightZoneWidth, row.getY(), rightZoneWidth, row.getHeight());
     int x = rightZone.getX();
 
@@ -399,6 +414,12 @@ void HeaderBar::resized()
         peakRangeBox_.setBounds (x, y, comboW, buttonH);
         x += comboW + gapX;
     }
+
+    dbRangeBox_.setBounds (x, y, comboW, buttonH);
+    x += comboW + gapX;
+
+    zoomResetButton_.setBounds (x, y, zoomResetW, buttonH);
+    x += zoomResetW + gapX;
 
     presetButton.setBounds (x, y, presetW, buttonH);
     x += presetW + gapX;

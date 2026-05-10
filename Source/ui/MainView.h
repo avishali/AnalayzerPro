@@ -78,6 +78,7 @@ private:
     mdsp_ui::UiContext& ui_;  // Reference to shared UiContext from PluginEditor
 
     HeaderBar header_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> dbRangeAttachment_;
     juce::Viewport railViewport_;
     ControlRail rail_;
     FooterBar footer_;

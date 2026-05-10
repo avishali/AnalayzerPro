@@ -6,6 +6,8 @@
 #include <mdsp_ui/analyzer/AnalyzerRenderStateProvider.h>
 #include <mdsp_ui/Theme.h>
 #include <mdsp_ui/ThemeVariant.h>
+#include <mdsp_ui/UiContext.h>
+#include <mdsp_ui/controls/FloatingIconPanel.h>
 #include <array>
 #include <vector>
 #include "../../PluginProcessor.h"
@@ -45,7 +47,7 @@ public:
         Minus120 = 2
     };
 
-    AnalyzerDisplayView (AnalayzerProAudioProcessor& processor);
+    AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& processor);
     ~AnalyzerDisplayView() override;
 
     void paint (juce::Graphics& g) override;
@@ -54,6 +56,15 @@ public:
     
     void mouseDown (const juce::MouseEvent& event) override;
     void mouseDrag (const juce::MouseEvent& event) override;
+    void mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
+    void mouseMagnify (const juce::MouseEvent& event, float scaleFactor) override;
+
+    // Frequency axis zoom / pan
+    void setFrequencyView (float minHz, float maxHz);
+    void zoomFrequency (float factor, float centerHz); // factor > 1 = zoom in
+    void panFrequencyOctaves (float octaves);          // positive = shift to higher frequencies
+    void resetFrequencyView();
+    float pixelToFreq (float xPx) const noexcept;
 
     void setMode (Mode mode);
     Mode getMode() const noexcept { return currentMode_; }
@@ -105,6 +116,7 @@ private:
     void updateModeOverlayText();
 #endif
 
+    mdsp_ui::UiContext& ui_;
     AnalayzerProAudioProcessor& audioProcessor;
     mdsp_ui::Theme theme_ { mdsp_ui::ThemeVariant::Custom };
     Mode currentMode_ = Mode::FFT;
@@ -115,7 +127,18 @@ private:
 
     juce::Point<float> dragStartPos_;
     DbRange dragStartDbRange_ = DbRange::Minus120;
-    // int dragStartFftSize_ = 2048; // Unused until X-axis interaction implemented
+
+    // Horizontal zoom / pan state
+    float viewFreqMin_ = 20.0f;
+    float viewFreqMax_ = 20000.0f;
+    float dragStartFreqMin_ = 20.0f;
+    float dragStartFreqMax_ = 20000.0f;
+    bool dragAxisLocked_ = false;
+    bool dragIsHorizontal_ = false;
+
+    static constexpr float kAbsFreqMin = 20.0f;
+    static constexpr float kAbsFreqMax = 20000.0f;
+    static constexpr float kMinFreqSpanOctaves = 1.0f; // minimum 1-octave zoom window
 
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> minDbAnim_;
     float targetMinDb_ = -120.0f;
@@ -265,6 +288,8 @@ private:
 #endif
     
 
+
+    mdsp_ui::FloatingIconPanel navOverlay_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AnalyzerDisplayView)
 };

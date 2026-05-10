@@ -15,7 +15,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
       header_ (ui_),
       rail_ (ui_),
       footer_ (ui_),
-      analyzerView_ (p),
+      analyzerView_ (ui_, p),
       stereoScopeComponent_ (ui_),
       phaseFanScopeComponent_ (ui),
       loudnessPanel_ (ui, p),
@@ -120,6 +120,27 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         else if (id == 2) r = R::Minus90;
         else if (id == 3) r = R::Minus120;
         analyzerView_.setPeakDbRange (r);
+    };
+
+    // Bind zoom combo to APVTS "DbRange" — attachment keeps combo and param in sync bidirectionally
+    if (apvts_ != nullptr)
+    {
+        dbRangeAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+            *apvts_, "DbRange", header_.dbRangeBox_);
+    }
+
+    // Reset button: restore zoom to −120 dB default
+    header_.onZoomReset = [this]
+    {
+        if (apvts_ != nullptr)
+        {
+            if (auto* param = apvts_->getParameter ("DbRange"))
+            {
+                param->beginChangeGesture();
+                param->setValueNotifyingHost (1.0f); // index 2 (-120 dB), norm = 2/2 = 1.0
+                param->endChangeGesture();
+            }
+        }
     };
 
     analyzerView_.onDbRangeUserChanged = [this] (AnalyzerDisplayView::DbRange range)
@@ -372,7 +393,7 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     {
         const int idx = juce::jlimit (0, 2, juce::roundToInt (newValue));
         analyzerView_.setDbRangeFromChoiceIndex (idx);
-        // header_.setDbRangeSelectedId (idx + 1); // Removed
+        // ComboBoxAttachment handles header_.dbRangeBox_ sync automatically
     }
     else if (parameterID == "DisplayGain")
     {

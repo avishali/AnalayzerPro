@@ -28,6 +28,10 @@ public:
     void setPeakRangeSelectedId (int id);
     void setRailOpen (bool isOpen);
 
+    // FFT Zoom (dB range)
+    juce::ComboBox dbRangeBox_;
+    std::function<void()> onZoomReset;
+
     // Control Rail Toggle
     std::function<void()> onRailToggleClicked;
 
@@ -44,6 +48,7 @@ private:
 
     juce::Label titleLabel;
     juce::ComboBox peakRangeBox_;
+    juce::TextButton zoomResetButton_;
     
     // Presets & State
     juce::TextButton presetButton; // Opens menu

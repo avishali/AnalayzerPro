@@ -47,8 +47,10 @@ void AnalyzerDisplayView::applyLogSmoothingThunk (float* power, int bins, void* 
     self->logGaussian_.process (power, bins);
 }
 
-AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
-    : audioProcessor (processor)
+AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& processor)
+    : ui_ (ui),
+      audioProcessor (processor),
+      navOverlay_ (ui)
 #if JUCE_DEBUG
     , lastDebugLogTime_ (juce::Time::getCurrentTime())
 #endif
@@ -59,6 +61,86 @@ AnalyzerDisplayView::AnalyzerDisplayView (AnalayzerProAudioProcessor& processor)
     addAndMakeVisible (analyzerBridgeWidget_);
     // Analyzer display widget owns render/model/controller internals.
     analyzerBridgeWidget_.setGetTheme ([this]() -> const mdsp_ui::Theme& { return theme_; });
+
+    // ── Nav overlay ──────────────────────────────────────────────────────
+    // Icon painters: all lambdas receive (Graphics&, iconBounds). Colour is
+    // set by FloatingIconPanel before calling — just draw the shape.
+
+    // ◄  Pan left
+    navOverlay_.addButton ("Pan left (lower frequencies)",
+        [] (juce::Graphics& g, juce::Rectangle<float> r)
+        {
+            juce::Path p;
+            p.addTriangle (r.getRight(), r.getY(),
+                           r.getRight(), r.getBottom(),
+                           r.getX(),     r.getCentreY());
+            g.fillPath (p);
+        },
+        [this] { panFrequencyOctaves (-1.0f); });
+
+    // ►  Pan right
+    navOverlay_.addButton ("Pan right (higher frequencies)",
+        [] (juce::Graphics& g, juce::Rectangle<float> r)
+        {
+            juce::Path p;
+            p.addTriangle (r.getX(),     r.getY(),
+                           r.getX(),     r.getBottom(),
+                           r.getRight(), r.getCentreY());
+            g.fillPath (p);
+        },
+        [this] { panFrequencyOctaves (1.0f); });
+
+    // +  Zoom in
+    navOverlay_.addButton ("Zoom in (narrow frequency range)",
+        [] (juce::Graphics& g, juce::Rectangle<float> r)
+        {
+            const float t = 1.5f, cx = r.getCentreX(), cy = r.getCentreY();
+            const float hw = r.getWidth()  * 0.42f;
+            const float hh = r.getHeight() * 0.42f;
+            g.fillRect (cx - hw, cy - t * 0.5f, hw * 2.0f, t);
+            g.fillRect (cx - t * 0.5f, cy - hh, t, hh * 2.0f);
+        },
+        [this] { zoomFrequency (2.0f, std::sqrt (viewFreqMin_ * viewFreqMax_)); });
+
+    // −  Zoom out
+    navOverlay_.addButton ("Zoom out (wider frequency range)",
+        [] (juce::Graphics& g, juce::Rectangle<float> r)
+        {
+            const float t = 1.5f, cx = r.getCentreX(), cy = r.getCentreY();
+            const float hw = r.getWidth() * 0.42f;
+            g.fillRect (cx - hw, cy - t * 0.5f, hw * 2.0f, t);
+        },
+        [this] { zoomFrequency (0.5f, std::sqrt (viewFreqMin_ * viewFreqMax_)); });
+
+    // Separator before reset
+    navOverlay_.setSeparatorsBefore ({ 4 });
+
+    // ↺  Reset
+    navOverlay_.addButton ("Reset to full range (20 Hz \xe2\x80\x93 20 kHz)",
+        [] (juce::Graphics& g, juce::Rectangle<float> r)
+        {
+            const float cx = r.getCentreX(), cy = r.getCentreY();
+            const float rad = r.getWidth() * 0.38f;
+            const float startA = juce::MathConstants<float>::pi * 0.35f;
+            const float endA   = juce::MathConstants<float>::pi * 2.25f;
+            juce::Path arc;
+            arc.addArc (cx - rad, cy - rad, rad * 2.0f, rad * 2.0f, startA, endA, true);
+            g.strokePath (arc, juce::PathStrokeType (1.5f));
+            // Arrow head at end of arc
+            const float ax = cx + rad * std::cos (endA);
+            const float ay = cy + rad * std::sin (endA);
+            const float tx = -std::sin (endA), ty = std::cos (endA);
+            const float hs = 3.5f;
+            juce::Path head;
+            head.addTriangle (ax + tx * hs,  ay + ty * hs,
+                              ax - tx * hs,  ay - ty * hs,
+                              ax + std::cos (endA) * hs * 1.4f,
+                              ay + std::sin (endA) * hs * 1.4f);
+            g.fillPath (head);
+        },
+        [this] { resetFrequencyView(); });
+
+    addAndMakeVisible (navOverlay_);
 
     // DISABLED: Use mdsp_gui default "Yellow Peak" aesthetic (sharp yellow stroke, gradient fill)
 
@@ -305,56 +387,92 @@ void AnalyzerDisplayView::paintOverChildren (juce::Graphics& g)
 //==============================================================================
 void AnalyzerDisplayView::mouseDown (const juce::MouseEvent& e)
 {
-    dragStartPos_ = e.position;
+    dragStartPos_     = e.position;
     dragStartDbRange_ = dbRange_;
+    dragStartFreqMin_ = viewFreqMin_;
+    dragStartFreqMax_ = viewFreqMax_;
+    dragAxisLocked_   = false;
+    dragIsHorizontal_ = false;
 }
 
 void AnalyzerDisplayView::mouseDrag (const juce::MouseEvent& e)
 {
+    const float dx = e.position.x - dragStartPos_.x;
     const float dy = e.position.y - dragStartPos_.y;
-    
-    // Y-Axis interaction: Drag Vertical to change DbRange
-    // Threshold: 60 pixels per step feels sufficient
-    // Drag Up (negative Y) -> Increase Range (more negative, e.g. -120dB)
-    // Drag Down (positive Y) -> Decrease Range (less negative, e.g. -60dB)
-    // Map:
-    // -60  (Index 0)
-    // -90  (Index 1)
-    // -120 (Index 2)
-    
-    // If we drag DOWN (+Y), we want to go from -120(2) to -60(0). So current - steps.
-    // If we drag UP (-Y), we want to go from -60(0) to -120(2). So current + steps.
-    
-    // logic: 
-    // deltaY positive (Down): should reduce index?
-    // -120 to -60 is moving "Up" visually? No.
-    // Range -120 is "Larger" range.
-    // Range -60 is "Smaller" range (Zooms in).
-    // Usually Drag Down -> Zoom In. Drag Up -> Zoom Out.
-    // Zoom In = -60. Zoom Out = -120.
-    // So Down (+Y) -> Index 0 (-60).
-    // Up (-Y) -> Index 2 (-120).
-    
-    // Index increases with visual height?
-    // 0: -60
-    // 1: -90
-    // 2: -120
-    
-    // Step = dy / 60.
-    // If dy = +60 (Down), Step = 1.
-    // If I want Down -> Index 0.
-    // If Start is 2 (-120). Down(+60) -> 1 (-90).
-    // So target = Start - Step.
-    
-    const int steps = static_cast<int> (dy / 60.0f);
-    
-    if (steps != 0)
+
+    // Lock dominant axis after an 8 px threshold to avoid diagonal ambiguity
+    if (! dragAxisLocked_)
     {
-        int startIdx = static_cast<int> (dragStartDbRange_);
-        int targetIdx = juce::jlimit (0, 2, startIdx - steps);
-        
-        DbRange nextRange = static_cast<DbRange> (targetIdx);
-        
+        if (std::abs (dx) >= 8.0f || std::abs (dy) >= 8.0f)
+        {
+            dragIsHorizontal_ = std::abs (dx) >= std::abs (dy);
+            dragAxisLocked_   = true;
+        }
+        else
+        {
+            return;
+        }
+    }
+
+    if (dragIsHorizontal_)
+    {
+        // Horizontal drag → pan frequency (grab paradigm: drag right = lower freqs)
+        const float w = static_cast<float> (getWidth());
+        if (w <= 0.0f) return;
+        const float logSpan = std::log2 (dragStartFreqMax_) - std::log2 (dragStartFreqMin_);
+        const float octaveShift = -(dx / w) * logSpan;
+        const float newLogMin = std::log2 (dragStartFreqMin_) + octaveShift;
+        const float newLogMax = std::log2 (dragStartFreqMax_) + octaveShift;
+        setFrequencyView (std::pow (2.0f, newLogMin), std::pow (2.0f, newLogMax));
+    }
+    else
+    {
+        // Vertical drag → change dB range (60 px per discrete step)
+        // Drag up (-Y) → more range (-120 dB).  Drag down (+Y) → less range (-60 dB).
+        const int steps = static_cast<int> (dy / 60.0f);
+        if (steps != 0)
+        {
+            const int targetIdx = juce::jlimit (0, 2, static_cast<int> (dragStartDbRange_) - steps);
+            const DbRange nextRange = static_cast<DbRange> (targetIdx);
+            if (nextRange != dbRange_)
+            {
+                setDbRange (nextRange);
+                if (onDbRangeUserChanged)
+                    onDbRangeUserChanged (nextRange);
+            }
+        }
+    }
+}
+
+void AnalyzerDisplayView::mouseWheelMove (const juce::MouseEvent& e,
+                                          const juce::MouseWheelDetails& wheel)
+{
+    const bool isCtrlOrCmd = e.mods.isCtrlDown() || e.mods.isCommandDown();
+    const float absDx = std::abs (wheel.deltaX);
+    const float absDy = std::abs (wheel.deltaY);
+
+    if (absDx > absDy && ! isCtrlOrCmd)
+    {
+        // Horizontal scroll → pan frequency
+        // deltaX positive = scroll right → higher frequencies
+        const float octaveShift = wheel.deltaX * 0.8f;
+        panFrequencyOctaves (octaveShift);
+    }
+    else if (isCtrlOrCmd && absDy > 0.001f)
+    {
+        // Ctrl/Cmd + vertical scroll → zoom frequency around cursor
+        const float centerHz = pixelToFreq (e.position.x);
+        const float factor = 1.0f + wheel.deltaY * 1.5f;
+        if (factor > 0.1f)
+            zoomFrequency (factor, centerHz);
+    }
+    else if (! isCtrlOrCmd && absDy > absDx && absDy > 0.001f)
+    {
+        // Plain vertical scroll → step dB range (up = more range, down = less)
+        const int currentIdx = static_cast<int> (dbRange_);
+        const int delta = wheel.deltaY > 0 ? 1 : -1;          // scroll up → index up → more range
+        const int targetIdx = juce::jlimit (0, 2, currentIdx + delta);
+        const DbRange nextRange = static_cast<DbRange> (targetIdx);
         if (nextRange != dbRange_)
         {
             setDbRange (nextRange);
@@ -364,20 +482,95 @@ void AnalyzerDisplayView::mouseDrag (const juce::MouseEvent& e)
     }
 }
 
+void AnalyzerDisplayView::mouseMagnify (const juce::MouseEvent& e, float scaleFactor)
+{
+    // Trackpad pinch / touchscreen pinch → zoom frequency around the gesture centre
+    if (scaleFactor > 0.01f)
+        zoomFrequency (scaleFactor, pixelToFreq (e.position.x));
+}
+
+//==============================================================================
+// Frequency view helpers
+//==============================================================================
+
+float AnalyzerDisplayView::pixelToFreq (float xPx) const noexcept
+{
+    const float w = static_cast<float> (getWidth());
+    if (w <= 0.0f) return viewFreqMin_;
+    const float t = juce::jlimit (0.0f, 1.0f, xPx / w);
+    return std::pow (2.0f, std::log2 (viewFreqMin_) + t * (std::log2 (viewFreqMax_) - std::log2 (viewFreqMin_)));
+}
+
+void AnalyzerDisplayView::setFrequencyView (float minHz, float maxHz)
+{
+    const float absLogMin = std::log2 (kAbsFreqMin);
+    const float absLogMax = std::log2 (kAbsFreqMax);
+
+    float logMin = std::log2 (juce::jmax (kAbsFreqMin, minHz));
+    float logMax = std::log2 (juce::jmin (kAbsFreqMax, maxHz));
+
+    // Enforce minimum span
+    if (logMax - logMin < kMinFreqSpanOctaves)
+    {
+        const float centre = (logMin + logMax) * 0.5f;
+        logMin = centre - kMinFreqSpanOctaves * 0.5f;
+        logMax = centre + kMinFreqSpanOctaves * 0.5f;
+    }
+
+    // Clamp while preserving span
+    if (logMin < absLogMin) { logMax += absLogMin - logMin; logMin = absLogMin; }
+    if (logMax > absLogMax) { logMin -= logMax - absLogMax; logMax = absLogMax; }
+    logMin = juce::jmax (logMin, absLogMin);
+    logMax = juce::jmin (logMax, absLogMax);
+
+    viewFreqMin_ = std::pow (2.0f, logMin);
+    viewFreqMax_ = std::pow (2.0f, logMax);
+    analyzerBridgeWidget_.setFrequencyRange (viewFreqMin_, viewFreqMax_);
+}
+
+void AnalyzerDisplayView::zoomFrequency (float factor, float centerHz)
+{
+    centerHz = juce::jlimit (kAbsFreqMin, kAbsFreqMax, centerHz);
+    const float logMin    = std::log2 (viewFreqMin_);
+    const float logMax    = std::log2 (viewFreqMax_);
+    const float logCenter = std::log2 (centerHz);
+    const float logSpan   = logMax - logMin;
+    const float newSpan   = logSpan / juce::jmax (0.05f, factor);
+    const float ratio     = (logCenter - logMin) / juce::jmax (1e-6f, logSpan);
+    setFrequencyView (std::pow (2.0f, logCenter - ratio * newSpan),
+                      std::pow (2.0f, logCenter + (1.0f - ratio) * newSpan));
+}
+
+void AnalyzerDisplayView::panFrequencyOctaves (float octaves)
+{
+    setFrequencyView (std::pow (2.0f, std::log2 (viewFreqMin_) + octaves),
+                      std::pow (2.0f, std::log2 (viewFreqMax_) + octaves));
+}
+
+void AnalyzerDisplayView::resetFrequencyView()
+{
+    setFrequencyView (kAbsFreqMin, kAbsFreqMax);
+}
+
 void AnalyzerDisplayView::resized()
 {
     auto bounds = getLocalBounds();
     analyzerBridgeWidget_.setBounds (bounds);
-    // Keep AnalyzerEngine-driven display on top (timerCallback feeds rtaDisplay via getLatestSnapshot).
     analyzerBridgeWidget_.toFront (false);
+
+    // Nav overlay: bottom-right corner, above everything
+    const int margin = 8;
+    const int ow = navOverlay_.preferredWidth();
+    const int oh = navOverlay_.preferredHeight();
+    navOverlay_.setBounds (bounds.getRight()  - ow - margin,
+                           bounds.getBottom() - oh - margin,
+                           ow, oh);
+    navOverlay_.toFront (false);
+
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     modeOverlay_.setBounds (8, 8, 260, 18);
     modeOverlay_.toFront (false);
 #endif
-
-
-    // Bottom-right corner reserved for future controls?
-    // auto r = getLocalBounds().reduced (10);
 }
 
 int AnalyzerDisplayView::toRtaMode (Mode m) noexcept
