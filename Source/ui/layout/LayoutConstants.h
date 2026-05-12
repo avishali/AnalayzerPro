@@ -21,5 +21,8 @@ namespace Layout
     // Stereo scope: square size cap and aspect (single source of truth for layout)
     constexpr int kScopeMaxSize      = 360;   // square size cap (adjust only if needed)
     constexpr float kScopeAspect     = 1.0f;  // MUST remain 1.0f (square)
+
+    // Bottom area fixed widths
+    constexpr int kLoudnessW         = 220;   // fixed loudness panel width (never varies with height)
 }
 }

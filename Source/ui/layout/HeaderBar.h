@@ -35,6 +35,18 @@ public:
     // Control Rail Toggle
     std::function<void()> onRailToggleClicked;
 
+    // Module dropdown buttons — callback receives the button component as anchor for CallOutBox
+    std::function<void (juce::Component*)> onSpectrumClicked;
+    std::function<void (juce::Component*)> onScopesClicked;
+    std::function<void (juce::Component*)> onMetersClicked;
+    std::function<void (juce::Component*)> onTracesClicked;
+
+    // Expose buttons so MainView can get their screen bounds for CallOutBox
+    juce::TextButton& spectrumButton() noexcept { return spectrumBtn_; }
+    juce::TextButton& scopesButton()   noexcept { return scopesBtn_;   }
+    juce::TextButton& metersButton()   noexcept { return metersBtn_;   }
+    juce::TextButton& tracesButton()   noexcept { return tracesBtn_;   }
+
     // State Management
     void setManagers (AnalyzerPro::presets::PresetManager* pm, AnalyzerPro::presets::ABStateManager* sm);
     
@@ -58,6 +70,11 @@ private:
     juce::TextButton slotBButton;
     juce::ToggleButton bypassButton; // Bound to param
     juce::ToggleButton railToggleButton; // Toggle control rail visibility
+
+    // Module dropdown buttons + scrollable container
+    juce::TextButton   spectrumBtn_, scopesBtn_, metersBtn_, tracesBtn_;
+    juce::Component    moduleBtnContainer_;
+    juce::Viewport     moduleScrollPort_;
 
     std::unique_ptr<juce::LookAndFeel> headerBarLook_;
 

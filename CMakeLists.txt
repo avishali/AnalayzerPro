@@ -351,6 +351,7 @@ target_sources(${PLUGIN_NAME}
         Source/ui/layout/ControlRail.cpp
         Source/ui/layout/DraggableParamValueLabel.cpp
         Source/ui/layout/FooterBar.cpp
+        Source/ui/layout/SettingsPopupPanel.cpp
         Source/audio/DeviceRoutingHelper.cpp
         Source/audio/DeviceRoutingHelper.h
         Source/ui/tooltips/TooltipManager.cpp

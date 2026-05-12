@@ -10,6 +10,7 @@
 #include "../control/AnalyzerProControlContext.h"
 #include "layout/LayoutConstants.h"
 #include "layout/HeaderBar.h"
+#include "layout/SettingsPopupPanel.h"
 #include "layout/ControlRail.h"
 #include "layout/FooterBar.h"
 #include "analyzer/AnalyzerDisplayView.h"
@@ -70,6 +71,18 @@ private:
     void triggerResetPeaks();
     void timerCallback() override;
 
+    // Settings popup helpers
+    void showSettingsPopup (SettingsPopupPanel::Section section, juce::Component* anchor);
+
+    // Non-APVTS state mirrored locally so popups open in the right state
+    int currentAnalyzerMode_  = 1;   // 1=FFT 2=Band 3=Log
+    int currentScopeMode_     = 1;   // 1=Peak 2=RMS
+    int currentScopeShape_    = 1;   // 1=Basic 2=PAZ
+
+    // Popup toggle tracking — second click on same section button closes the popup
+    juce::Component::SafePointer<SettingsPopupPanel> currentPopup_;
+    SettingsPopupPanel::Section currentPopupSection_ = SettingsPopupPanel::Section::Spectrum;
+
     bool isShutdown = false;
     AnalayzerProAudioProcessor& audioProcessor;
     juce::AudioProcessorValueTreeState* apvts_ = nullptr;
@@ -83,7 +96,7 @@ private:
     ControlRail rail_;
     FooterBar footer_;
     
-    bool railIsOpen_ = true; // Default: rail is open
+    bool railIsOpen_ = false; // Default: rail is closed
     int animatedRailWidth_ = AnalyzerPro::Layout::railNormalWidth; // Current animated width
     juce::ComponentAnimator railAnimator_;
     

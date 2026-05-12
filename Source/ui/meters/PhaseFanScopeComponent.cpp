@@ -16,9 +16,13 @@ constexpr float kPiHalf = juce::MathConstants<float>::halfPi;
 // On narrow panels the arc clips at the sides (symmetric, like PAZ), never at the top.
 void fanGeometry (juce::Rectangle<float> bounds, float& cx, float& cy, float& radiusPx)
 {
-    cx       = bounds.getCentreX();
-    cy       = bounds.getBottom() - kEdgeInset;
-    radiusPx = bounds.getHeight() - kEdgeInset * 2.0f;
+    cx = bounds.getCentreX();
+    cy = bounds.getBottom() - kEdgeInset;
+    // Cap radius at half the component width so the arc never clips at the sides.
+    // When height > width, empty space appears above the arc (still fills bottom).
+    const float rFromHeight = bounds.getHeight() - kEdgeInset * 2.0f;
+    const float rFromWidth  = bounds.getWidth()  * 0.5f - kEdgeInset;
+    radiusPx = juce::jmax (0.0f, juce::jmin (rFromHeight, rFromWidth));
 }
 }
 

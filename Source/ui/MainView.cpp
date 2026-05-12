@@ -43,9 +43,20 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     
     // Initialize header and rail with control binder
     header_.setControlBinder (controls_.getBinder());
+    footer_.setControlBinder (controls_.getBinder());
     header_.setManagers (&p.getPresetManager(), &p.getABStateManager());
     header_.onRailToggleClicked = [this] { toggleRail(); };
     header_.setRailOpen (railIsOpen_);
+
+    // Module dropdown buttons → show settings popups
+    header_.onSpectrumClicked = [this] (juce::Component* anchor)
+        { showSettingsPopup (SettingsPopupPanel::Section::Spectrum, anchor); };
+    header_.onScopesClicked   = [this] (juce::Component* anchor)
+        { showSettingsPopup (SettingsPopupPanel::Section::Scopes,   anchor); };
+    header_.onMetersClicked   = [this] (juce::Component* anchor)
+        { showSettingsPopup (SettingsPopupPanel::Section::Meters,   anchor); };
+    header_.onTracesClicked   = [this] (juce::Component* anchor)
+        { showSettingsPopup (SettingsPopupPanel::Section::Traces,   anchor); };
     rail_.setControlBinder (controls_.getBinder());
     rail_.setResetPeaksCallback ([this]
     {
@@ -99,6 +110,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     rail_.onModeChanged = [this] (int id)
     {
         // 1=FFT, 2=BAND, 3=LOG
+        currentAnalyzerMode_ = id;
         if (apvts_ != nullptr)
         {
             if (auto* param = apvts_->getParameter ("Mode"))
@@ -286,6 +298,7 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
         // HeaderBar Mode control is authoritative
         // Convert choice index to AnalyzerDisplayView::Mode (FFT=0, BANDS=1, LOG=2)
         const int index = juce::roundToInt (newValue);
+        currentAnalyzerMode_ = index + 1; // 1=FFT 2=Band 3=Log
         AnalyzerDisplayView::Mode viewMode = AnalyzerDisplayView::Mode::FFT;
         switch (index)
         {
@@ -507,6 +520,65 @@ bool MainView::keyPressed (const juce::KeyPress& key, juce::Component* originati
     }
 
     return false;
+}
+
+void MainView::showSettingsPopup (SettingsPopupPanel::Section section, juce::Component* anchor)
+{
+    // If the same section popup is already open, toggle it closed
+    if (currentPopup_ != nullptr && currentPopupSection_ == section)
+    {
+        if (auto* box = currentPopup_->findParentComponentOfClass<juce::CallOutBox>())
+            box->exitModalState (0);
+        currentPopup_ = nullptr;
+        return;
+    }
+
+    // If a different popup is open, dismiss it first
+    if (currentPopup_ != nullptr)
+    {
+        if (auto* box = currentPopup_->findParentComponentOfClass<juce::CallOutBox>())
+            box->exitModalState (0);
+        currentPopup_ = nullptr;
+    }
+
+    auto panel = std::make_unique<SettingsPopupPanel> (section, ui_, apvts_);
+    panel->setSize (SettingsPopupPanel::kWidth, panel->getPreferredHeight());
+
+    // Set initial state for non-APVTS controls
+    if (section == SettingsPopupPanel::Section::Spectrum)
+    {
+        panel->setCurrentMode (currentAnalyzerMode_);
+        panel->onModeChanged = [this] (int id)
+        {
+            currentAnalyzerMode_ = id;
+            // Push through APVTS so parameterChanged fires and syncs the view
+            if (apvts_ != nullptr)
+            {
+                if (auto* param = apvts_->getParameter ("Mode"))
+                {
+                    const float norm = static_cast<float> (juce::jlimit (0, 2, id - 1)) / 2.0f;
+                    param->beginChangeGesture();
+                    param->setValueNotifyingHost (norm);
+                    param->endChangeGesture();
+                }
+            }
+        };
+        panel->onResetPeaks = [this] { triggerResetPeaks(); };
+    }
+    else if (section == SettingsPopupPanel::Section::Scopes)
+    {
+        panel->setCurrentScopeMode  (currentScopeMode_);
+        panel->setCurrentScopeShape (currentScopeShape_);
+        panel->onScopeModeChanged  = [this] (int id) { currentScopeMode_  = id; };
+        panel->onScopeShapeChanged = [this] (int id) { currentScopeShape_ = id; };
+    }
+
+    currentPopupSection_ = section;
+    currentPopup_ = panel.get(); // SafePointer — auto-nulls when popup is destroyed
+
+    juce::CallOutBox::launchAsynchronously (std::move (panel),
+                                            anchor->getScreenBounds(),
+                                            nullptr);
 }
 
 void MainView::triggerResetPeaks()
@@ -764,22 +836,32 @@ void MainView::resized()
 #endif
     if (bottomArea.getHeight() > 0 && bottomArea.getWidth() > 0)
     {
-        auto scopeArea = bottomArea.removeFromLeft (bottomArea.getWidth() * 2 / 3);
-        if (scopeArea.getWidth() > 0 && scopeArea.getHeight() > 0)
-        {
-            const int availableW = scopeArea.getWidth();
-            const int availableH = scopeArea.getHeight();
-            int squareSize = juce::jmin (availableW, availableH, AnalyzerPro::Layout::kScopeMaxSize);
-            squareSize = juce::jmax (0, squareSize);
-            const int gap = 8;
-            auto stereoBounds = juce::Rectangle<int> (squareSize, squareSize)
-                .withPosition (scopeArea.getX(), scopeArea.getCentreY() - squareSize / 2);
-            auto phaseFanArea = scopeArea.withTrimmedLeft (squareSize + gap);
-            stereoScopeComponent_.setBounds (stereoBounds);
-            phaseFanScopeComponent_.setBounds (phaseFanArea);
-        }
-        if (bottomArea.getWidth() > 0 && bottomArea.getHeight() > 0)
-            loudnessPanel_.setBounds (bottomArea);
+        const int availableH = bottomArea.getHeight();
+        const int gap        = 8;
+
+        // Stereo scope: square, capped at kScopeMaxSize
+        const int squareSize = juce::jmax (0, juce::jmin (availableH, AnalyzerPro::Layout::kScopeMaxSize));
+
+        // Loudness panel: fixed width (never changes with height)
+        const int loudnessW  = AnalyzerPro::Layout::kLoudnessW;
+
+        // Allocate from right: loudness, gap, remaining → stereo scope + gap + fan scope
+        auto ba = bottomArea;
+        auto loudnessArea = ba.removeFromRight (loudnessW);
+        ba.removeFromRight (gap);
+
+        // Stereo scope square (vertically centred)
+        auto stereoBounds = juce::Rectangle<int> (squareSize, squareSize)
+            .withPosition (ba.getX(), ba.getCentreY() - squareSize / 2);
+
+        // Fan scope takes all remaining width; fanGeometry() caps the radius to
+        // min(height, width/2) so the arc never clips regardless of component shape.
+        auto phaseFanArea = ba.withTrimmedLeft (squareSize + gap);
+
+        stereoScopeComponent_ .setBounds (stereoBounds);
+        phaseFanScopeComponent_.setBounds (phaseFanArea);
+        if (loudnessArea.getWidth() > 0 && loudnessArea.getHeight() > 0)
+            loudnessPanel_.setBounds (loudnessArea);
     }
 
     // Main analyzer plot (all remaining center space)

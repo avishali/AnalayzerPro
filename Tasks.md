@@ -1,5 +1,5 @@
 ✅ apple permisson in standalone 
-add feature - color themes(global ans trace specific)
+add feature - color themes(global and trace specific)
 meters - make level markers adapt to scale selection. 
 meter level markers should not cover the the actual signal. 
 ✅ zoom levels in FFT view now controlled by keystrock "D", add a button to control zoom and reset. 

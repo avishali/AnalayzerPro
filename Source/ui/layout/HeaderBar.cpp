@@ -203,6 +203,18 @@ public:
         }
 
         const juce::Rectangle<float> fillR = snapRectToPixels (button.getLocalBounds().toFloat());
+
+        // Module dropdown buttons: colour-coded text from the button's own textColourOff
+        if (button.getComponentID().startsWith ("module-"))
+        {
+            const auto col = button.findColour (juce::TextButton::textColourOffId);
+            g.setColour (button.isEnabled() ? col : col.withAlpha (0.4f));
+            g.setFont (ui_.type().labelFont());
+            g.drawFittedText (button.getButtonText(), fillR.toNearestInt(),
+                              juce::Justification::centred, 1);
+            return;
+        }
+
         auto* toggle = dynamic_cast<juce::ToggleButton*> (&button);
         if (toggle != nullptr)
         {
@@ -244,6 +256,10 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     slotBButton.setLookAndFeel (laf);
     bypassButton.setLookAndFeel (laf);
     railToggleButton.setLookAndFeel (laf);
+    spectrumBtn_.setLookAndFeel (laf);
+    scopesBtn_.setLookAndFeel (laf);
+    metersBtn_.setLookAndFeel (laf);
+    tracesBtn_.setLookAndFeel (laf);
 
     const auto& theme = ui_.theme();
     const auto& type = ui_.type();
@@ -347,6 +363,33 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     bypassButton.setTooltip ("Bypass analyzer processing");
     addAndMakeVisible (bypassButton);
 
+    // Module dropdown buttons (Spectrum / Scopes / Meters / Traces) inside scrollable container
+    auto initModuleBtn = [&] (juce::TextButton& b, const juce::String& text,
+                              juce::Colour textCol,
+                              std::function<void (juce::Component*)>& cb)
+    {
+        b.setComponentID ("module-" + text.toLowerCase());
+        b.setButtonText (text);
+        b.setColour (juce::TextButton::buttonColourId,  theme.background.brighter (0.08f));
+        b.setColour (juce::TextButton::textColourOffId, textCol);
+        b.onClick = [&b, &cb] { if (cb) cb (&b); };
+        moduleBtnContainer_.addAndMakeVisible (b);
+    };
+    initModuleBtn (spectrumBtn_, "Spectrum", theme.seriesPeak,   onSpectrumClicked);
+    initModuleBtn (scopesBtn_,   "Scopes",   theme.seriesStereo, onScopesClicked);
+    initModuleBtn (metersBtn_,   "Meters",   theme.seriesLeft,   onMetersClicked);
+    initModuleBtn (tracesBtn_,   "Traces",   theme.seriesMono,   onTracesClicked);
+    spectrumBtn_.setTooltip ("Spectrum analyser settings");
+    scopesBtn_  .setTooltip ("Stereo scope settings");
+    metersBtn_  .setTooltip ("Level meter settings");
+    tracesBtn_  .setTooltip ("Trace visibility settings");
+
+    // Scroll port — horizontal scroll via trackpad swipe, no visible scrollbars
+    moduleScrollPort_.setViewedComponent (&moduleBtnContainer_, false);
+    moduleScrollPort_.setScrollBarsShown (false, false);
+    moduleScrollPort_.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::never);
+    addAndMakeVisible (moduleScrollPort_);
+
     // Control Rail Toggle
     railToggleButton.setComponentID ("rail-toggle");
     railToggleButton.setClickingTogglesState (true);
@@ -369,6 +412,10 @@ HeaderBar::~HeaderBar()
     slotBButton.setLookAndFeel (nullptr);
     bypassButton.setLookAndFeel (nullptr);
     railToggleButton.setLookAndFeel (nullptr);
+    spectrumBtn_.setLookAndFeel (nullptr);
+    scopesBtn_  .setLookAndFeel (nullptr);
+    metersBtn_  .setLookAndFeel (nullptr);
+    tracesBtn_  .setLookAndFeel (nullptr);
 }
 
 void HeaderBar::paint (juce::Graphics& g)
@@ -439,13 +486,32 @@ void HeaderBar::resized()
     const int railW = juce::jmin (railBtnW, rightZone.getRight() - x);
     railToggleButton.setBounds (x, y, railW, buttonH);
 
-    const juce::Rectangle<int> area (row.getX(), row.getY(), rightZone.getX() - row.getX(), row.getHeight());
-    const int titleCentreY = area.getCentreY();
+    // Title area: fixed title on the left, scrollable module buttons to the right
+    const juce::Rectangle<int> leftArea (row.getX(), row.getY(), rightZone.getX() - row.getX(), row.getHeight());
+    const int titleCentreY = leftArea.getCentreY();
     const int titleTop = static_cast<int> (std::round (static_cast<float> (titleCentreY) - ui_.type().titleH * 0.5f));
-    const int titleH = static_cast<int> (std::round (ui_.type().titleH + 6.0f));
-    const int titleWidth = juce::jmax (80, area.getWidth());
-    titleLabel.setBounds (area.getX(), titleTop, titleWidth, titleH);
-    titleLabel.setJustificationType (juce::Justification::centred);
+    const int titleH   = static_cast<int> (std::round (ui_.type().titleH + 6.0f));
+    constexpr int kTitleFixedW = 110;
+    constexpr int kModuleBtnW  = 72;
+    constexpr int kModuleGap   = 6;
+    constexpr int kNumBtns     = 4;
+    constexpr int kContainerW  = kNumBtns * kModuleBtnW + (kNumBtns - 1) * kModuleGap;
+
+    titleLabel.setBounds (leftArea.getX(), titleTop, kTitleFixedW, titleH);
+    titleLabel.setJustificationType (juce::Justification::centredLeft);
+
+    // Module buttons live inside a scrollable viewport so they're always reachable
+    const int portX = leftArea.getX() + kTitleFixedW + kModuleGap;
+    const int portW = juce::jmax (0, leftArea.getRight() - portX);
+    moduleScrollPort_.setBounds (portX, y, portW, buttonH);
+
+    // Container is exactly wide enough for all 4 buttons side-by-side
+    moduleBtnContainer_.setBounds (0, 0, kContainerW, buttonH);
+    int mx = 0;
+    spectrumBtn_.setBounds (mx, 0, kModuleBtnW, buttonH); mx += kModuleBtnW + kModuleGap;
+    scopesBtn_  .setBounds (mx, 0, kModuleBtnW, buttonH); mx += kModuleBtnW + kModuleGap;
+    metersBtn_  .setBounds (mx, 0, kModuleBtnW, buttonH); mx += kModuleBtnW + kModuleGap;
+    tracesBtn_  .setBounds (mx, 0, kModuleBtnW, buttonH);
 }
 
 void HeaderBar::setControlBinder (AnalyzerPro::ControlBinder& binder)
