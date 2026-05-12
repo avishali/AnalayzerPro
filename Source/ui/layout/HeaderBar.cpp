@@ -52,6 +52,19 @@ public:
         const float strokeRadius = snapRadius (juce::jmax (0.0f, radius - 0.5f));
         const juce::Rectangle<float> strokeR = insetForInsideStroke (fillR, kInsideStrokePx);
 
+        // Module dropdown buttons: neutral gray background, no primary-style colour
+        if (button.getComponentID().startsWith ("module-"))
+        {
+            const auto bg = button.isOver()
+                ? button.findColour (juce::TextButton::buttonColourId).brighter (0.15f)
+                : button.findColour (juce::TextButton::buttonColourId);
+            g.setColour (bg);
+            g.fillRoundedRectangle (fillR, radius);
+            g.setColour (ui_.theme().borderDivider);
+            g.drawRoundedRectangle (strokeR, strokeRadius, kInsideStrokePx);
+            return;
+        }
+
         juce::Colour bgColour, borderColour;
         auto* toggle = dynamic_cast<juce::ToggleButton*> (&button);
         if (toggle != nullptr)
