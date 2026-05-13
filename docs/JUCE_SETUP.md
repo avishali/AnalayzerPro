@@ -8,7 +8,12 @@
 
 ## Environment Setup
 
-The AnalyzerPro build system requires the `JUCE_PATH` environment variable to be set.
+The AnalyzerPro build system requires `JUCE_PATH` to be set for CMake. You can export it in the shell **or** put it in **`scripts/.env`** (create from `scripts/.env.example`; that file is gitignored). Build scripts load `.env` via `scripts/source_repo_env.sh`; a value you already exported in the shell wins over `.env`.
+
+```bash
+cp scripts/.env.example scripts/.env
+# Set JUCE_PATH inside scripts/.env (e.g. /Users/avishaylidani/DEV/SDK/JUCE)
+```
 
 ### Quick Setup (Current Session)
 

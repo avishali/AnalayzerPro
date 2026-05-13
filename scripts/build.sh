@@ -6,6 +6,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/source_repo_env.sh"
+
 cd "$SCRIPT_DIR"
 
 BUILD_DIR="build"
@@ -13,10 +16,9 @@ CONFIG="${1:-Debug}"
 
 # Check if JUCE_PATH is set
 if [ -z "$JUCE_PATH" ]; then
-    echo "Error: JUCE_PATH environment variable is not set."
-    echo "Please set it to your JUCE installation path:"
+    echo "Error: JUCE_PATH is not set."
     echo "  export JUCE_PATH=/path/to/JUCE"
-    echo "Or add it to your ~/.zshrc file"
+    echo "  or add JUCE_PATH=... to scripts/.env (see scripts/.env.example)"
     exit 1
 fi
 

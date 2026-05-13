@@ -49,15 +49,23 @@ MeterGroupComponent::MeterGroupComponent (mdsp_ui::UiContext& ui,
     scaleFullButton_.setClickingTogglesState (false);
     scale24Button_.setClickingTogglesState (false);
     scale12Button_.setClickingTogglesState (false);
+    scale6Button_.setClickingTogglesState (false);
     scaleFullButton_.onClick = [this] { setScaleMode (ScaleMode::FullRange); };
     scale24Button_.onClick = [this] { setScaleMode (ScaleMode::Top24Db); };
     scale12Button_.onClick = [this] { setScaleMode (ScaleMode::Top12Db); };
+    scale6Button_.onClick = [this] { setScaleMode (ScaleMode::Top6Db); };
 
     addAndMakeVisible (rmsButton_);
     addAndMakeVisible (peakButton_);
     addAndMakeVisible (scaleFullButton_);
     addAndMakeVisible (scale24Button_);
     addAndMakeVisible (scale12Button_);
+    addAndMakeVisible (scale6Button_);
+
+    scaleFullButton_.setTooltip ("Meter range: full (-120 dB to +6 dB)");
+    scale24Button_.setTooltip ("Meter zoom: top 24 dB (0 to -24)");
+    scale12Button_.setTooltip ("Meter zoom: top 12 dB (0 to -12)");
+    scale6Button_.setTooltip ("Meter zoom: top 6 dB (0 to -6)");
 
     meter0_ = std::make_unique<MeterComponent> (ui_, channelLabel (channelMode_, channelCount_, 0));
     meter1_ = std::make_unique<MeterComponent> (ui_, channelLabel (channelMode_, channelCount_, 1));
@@ -80,6 +88,7 @@ MeterGroupComponent::MeterGroupComponent (mdsp_ui::UiContext& ui,
     scaleFullButton_.setToggleState (scaleMode_ == ScaleMode::FullRange, juce::dontSendNotification);
     scale24Button_.setToggleState (scaleMode_ == ScaleMode::Top24Db, juce::dontSendNotification);
     scale12Button_.setToggleState (scaleMode_ == ScaleMode::Top12Db, juce::dontSendNotification);
+    scale6Button_.setToggleState (scaleMode_ == ScaleMode::Top6Db, juce::dontSendNotification);
 
     pushRenderStates();
 
@@ -185,6 +194,7 @@ void MeterGroupComponent::setScaleMode (ScaleMode mode)
     scaleFullButton_.setToggleState (mode == ScaleMode::FullRange, juce::dontSendNotification);
     scale24Button_.setToggleState (mode == ScaleMode::Top24Db, juce::dontSendNotification);
     scale12Button_.setToggleState (mode == ScaleMode::Top12Db, juce::dontSendNotification);
+    scale6Button_.setToggleState (mode == ScaleMode::Top6Db, juce::dontSendNotification);
 
     pushRenderStates();
 }
@@ -299,10 +309,11 @@ void MeterGroupComponent::resized()
     auto scaleRow = toggle.removeFromTop (scaleRowHeight);
     auto modeRow = toggle;
 
-    const int scaleThird = scaleRow.getWidth() / 3;
-    scaleFullButton_.setBounds (scaleRow.removeFromLeft (scaleThird));
-    scale24Button_.setBounds (scaleRow.removeFromLeft (scaleThird));
-    scale12Button_.setBounds (scaleRow);
+    const int scaleQuarter = juce::jmax (1, scaleRow.getWidth() / 4);
+    scaleFullButton_.setBounds (scaleRow.removeFromLeft (scaleQuarter));
+    scale24Button_.setBounds (scaleRow.removeFromLeft (scaleQuarter));
+    scale12Button_.setBounds (scaleRow.removeFromLeft (scaleQuarter));
+    scale6Button_.setBounds (scaleRow);
 
     const int modeHalf = modeRow.getWidth() / 2;
     rmsButton_.setBounds (modeRow.removeFromLeft (modeHalf));

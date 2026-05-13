@@ -300,6 +300,7 @@ juce_add_plugin(${PLUGIN_NAME}
     PLUGIN_MANUFACTURER_CODE ${MANUFACTURER_CODE}
     PLUGIN_CODE ${PLUGIN_CODE}
     FORMATS ${PLUGIN_FORMATS}
+    AAX_CATEGORY SoundField
     PRODUCT_NAME "${PRODUCT_NAME}"
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "AnalyzerPro needs microphone access to capture audio input devices, including virtual loopback devices such as BlackHole."
@@ -456,6 +457,32 @@ function(assert_target_not_self_linking tgt)
 endfunction()
 
 assert_target_not_self_linking(${PLUGIN_NAME})
+
+# Optional PACE wraptool sign + verify after AAX build (distribution signing; macOS only).
+# Secrets stay in the environment (never in CMake cache): AAX_WRAPTOOL_PASSWORD, etc.
+# See scripts/wraptool_sign_aax.sh
+option(ENABLE_AAX_WRAPTOOL_SIGN "Run PACE wraptool on the AAX bundle after each AAX build (macOS)" OFF)
+set(AAX_WRAPTOOL "" CACHE FILEPATH "Path to wraptool binary (optional; script defaults to Fusion Current)")
+
+if(APPLE AND ENABLE_AAX_WRAPTOOL_SIGN)
+    if("${PLUGIN_FORMATS}" MATCHES "AAX" AND TARGET ${PLUGIN_NAME}_AAX)
+        if(AAX_WRAPTOOL)
+            set(_aax_wraptool_arg "${AAX_WRAPTOOL}")
+        else()
+            set(_aax_wraptool_arg "")
+        endif()
+        add_custom_command(TARGET ${PLUGIN_NAME}_AAX POST_BUILD
+            COMMAND /bin/bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/wraptool_sign_aax.sh"
+                "$<TARGET_FILE:${PLUGIN_NAME}_AAX>"
+                "${_aax_wraptool_arg}"
+            COMMENT "PACE wraptool: sign + verify AAX"
+            VERBATIM
+        )
+        message(STATUS "  AAX wraptool POST_BUILD: ON (ENABLE_AAX_WRAPTOOL_SIGN)")
+    elseif(ENABLE_AAX_WRAPTOOL_SIGN)
+        message(WARNING "ENABLE_AAX_WRAPTOOL_SIGN is ON but AAX is not in PLUGIN_FORMATS or ${PLUGIN_NAME}_AAX target is missing; skipping wraptool step.")
+    endif()
+endif()
 
 # ==============================================================================
 # STATUS MESSAGES

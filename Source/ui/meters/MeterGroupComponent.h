@@ -65,6 +65,7 @@ private:
     juce::TextButton scaleFullButton_ { "Full" };
     juce::TextButton scale24Button_ { "24" };
     juce::TextButton scale12Button_ { "12" };
+    juce::TextButton scale6Button_ { "6" };
 
     std::unique_ptr<MeterComponent> meter0_;
     std::unique_ptr<MeterComponent> meter1_;

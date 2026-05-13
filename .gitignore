@@ -46,4 +46,7 @@ node_modules/
 scripts/node_modules/
 scripts/.env
 !scripts/.env.example
+
+# PACE wraptool / iLok credentials for local AAX signing (see scripts/.aax_wraptool.env.example)
+scripts/.aax_wraptool.env
 beta-dist/

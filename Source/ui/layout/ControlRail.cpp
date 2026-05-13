@@ -70,7 +70,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
         b.setRadioGroupId (1001);
         b.setClickingTogglesState (true);
         b.setColour (juce::TextButton::buttonColourId, theme.background.brighter (0.05f));
-        b.setColour (juce::TextButton::buttonOnColourId, theme.accent);
+        b.setColour (juce::TextButton::buttonOnColourId, theme.panel.brighter (0.28f));
         addAndMakeVisible (b);
     };
     initModeBtn (fftButton_,  "FFT");

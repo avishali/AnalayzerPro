@@ -2,6 +2,14 @@
 
 # Code Signing and Notarization Script for AnalyzerPro
 # Signs and notarizes plugins for distribution on macOS
+#
+# Recommended order with PACE-signed AAX (pkg/zip/dmg contain the final AAX):
+#   1) ./scripts/build_release.sh
+#   2) ./scripts/wraptool_sign_aax.sh \
+#        build-release/AnalyzerPro_artefacts/Release/AAX/AnalyzerPro.aaxplugin/Contents/MacOS/AnalyzerPro
+#   3) SIGN_AND_NOTARIZE_SKIP_AAX=1 ./scripts/sign_and_notarize.sh
+# Or run ./scripts/release_macos.sh (orchestrates the same steps). Full guide: docs/release_macos.md
+# create_installer.sh copies AAX into the pkg when present; SKIP_AAX avoids Apple re-signing that bundle.
 
 set -e
 
@@ -14,13 +22,16 @@ DEVELOPER_ID_APP="Developer ID Application: AVISHAY LIDANI (C5UC779LGC)"
 DEVELOPER_ID_INSTALLER="Developer ID Installer: AVISHAY LIDANI (C5UC779LGC)"
 APPLE_ID="avishay.lidani@gmail.com"
 TEAM_ID="C5UC779LGC"
-APP_SPECIFIC_PASSWORD="@keychain:AC_PASSWORD"  # Store in keychain!
+# Profile name for notarytool (must match `xcrun notarytool store-credentials <name>`).
+# Do not use the @keychain: prefix here — notarytool expects the bare profile name.
+NOTARYTOOL_KEYCHAIN_PROFILE="AC_PASSWORD"
 
 # Plugin information
 PLUGIN_NAME="AnalyzerPro"
 PLUGIN_VERSION="1.1.1"
 INSTALLER_DIR="$PROJECT_ROOT/installer"
-BUILD_DIR="build-release"
+# Same tree as build_release.sh / create_installer.sh (override with ANALYZERPRO_RELEASE_BUILD_DIR)
+BUILD_DIR="${ANALYZERPRO_RELEASE_BUILD_DIR:-build-release}"
 ARTIFACTS_DIR="$BUILD_DIR/${PLUGIN_NAME}_artefacts/Release"
 
 echo "=========================================="
@@ -87,10 +98,14 @@ if [ -d "$ARTIFACTS_DIR/Standalone/${PLUGIN_NAME}.app" ]; then
     sign_bundle "$ARTIFACTS_DIR/Standalone/${PLUGIN_NAME}.app" "$STANDALONE_ENTITLEMENTS"
 fi
 
-# Sign AAX (if present)
+# Sign AAX (if present) — skip when AAX was already PACE-signed with wraptool_sign_aax.sh
 if [ -d "$ARTIFACTS_DIR/AAX/${PLUGIN_NAME}.aaxplugin" ]; then
-    echo "⚠️  Note: AAX requires additional PACE signing for Pro Tools"
-    sign_bundle "$ARTIFACTS_DIR/AAX/${PLUGIN_NAME}.aaxplugin"
+    if [ "${SIGN_AND_NOTARIZE_SKIP_AAX:-}" = "1" ]; then
+        echo "⏭️  Skipping Apple codesign on AAX (SIGN_AND_NOTARIZE_SKIP_AAX=1; use PACE-signed bundle)."
+    else
+        echo "⚠️  Note: AAX requires additional PACE signing for Pro Tools"
+        sign_bundle "$ARTIFACTS_DIR/AAX/${PLUGIN_NAME}.aaxplugin"
+    fi
 fi
 
 echo ""
@@ -135,34 +150,54 @@ echo "📤 Submitting for notarization..."
 echo "   This may take several minutes..."
 echo ""
 
-# Submit for notarization
-xcrun notarytool submit "$SIGNED_PKG" \
-    --keychain-profile "$APP_SPECIFIC_PASSWORD" \
-    --wait
+NOTARY_TMP=$(mktemp)
+trap 'rm -f "$NOTARY_TMP"' EXIT
+
+set +e
+( set -o pipefail; set -e
+  xcrun notarytool submit "$SIGNED_PKG" \
+      --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" \
+      --wait 2>&1 | tee "$NOTARY_TMP"
+)
+NOTARY_exit=$?
+set -e
+
+# notarytool can exit 0 even when the final status is Invalid; do not staple unless last status is Accepted.
+LAST_STATUS_LINE=$(grep -E '^[[:space:]]*status:[[:space:]]*' "$NOTARY_TMP" | tail -1 || true)
+if ! echo "$LAST_STATUS_LINE" | grep -qE 'status:[[:space:]]*Accepted'; then
+    NOTARY_exit=1
+fi
+
+if [ "$NOTARY_exit" -ne 0 ]; then
+    echo ""
+    echo "❌ Notarization was not accepted (or notarytool failed). Stapling is skipped."
+    REQUEST_ID=$(grep -E '[[:space:]]id:' "$NOTARY_TMP" | tail -1 | sed -E 's/^[[:space:]]*id:[[:space:]]*//' | tr -d '\r' || true)
+    if [ -n "$REQUEST_ID" ]; then
+        echo ""
+        echo "Apple's detail log for submission $REQUEST_ID:"
+        xcrun notarytool log "$REQUEST_ID" --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" 2>&1 || true
+        echo ""
+        echo "To re-fetch later:"
+        echo "  xcrun notarytool log $REQUEST_ID --keychain-profile $NOTARYTOOL_KEYCHAIN_PROFILE"
+    fi
+    exit 1
+fi
+
+echo ""
+echo "✅ Notarization accepted (status: Accepted)"
+echo ""
+
+# Staple the notarization ticket
+echo "📎 Stapling notarization ticket..."
+xcrun stapler staple "$SIGNED_PKG"
 
 if [ $? -eq 0 ]; then
-    echo ""
-    echo "✅ Notarization successful!"
-    echo ""
+    echo "✅ Notarization ticket stapled!"
     
-    # Staple the notarization ticket
-    echo "📎 Stapling notarization ticket..."
-    xcrun stapler staple "$SIGNED_PKG"
-    
-    if [ $? -eq 0 ]; then
-        echo "✅ Notarization ticket stapled!"
-        
-        # Verify stapling
-        xcrun stapler validate "$SIGNED_PKG"
-    else
-        echo "❌ Failed to staple notarization ticket"
-        exit 1
-    fi
+    # Verify stapling
+    xcrun stapler validate "$SIGNED_PKG"
 else
-    echo "❌ Notarization failed"
-    echo ""
-    echo "To check notarization status:"
-    echo "  xcrun notarytool log REQUEST_ID --keychain-profile AC_PASSWORD"
+    echo "❌ Failed to staple notarization ticket"
     exit 1
 fi
 

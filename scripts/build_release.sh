@@ -9,7 +9,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-BUILD_DIR="build-release"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/source_repo_env.sh"
+
+BUILD_DIR="${ANALYZERPRO_RELEASE_BUILD_DIR:-build-release}"
 CONFIG="Release"
 
 # Plugin information
@@ -28,9 +31,9 @@ echo ""
 
 # Check if JUCE_PATH is set
 if [ -z "$JUCE_PATH" ]; then
-    echo "❌ Error: JUCE_PATH environment variable is not set."
-    echo "Please set it to your JUCE installation path:"
+    echo "❌ Error: JUCE_PATH is not set."
     echo "  export JUCE_PATH=/path/to/JUCE"
+    echo "  or add JUCE_PATH=... to scripts/.env (copy from scripts/.env.example)"
     exit 1
 fi
 
@@ -142,6 +145,11 @@ echo "🎉 Release build successful!"
 echo ""
 echo "Next steps:"
 echo "  1. Test all plugin formats"
-echo "  2. Run: ./scripts/create_installer.sh"
-echo "  3. Sign and notarize (for distribution)"
+echo "  2. From this build — sign & ship:"
+echo "       AAX (if built): ./scripts/wraptool_sign_aax.sh \\"
+echo "         $BUILD_DIR/${PLUGIN_NAME}_artefacts/Release/AAX/${PLUGIN_NAME}.aaxplugin/Contents/MacOS/${PLUGIN_NAME}"
+echo "       Then: SIGN_AND_NOTARIZE_SKIP_AAX=1 ./scripts/sign_and_notarize.sh"
+echo "       (omit SKIP_AAX if you did not PACE-sign AAX; see docs/release_macos.md)"
+echo "  3. From clean tree next time — one script: ./scripts/release_macos.sh (build + AAX + sign)"
+echo "  4. Unsigned .pkg/.zip/.dmg only: ./scripts/create_installer.sh"
 echo ""

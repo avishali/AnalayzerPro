@@ -65,10 +65,10 @@ public:
             return;
         }
 
-        juce::Colour bgColour, borderColour;
         auto* toggle = dynamic_cast<juce::ToggleButton*> (&button);
         if (toggle != nullptr)
         {
+            juce::Colour bgColour, borderColour;
             auto style = mdsp_ui::makeToggleButtonStyle (ui_, toggle->getToggleState(), toggle->isEnabled());
             getStateColours (button, style, bgColour, borderColour);
             g.setColour (bgColour);
@@ -86,8 +86,28 @@ public:
         }
         else
         {
-            auto style = mdsp_ui::makePrimaryButtonStyle (ui_, button.isEnabled());
-            getStateColours (button, style, bgColour, borderColour);
+            // Preset / Save / A / B / zoom reset: respect per-button colours (neutral gray), not accent fills.
+            juce::Colour bgColour = button.findColour (juce::TextButton::buttonColourId);
+            if (button.getClickingTogglesState() && button.getToggleState())
+                bgColour = button.findColour (juce::TextButton::buttonOnColourId);
+
+            juce::Colour borderColour = ui_.theme().borderDivider;
+            if (! button.isEnabled())
+            {
+                bgColour = bgColour.withMultipliedAlpha (0.55f);
+                borderColour = borderColour.withMultipliedAlpha (0.5f);
+            }
+            else if (button.isDown())
+            {
+                bgColour = bgColour.darker (0.12f);
+                borderColour = borderColour.darker (0.15f);
+            }
+            else if (button.isOver())
+            {
+                bgColour = bgColour.brighter (0.12f);
+                borderColour = borderColour.brighter (0.12f);
+            }
+
             g.setColour (bgColour);
             g.fillRoundedRectangle (fillR, radius);
             g.setColour (borderColour);
@@ -97,9 +117,7 @@ public:
         {
             const float focusPx = ui_.metrics().strokeThin;
             auto focusBounds = snapRectToPixels (fillR.expanded (focusPx));
-            g.setColour (toggle != nullptr
-                ? mdsp_ui::makeToggleButtonStyle (ui_, static_cast<juce::ToggleButton*>(&button)->getToggleState(), true).focusRing
-                : mdsp_ui::makePrimaryButtonStyle (ui_, true).focusRing);
+            g.setColour (ui_.theme().lightGrey.withAlpha (0.55f));
             g.drawRoundedRectangle (focusBounds.toFloat(), radius + focusPx, focusPx);
         }
     }
@@ -245,8 +263,10 @@ public:
         }
         else
         {
-            auto style = mdsp_ui::makePrimaryButtonStyle (ui_, button.isEnabled());
-            g.setColour (button.isEnabled() ? style.text : style.textDisabled);
+            const bool toggled = button.getClickingTogglesState() && button.getToggleState();
+            const auto textCol = toggled ? button.findColour (juce::TextButton::textColourOnId)
+                                        : button.findColour (juce::TextButton::textColourOffId);
+            g.setColour (button.isEnabled() ? textCol : textCol.withMultipliedAlpha (0.45f));
             g.setFont (ui_.type().labelFont());
             g.drawFittedText (button.getButtonText(), fillR.toNearestInt(), juce::Justification::centred, 1);
         }
@@ -267,6 +287,7 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     saveButton.setLookAndFeel (laf);
     slotAButton.setLookAndFeel (laf);
     slotBButton.setLookAndFeel (laf);
+    zoomResetButton_.setLookAndFeel (laf);
     bypassButton.setLookAndFeel (laf);
     railToggleButton.setLookAndFeel (laf);
     spectrumBtn_.setLookAndFeel (laf);
@@ -296,6 +317,9 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     // Zoom reset button — returns range to -120 dB default
     zoomResetButton_.setButtonText (juce::CharPointer_UTF8 ("\xe2\x86\xba")); // ↺
     zoomResetButton_.setTooltip ("Reset zoom to -120 dB");
+    zoomResetButton_.setColour (juce::TextButton::buttonColourId, theme.panel);
+    zoomResetButton_.setColour (juce::TextButton::textColourOffId, theme.text);
+    zoomResetButton_.setColour (juce::TextButton::textColourOnId, theme.text);
     zoomResetButton_.onClick = [this] { if (onZoomReset) onZoomReset(); };
     addAndMakeVisible (zoomResetButton_);
 
@@ -303,6 +327,8 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     presetButton.setButtonText ("Preset");
     presetButton.setTooltip ("Load Preset");
     presetButton.setColour (juce::TextButton::buttonColourId, theme.panel);
+    presetButton.setColour (juce::TextButton::textColourOffId, theme.text);
+    presetButton.setColour (juce::TextButton::textColourOnId, theme.text);
     presetButton.onClick = [this]
     {
         if (presetManager)
@@ -325,6 +351,8 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     saveButton.setButtonText ("Save");
     saveButton.setTooltip ("Save Preset");
     saveButton.setColour (juce::TextButton::buttonColourId, theme.panel);
+    saveButton.setColour (juce::TextButton::textColourOffId, theme.text);
+    saveButton.setColour (juce::TextButton::textColourOnId, theme.text);
     saveButton.onClick = [this]
     {
         if (presetManager)
@@ -353,7 +381,9 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
         b.setRadioGroupId (2002);
         b.setClickingTogglesState (true);
         b.setColour (juce::TextButton::buttonColourId, theme.panel);
-        b.setColour (juce::TextButton::buttonOnColourId, theme.accent);
+        b.setColour (juce::TextButton::buttonOnColourId, theme.panel.brighter (0.22f));
+        b.setColour (juce::TextButton::textColourOffId, theme.text);
+        b.setColour (juce::TextButton::textColourOnId, theme.text);
         b.onClick = [this, slot]
         {
             if (abStateManager)
@@ -423,6 +453,7 @@ HeaderBar::~HeaderBar()
     saveButton.setLookAndFeel (nullptr);
     slotAButton.setLookAndFeel (nullptr);
     slotBButton.setLookAndFeel (nullptr);
+    zoomResetButton_.setLookAndFeel (nullptr);
     bypassButton.setLookAndFeel (nullptr);
     railToggleButton.setLookAndFeel (nullptr);
     spectrumBtn_.setLookAndFeel (nullptr);

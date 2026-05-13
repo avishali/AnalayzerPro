@@ -30,6 +30,10 @@ static constexpr float kUiPeakInvalidSentinelDb = -90.0f;
 // Spectrum Y-axis headroom; RenderState topDb must never be 0.
 static constexpr float kSpectrumTopDb = 6.0f;
 
+// Snapshot pump + view timer (message thread). Keep in sync with minDbAnim_ reset() sample rate.
+// 30 Hz matches MainView / meters and cuts UI CPU load in Live and Pro Tools vs 60 Hz.
+static constexpr int kAnalyzerDisplayTimerHz = 30;
+
 static inline bool isInvalidPeakDb (float db) noexcept
 {
     return db <= kUiPeakInvalidSentinelDb;
@@ -148,7 +152,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
     // Initialize analyzer display ranges
     analyzerBridgeWidget_.setFrequencyRange (20.0f, 20000.0f);
     targetMinDb_ = dbRangeToMinDb (dbRange_);
-    minDbAnim_.reset (60.0, 0.20);
+    minDbAnim_.reset (static_cast<double> (kAnalyzerDisplayTimerHz), 0.20);
     minDbAnim_.setCurrentAndTargetValue (targetMinDb_);
     lastAppliedMinDb_ = targetMinDb_;
     analyzerBridgeWidget_.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
@@ -180,10 +184,10 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
     {
         handlePumpedSnapshot (s);
     });
-    analyzerBridgeWidget_.start (60);
+    analyzerBridgeWidget_.start (kAnalyzerDisplayTimerHz);
 
-    // Start timer for snapshot updates (~60 Hz) and dB range animation
-    startTimerHz (60);
+    // Snapshot updates + dB range animation (same cadence as minDbAnim_ sample rate above)
+    startTimerHz (kAnalyzerDisplayTimerHz);
     
 
 }
@@ -196,7 +200,7 @@ void AnalyzerDisplayView::setDbRange (DbRange r)
     dbRange_ = r;
     targetMinDb_ = dbRangeToMinDb (dbRange_);
 
-    minDbAnim_.reset (60.0, 0.20);
+    minDbAnim_.reset (static_cast<double> (kAnalyzerDisplayTimerHz), 0.20);
     minDbAnim_.setTargetValue (targetMinDb_);
     analyzerBridgeWidget_.setDbRange (kSpectrumTopDb, targetMinDb_);
     kickSnapshotPumpImmediate();
@@ -1093,8 +1097,16 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                                                scratchPowerMid_.data(), scratchPowerSide_.data(), scratchPowerMono_.data(),
                                                validBins);
             }
+            else
+            {
+                // Clear stale multi-trace state so legend / hasMultiTrace / crosshair columns stay in sync.
+                analyzerBridgeWidget_.setMultiTraceData (nullptr, nullptr, nullptr, nullptr, nullptr, 0);
+            }
 #if JUCE_DEBUG
-            else if (snapshot.multiTraceEnabled)
+            if (snapshot.multiTraceEnabled
+                && (! ( !scratchPowerL_.empty() && !scratchPowerR_.empty()
+                        && scratchPowerL_.size() == static_cast<size_t> (validBins)
+                        && scratchPowerR_.size() == static_cast<size_t> (validBins))))
             {
                 static bool warnedOnce = false;
                 if (!warnedOnce)

@@ -58,7 +58,7 @@ void SettingsPopupPanel::initSpectrum (juce::AudioProcessorValueTreeState* /*apv
         b.setRadioGroupId (3001);
         b.setClickingTogglesState (true);
         b.setColour (juce::TextButton::buttonColourId, theme.background.brighter (0.05f));
-        b.setColour (juce::TextButton::buttonOnColourId, theme.accent);
+        b.setColour (juce::TextButton::buttonOnColourId, theme.panel.brighter (0.28f));
         addAndMakeVisible (b);
     };
     initMode (fftBtn_,  "FFT");
@@ -258,7 +258,8 @@ int SettingsPopupPanel::getPreferredHeight() const
             h += choiceH + toggleH;
             break;
         case Section::Traces:
-            h += toggleH * 5; // show 5 rows; remaining 2 are scrollable
+            // Seven trace toggles (Stereo, Mono, L, R, Mid, Side, RMS); height must fit all rows in the CallOutBox.
+            h += toggleH * 7;
             break;
     }
     return h;

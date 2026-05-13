@@ -10,8 +10,10 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
       lnf_ (ui_),
       mainView (ui_, p, &p.getAPVTS())
 {
-    // Apply custom LookAndFeel globally
-    juce::LookAndFeel::setDefaultLookAndFeel (&lnf_);
+    // Plugin-safe: scope LookAndFeel to this editor only. setDefaultLookAndFeel replaces the
+    // process-wide default and can crash or corrupt hosts that share a GUI stack (e.g. some
+    // embedded / multi-plugin shells) when the plugin is first opened.
+    setLookAndFeel (&lnf_);
 
     // Init Tooltips (custom overlay for rich tooltips + JUCE native for controls)
     tooltipManager_ = std::make_unique<mdsp_ui::TooltipManager> (*this, ui_);
