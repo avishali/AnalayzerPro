@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 # Sign a built AAX bundle with Avid/PACE wraptool (macOS).
 #
+# Avid AAX SDK (e.g. aax-sdk-2-8-0) vs this script
+# -------------------------------------------------
+# The SDK README covers *building* against the SDK (Libs/AAXLibrary, examples)
+# and *policy*: retail Pro Tools expects PACE-signed AAX; unsigned builds load
+# only in Avid "developer builds" of Pro Tools; signing-tool access via
+# audiosdk@avid.com. The SDK does not ship wraptool — signing is PACE Eden/Fusion.
+#
+# AnalyzerPro CMake: point the *compiler* at the SDK root (must contain
+# Interfaces/ACF), e.g. -DAAX_SDK_PATH=/path/to/aax-sdk-2-8-0 or env AAX_SDK_PATH.
+# That is independent of the env vars below, which are only for wraptool.
+#
+# This script runs *after* the AAX bundle exists: CMake POST_BUILD passes JUCE's
+# path to the Mach-O inside the bundle; we resolve the .aaxplugin root and sign
+# the bundle in place, then verify.
+#
 # CMake invokes this as a POST_BUILD step with the path to the AAX Mach-O
 # binary inside the bundle (JUCE's TARGET_FILE for the AAX target).
 #
@@ -31,7 +46,8 @@
 #   AAX_WRAPTOOL            — full path to wraptool (default: Fusion Current on macOS)
 #   argv[2]                 — same as AAX_WRAPTOOL if set (CMake -DAAX_WRAPTOOL passes this)
 #
-# References: Avid AAX code signing + PACE Eden/Fusion wraptool documentation.
+# References: AAX SDK README.md (developer builds, PACE signing, audiosdk@avid.com);
+# PACE Eden/Fusion wraptool --help / Avid AAX code signing materials.
 
 set -euo pipefail
 

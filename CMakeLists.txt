@@ -458,6 +458,18 @@ endfunction()
 
 assert_target_not_self_linking(${PLUGIN_NAME})
 
+# Experimental AAX: VBlank-driven analyzer spectrum UI tick (AnalyzerDisplayView). Other formats
+# ignore this; code is active only when JucePlugin_Build_AAX && ANALYZERPRO_AAX_USE_VBLANK_UI_TICK.
+option(ANALYZERPRO_AAX_USE_VBLANK_UI_TICK "Experimental AAX: drive analyzer UI pump from VBlankAttachment" OFF)
+if(ANALYZERPRO_AAX_USE_VBLANK_UI_TICK)
+    foreach(_vb_t IN ITEMS ${PLUGIN_NAME} ${PLUGIN_NAME}_SharedCode ${PLUGIN_NAME}_AAX)
+        if(TARGET "${_vb_t}")
+            target_compile_definitions("${_vb_t}" PRIVATE ANALYZERPRO_AAX_USE_VBLANK_UI_TICK=1)
+        endif()
+    endforeach()
+    message(STATUS "AnalyzerPro: ANALYZERPRO_AAX_USE_VBLANK_UI_TICK=ON")
+endif()
+
 # Optional PACE wraptool sign + verify after AAX build (distribution signing; macOS only).
 # Secrets stay in the environment (never in CMake cache): AAX_WRAPTOOL_PASSWORD, etc.
 # See scripts/wraptool_sign_aax.sh

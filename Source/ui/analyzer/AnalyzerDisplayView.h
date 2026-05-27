@@ -24,6 +24,12 @@
 #define PLUGIN_DEV_MODE 1  // Temporary debug overlay
 #endif
 
+// AAX-only: drive UI pump from display VBlank (throttled to kAnalyzerUiFps) instead of juce::Timer.
+// Pass -DANALYZERPRO_AAX_USE_VBLANK_UI_TICK=1 when building the AAX target to compare in Pro Tools.
+#ifndef ANALYZERPRO_AAX_USE_VBLANK_UI_TICK
+#define ANALYZERPRO_AAX_USE_VBLANK_UI_TICK 0
+#endif
+
 //==============================================================================
 /**
     AnalyzerDisplayView hosts analyzer display widget with mode switching.
@@ -102,9 +108,17 @@ public:
     /** Shutdown: stop timer and clear references. Safe to call multiple times. */
     void shutdown();
 
+    /** Used by AAX VBlank marshaler; avoids exposing internal shutdown flag to nested types. */
+    bool isAnalyzerViewShutdown() const noexcept { return isShutdown; }
+
 private:
     static void applyLogSmoothingThunk (float* power, int bins, void* userData) noexcept;
     void timerCallback() override;
+    /** Message-thread spectrum UI pump (APVTS read, ballistics, pump FFT apply). */
+    void analyzerUiTickCore();
+#if JucePlugin_Build_AAX
+    void aaxAccumulateDiagnosticsAndMaybeHud (bool tickFromVBlank);
+#endif
     void updateFromSnapshot (const AnalyzerSnapshot& snapshot);
     void handlePumpedSnapshot (const AnalyzerSnapshot& snapshot);
     void kickSnapshotPumpImmediate();
@@ -265,6 +279,34 @@ private:
     // Generation counters for render stability (SMOOTHING_RENDERING_STABILITY_V2)
     uint32_t traceDataGen_ = 0;   // Increments when trace buffer content changes
     uint32_t smoothingGen_ = 0;   // Increments when smoothing param changes
+
+#if JucePlugin_Build_AAX
+    /** AAX visual diagnostics (message thread only; HUD refreshed from timerCallback). */
+    float aaxDiagLastPaintMs_ = 0.0f;
+    uint32_t aaxDiagPaintEventsAccum_ = 0;
+    uint32_t aaxDiagSpectrumResizesAccum_ = 0;
+    double aaxDiagTimerPrevMs_ = 0.0;
+    double aaxDiagTimerJitterSumMs_ = 0.0;
+    int aaxDiagTimerJitterSamples_ = 0;
+    double aaxDiagTimerDtSumMs_ = 0.0;
+    int aaxDiagTimerTickCount_ = 0;
+    uint32_t aaxDiagTimerLateCountAccum_ = 0;
+    double aaxDiagHudWallMs_ = 0.0;
+    uint32_t aaxDiagPumpThrottleAccum_ = 0;
+    uint32_t aaxDiagPumpRejectAccum_ = 0;
+#endif
+
+#if JucePlugin_Build_AAX && ANALYZERPRO_AAX_USE_VBLANK_UI_TICK
+    struct AaxVBlankMarshaler final : public juce::AsyncUpdater
+    {
+        explicit AaxVBlankMarshaler (AnalyzerDisplayView& ownerIn) : owner (ownerIn) {}
+        void handleAsyncUpdate() override;
+        AnalyzerDisplayView& owner;
+    };
+    AaxVBlankMarshaler aaxVBlankMarshaler_;
+    juce::VBlankAttachment aaxVBlankAttachment_;
+    double aaxVBlankLastDispatchMs_ = -1.0;
+#endif
     
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     struct ModeDebugOverlay final : public juce::Component

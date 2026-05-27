@@ -31,8 +31,13 @@ static constexpr float kUiPeakInvalidSentinelDb = -90.0f;
 static constexpr float kSpectrumTopDb = 6.0f;
 
 // Snapshot pump + view timer (message thread). Keep in sync with minDbAnim_ reset() sample rate.
-// 30 Hz matches MainView / meters and cuts UI CPU load in Live and Pro Tools vs 60 Hz.
-static constexpr int kAnalyzerDisplayTimerHz = 30;
+// AAX: 15 Hz reduces pressure on Pro Tools' message thread vs 24 Hz; for A/B vs 24, temporarily change 15→24.
+#if JucePlugin_Build_AAX
+constexpr int kAnalyzerUiFps = 15;
+#else
+constexpr int kAnalyzerUiFps = 30;
+#endif
+static constexpr int kAnalyzerDisplayTimerHz = kAnalyzerUiFps;
 
 static inline bool isInvalidPeakDb (float db) noexcept
 {
@@ -57,6 +62,9 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
       navOverlay_ (ui)
 #if JUCE_DEBUG
     , lastDebugLogTime_ (juce::Time::getCurrentTime())
+#endif
+#if JucePlugin_Build_AAX && ANALYZERPRO_AAX_USE_VBLANK_UI_TICK
+    , aaxVBlankMarshaler_ (*this)
 #endif
 {
     theme_.seriesRms = juce::Colours::lightblue.withAlpha (theme_.seriesRms.getFloatAlpha());
@@ -186,10 +194,37 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
     });
     analyzerBridgeWidget_.start (kAnalyzerDisplayTimerHz);
 
+#if JucePlugin_Build_AAX && ANALYZERPRO_AAX_USE_VBLANK_UI_TICK
+    aaxVBlankAttachment_ = juce::VBlankAttachment (
+        this,
+        [this] (double)
+        {
+            if (isShutdown)
+                return;
+
+            const double nowMs = juce::Time::getMillisecondCounterHiRes();
+            const double periodMs = 1000.0 / static_cast<double> (juce::jmax (1, kAnalyzerUiFps));
+            const double last = aaxVBlankLastDispatchMs_;
+
+            if (last < 0.0 || (nowMs - last) >= periodMs * 0.92)
+            {
+                aaxVBlankLastDispatchMs_ = nowMs;
+                aaxVBlankMarshaler_.triggerAsyncUpdate();
+            }
+        });
+#else
     // Snapshot updates + dB range animation (same cadence as minDbAnim_ sample rate above)
     startTimerHz (kAnalyzerDisplayTimerHz);
-    
+#endif
 
+#if JucePlugin_Build_AAX
+    analyzerBridgeWidget_.getRTADisplay().setPaintTimingCallback (
+        [this] (float paintMs)
+        {
+            aaxDiagLastPaintMs_ = paintMs;
+            ++aaxDiagPaintEventsAccum_;
+        });
+#endif
 }
 
 void AnalyzerDisplayView::setDbRange (DbRange r)
@@ -282,8 +317,17 @@ void AnalyzerDisplayView::shutdown()
 
     isShutdown = true;
 
-    analyzerBridgeWidget_.stop();
+#if JucePlugin_Build_AAX
+    analyzerBridgeWidget_.getRTADisplay().setPaintTimingCallback (nullptr);
+#endif
+#if JucePlugin_Build_AAX && ANALYZERPRO_AAX_USE_VBLANK_UI_TICK
+    aaxVBlankMarshaler_.cancelPendingUpdate();
+    aaxVBlankAttachment_ = juce::VBlankAttachment {};
+    aaxVBlankLastDispatchMs_ = -1.0;
+#else
     stopTimer();          // CRITICAL
+#endif
+    analyzerBridgeWidget_.stop();
     //cancelPendingUpdate(); // if AsyncUpdater ever used later
 
     // Shutdown complete
@@ -558,6 +602,9 @@ void AnalyzerDisplayView::resetFrequencyView()
 
 void AnalyzerDisplayView::resized()
 {
+#if JucePlugin_Build_AAX
+    ++aaxDiagSpectrumResizesAccum_;
+#endif
     auto bounds = getLocalBounds();
     analyzerBridgeWidget_.setBounds (bounds);
     analyzerBridgeWidget_.toFront (false);
@@ -695,12 +742,89 @@ void AnalyzerDisplayView::kickSnapshotPumpImmediate()
     analyzerBridgeWidget_.emitNowIfDirty (true);
 }
 
-void AnalyzerDisplayView::timerCallback()
+#if JucePlugin_Build_AAX
+void AnalyzerDisplayView::aaxAccumulateDiagnosticsAndMaybeHud (bool tickFromVBlank)
 {
-    // Early return if shutdown (do not rely on isTimerRunning())
-    if (isShutdown)
-        return;
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
+    const double expectedMs = 1000.0 / static_cast<double> (juce::jmax (1, kAnalyzerDisplayTimerHz));
 
+    if (aaxDiagTimerPrevMs_ > 0.0)
+    {
+        const double dt = nowMs - aaxDiagTimerPrevMs_;
+        aaxDiagTimerDtSumMs_ += dt;
+        ++aaxDiagTimerTickCount_;
+        aaxDiagTimerJitterSumMs_ += std::abs (dt - expectedMs);
+        ++aaxDiagTimerJitterSamples_;
+        if (dt > expectedMs * 1.25)
+            ++aaxDiagTimerLateCountAccum_;
+    }
+
+    aaxDiagTimerPrevMs_ = nowMs;
+
+    uint32_t throttle = 0, rejected = 0;
+    analyzerBridgeWidget_.getAndResetPumpDiagnostics (throttle, rejected);
+    aaxDiagPumpThrottleAccum_ += throttle;
+    aaxDiagPumpRejectAccum_ += rejected;
+
+    if (aaxDiagHudWallMs_ <= 0.0)
+        aaxDiagHudWallMs_ = nowMs;
+
+    if (nowMs - aaxDiagHudWallMs_ >= 1000.0)
+    {
+        aaxDiagHudWallMs_ = nowMs;
+
+        const float jitterAvg = (aaxDiagTimerJitterSamples_ > 0)
+            ? static_cast<float> (aaxDiagTimerJitterSumMs_ / static_cast<double> (aaxDiagTimerJitterSamples_))
+            : 0.0f;
+        aaxDiagTimerJitterSumMs_ = 0.0;
+        aaxDiagTimerJitterSamples_ = 0;
+
+        const int ticksThisSec = aaxDiagTimerTickCount_;
+        const double dtSumThisSec = aaxDiagTimerDtSumMs_;
+        aaxDiagTimerTickCount_ = 0;
+        aaxDiagTimerDtSumMs_ = 0.0;
+
+        const float actualTimerMsAvg = (ticksThisSec > 0)
+            ? static_cast<float> (dtSumThisSec / static_cast<double> (ticksThisSec))
+            : 0.0f;
+        const float actualFps = (actualTimerMsAvg > 1.0e-4f)
+            ? (1000.0f / actualTimerMsAvg)
+            : 0.0f;
+        const int latePerSec = static_cast<int> (aaxDiagTimerLateCountAccum_);
+        aaxDiagTimerLateCountAccum_ = 0;
+
+        const int paintsPerSec = static_cast<int> (aaxDiagPaintEventsAccum_);
+        aaxDiagPaintEventsAccum_ = 0;
+
+        const int specResizesPerSec = static_cast<int> (aaxDiagSpectrumResizesAccum_);
+        aaxDiagSpectrumResizesAccum_ = 0;
+
+        const float scale = static_cast<float> (getDesktopScaleFactor());
+        const float expectedMsF = static_cast<float> (expectedMs);
+
+#if defined(PLUGIN_DEV_MODE) && PLUGIN_DEV_MODE
+        devModeDebugLine_ = "[AAX UI] tick=" + juce::String (tickFromVBlank ? "VBlank" : "Timer")
+            + "  target_fps=" + juce::String (kAnalyzerUiFps)
+            + "  actual_fps=" + juce::String (actualFps, 1)
+            + "  actual_timer_ms_avg=" + juce::String (actualTimerMsAvg, 2)
+            + "  expect_timer_ms=" + juce::String (expectedMsF, 2)
+            + "  timer_late_cnt/s=" + juce::String (latePerSec)
+            + "  timer_jitter_avg_ms=" + juce::String (jitterAvg, 3)
+            + "  paint_ms(last)=" + juce::String (aaxDiagLastPaintMs_, 2)
+            + "  paint/s=" + juce::String (paintsPerSec)
+            + "  spec_resized/s=" + juce::String (specResizesPerSec)
+            + "  pump_throttle/s=" + juce::String (static_cast<int> (aaxDiagPumpThrottleAccum_))
+            + "  pump_reject/s=" + juce::String (static_cast<int> (aaxDiagPumpRejectAccum_))
+            + "  scale=" + juce::String (scale, 2);
+#endif
+        aaxDiagPumpThrottleAccum_ = 0;
+        aaxDiagPumpRejectAccum_ = 0;
+    }
+}
+#endif
+
+void AnalyzerDisplayView::analyzerUiTickCore()
+{
     // Read analyzer APVTS params used by view-side processing.
     auto& apvts = audioProcessor.getAPVTS();
 
@@ -828,6 +952,30 @@ void AnalyzerDisplayView::timerCallback()
     audioProcessor.getAnalyzerEngine().applyPendingFftSizeIfNeeded();
 }
 
+void AnalyzerDisplayView::timerCallback()
+{
+    if (isShutdown)
+        return;
+
+#if JucePlugin_Build_AAX && ANALYZERPRO_AAX_USE_VBLANK_UI_TICK
+    return;
+#elif JucePlugin_Build_AAX
+    aaxAccumulateDiagnosticsAndMaybeHud (false);
+#endif
+    analyzerUiTickCore();
+}
+
+#if JucePlugin_Build_AAX && ANALYZERPRO_AAX_USE_VBLANK_UI_TICK
+void AnalyzerDisplayView::AaxVBlankMarshaler::handleAsyncUpdate()
+{
+    if (owner.isAnalyzerViewShutdown())
+        return;
+
+    owner.aaxAccumulateDiagnosticsAndMaybeHud (true);
+    owner.analyzerUiTickCore();
+}
+#endif
+
 void AnalyzerDisplayView::handlePumpedSnapshot (const AnalyzerSnapshot& snapshot)
 {
     if (isShutdown)
@@ -884,7 +1032,6 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         if (currentMode_ == Mode::FFT)
         {
              analyzerBridgeWidget_.setNoData (prep.noDataReason.isNotEmpty() ? prep.noDataReason : juce::String ("No Data"));
-             analyzerBridgeWidget_.repaint();
         }
         return; // Skip update on mismatch
     }
@@ -1121,9 +1268,6 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             
             ++traceDataGen_; // SMOOTHING_RENDERING_STABILITY_V2: data changed
             analyzerBridgeWidget_.setGenerations (traceDataGen_, smoothingGen_);
-            
-            // Force repaint after data update
-            analyzerBridgeWidget_.repaint();
             break;
         }
         
@@ -1335,9 +1479,8 @@ void AnalyzerDisplayView::applyBallistics (float* data, std::vector<float>& stat
         std::fill (state.begin(), state.end(), -200.0f);
     }
 
-    // Assuming UI updates at 60Hz.
-    // Using fixed dt ensures consistent ballistics regardless of FFT rate jitter.
-    const float dt = 1.0f / 60.0f;
+    // Fixed dt matches message-thread timer rate (kAnalyzerDisplayTimerHz).
+    const float dt = 1.0f / static_cast<float> (kAnalyzerDisplayTimerHz);
 
     const float attSec = kRmsAttackMs / 1000.0f;
     const float relSec = releaseMs / 1000.0f;

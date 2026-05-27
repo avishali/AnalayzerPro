@@ -89,6 +89,10 @@ void AnalayzerProAudioProcessorEditor::paint (juce::Graphics& g)
 
 void AnalayzerProAudioProcessorEditor::resized()
 {
+#if JucePlugin_Build_AAX
+    DBG ("[AAX] PluginEditor::resized " << getWidth() << " x " << getHeight()
+         << " scale=" << juce::String (getDesktopScaleFactor(), 3));
+#endif
 #if JUCE_DEBUG
     debugGrid.clearDebugRects();
 #endif
