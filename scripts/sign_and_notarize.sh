@@ -28,7 +28,8 @@ NOTARYTOOL_KEYCHAIN_PROFILE="AC_PASSWORD"
 
 # Plugin information
 PLUGIN_NAME="AnalyzerPro"
-PLUGIN_VERSION="1.1.1"
+# Derived from CMakeLists.txt (single source of truth) — see scripts/plugin_version.sh
+source "$SCRIPT_DIR/plugin_version.sh"
 INSTALLER_DIR="$PROJECT_ROOT/installer"
 # Same tree as build_release.sh / create_installer.sh (override with ANALYZERPRO_RELEASE_BUILD_DIR)
 BUILD_DIR="${ANALYZERPRO_RELEASE_BUILD_DIR:-build-release}"

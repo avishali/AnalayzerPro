@@ -17,7 +17,8 @@ CONFIG="Release"
 
 # Plugin information
 PLUGIN_NAME="AnalyzerPro"
-PLUGIN_VERSION="1.0.0"
+# Derived from CMakeLists.txt (single source of truth) — see scripts/plugin_version.sh
+source "$SCRIPT_DIR/plugin_version.sh"
 COMPANY_NAME="MelecDSP"
 
 echo "=========================================="

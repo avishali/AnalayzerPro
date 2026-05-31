@@ -16,7 +16,8 @@ cd "$PROJECT_ROOT"
 
 # Configuration
 PLUGIN_NAME="AnalyzerPro"
-PLUGIN_VERSION="1.1.1"
+# Derived from CMakeLists.txt (single source of truth) — see scripts/plugin_version.sh
+source "$SCRIPT_DIR/plugin_version.sh"
 COMPANY_NAME="MelecDSP"
 # Must match BUILD_DIR in scripts/build_release.sh and scripts/sign_and_notarize.sh
 BUILD_DIR="${ANALYZERPRO_RELEASE_BUILD_DIR:-build-release}"
