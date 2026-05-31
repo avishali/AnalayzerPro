@@ -66,6 +66,8 @@ else()
     set(PLUGIN_FORMATS "AU;VST3;AAX;Standalone" CACHE STRING "Plugin formats to build (AU, VST3, AAX, Standalone)" FORCE)
 endif()
 
+option(ANALYZERPRO_COPY_AFTER_BUILD "Copy built plugins to system folders after build" ON)
+
 # ==============================================================================
 # SDK PATHS
 # ==============================================================================
@@ -296,7 +298,7 @@ juce_add_plugin(${PLUGIN_NAME}
     NEEDS_MIDI_OUTPUT ${NEEDS_MIDI_OUTPUT}
     IS_MIDI_EFFECT ${IS_MIDI_EFFECT}
     EDITOR_WANTS_KEYBOARD_FOCUS ${EDITOR_WANTS_KEYBOARD_FOCUS}
-    COPY_PLUGIN_AFTER_BUILD TRUE
+    COPY_PLUGIN_AFTER_BUILD ${ANALYZERPRO_COPY_AFTER_BUILD}
     PLUGIN_MANUFACTURER_CODE ${MANUFACTURER_CODE}
     PLUGIN_CODE ${PLUGIN_CODE}
     FORMATS ${PLUGIN_FORMATS}
