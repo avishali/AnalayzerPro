@@ -115,16 +115,36 @@ private:
     static void applyLogSmoothingThunk (float* power, int bins, void* userData) noexcept;
     void timerCallback() override;
     /** Message-thread spectrum UI pump (APVTS read, ballistics, pump FFT apply). */
-    void analyzerUiTickCore();
+    bool analyzerUiTickCore (double nowMs);
 #if ANALYZERPRO_DEV_DIAGNOSTICS
     void accumulateDiagnosticsAndMaybeHud (bool tickFromVBlank);
 #endif
     void updateFromSnapshot (const AnalyzerSnapshot& snapshot);
     void handlePumpedSnapshot (const AnalyzerSnapshot& snapshot);
     void kickSnapshotPumpImmediate();
+    void feedInterpolatedRenderFrame (double nowMs);
+    bool advanceDbRangeAnimation (double nowMs);
 
     // Map AnalyzerDisplayView::Mode to widget mode (0=FFT, 1=LOG, 2=BAND)
     static int toRtaMode (Mode m) noexcept;
+
+    struct TraceFrameBuffers
+    {
+        std::vector<float> prev_;
+        std::vector<float> curr_;
+        std::vector<float> display_;
+        double captureTimestampMs_ = 0.0;
+        bool hasCurrent_ = false;
+        bool hasPrevious_ = false;
+
+        double currentTimestampMs() const noexcept { return captureTimestampMs_; }
+        const std::vector<float>& display() const noexcept { return display_; }
+    };
+
+    static void latchTraceFrame (TraceFrameBuffers& buffers,
+                                 const std::vector<float>& values,
+                                 double captureTimestampMs);
+    static void interpolateTraceFrame (TraceFrameBuffers& buffers, double nowMs);
 
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     void updateModeOverlayText();
@@ -154,9 +174,11 @@ private:
     static constexpr float kAbsFreqMax = 20000.0f;
     static constexpr float kMinFreqSpanOctaves = 1.0f; // minimum 1-octave zoom window
 
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> minDbAnim_;
     float targetMinDb_ = -120.0f;
     float lastAppliedMinDb_ = -120.0f;
+    float minDbAnimStartDb_ = -120.0f;
+    double minDbAnimStartMs_ = 0.0;
+    bool minDbAnimActive_ = false;
 
     std::vector<float> fftPeakDbDisplay_;
     std::vector<float> bandsPeakDbDisplay_;
@@ -177,6 +199,17 @@ private:
     std::vector<float> bandsPeakDb_;
     std::vector<float> logDb_;
     std::vector<float> logPeakDb_;
+    TraceFrameBuffers fftFrame_;
+    TraceFrameBuffers bandFrame_;
+    TraceFrameBuffers logFrame_;
+    TraceFrameBuffers multiTraceLFrame_;
+    TraceFrameBuffers multiTraceRFrame_;
+    TraceFrameBuffers multiTraceMidFrame_;
+    TraceFrameBuffers multiTraceSideFrame_;
+    TraceFrameBuffers multiTraceMonoFrame_;
+    bool latestMultiTraceEnabled_ = false;
+    bool renderNoDataPending_ = false;
+    juce::String renderNoDataReason_;
     std::vector<float> rmsState_;    // Ballistics state for Main RMS
     // NOTE: Multi-trace ballistics state removed (Fix 3)
     // Engine already applies full RMS ballistics to multi-traces in AnalyzerEngine::computeFFT

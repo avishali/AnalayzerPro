@@ -32,6 +32,8 @@ static constexpr float kSpectrumTopDb = 6.0f;
 
 // Snapshot pump remains the 30 Hz data source; VBlank drives visual render ticks.
 static constexpr int kAnalyzerDisplayTimerHz = 30;
+static constexpr double kAnalyzerDataIntervalMs = 1000.0 / static_cast<double> (kAnalyzerDisplayTimerHz);
+static constexpr double kDbRangeAnimationMs = 200.0;
 
 static inline bool isInvalidPeakDb (float db) noexcept
 {
@@ -48,6 +50,70 @@ void AnalyzerDisplayView::applyLogSmoothingThunk (float* power, int bins, void* 
 
     auto* self = static_cast<AnalyzerDisplayView*> (userData);
     self->logGaussian_.process (power, bins);
+}
+
+void AnalyzerDisplayView::latchTraceFrame (TraceFrameBuffers& buffers,
+                                           const std::vector<float>& values,
+                                           double captureTimestampMs)
+{
+    const size_t count = values.size();
+    if (buffers.curr_.size() != count)
+    {
+        buffers.prev_.resize (count);
+        buffers.curr_.resize (count);
+        buffers.display_.resize (count);
+        buffers.hasCurrent_ = false;
+        buffers.hasPrevious_ = false;
+    }
+
+    if (count == 0)
+    {
+        buffers.captureTimestampMs_ = captureTimestampMs;
+        buffers.hasCurrent_ = false;
+        buffers.hasPrevious_ = false;
+        return;
+    }
+
+    {
+        if (buffers.hasCurrent_)
+        {
+            std::copy (buffers.curr_.begin(), buffers.curr_.end(), buffers.prev_.begin());
+            buffers.hasPrevious_ = true;
+        }
+        else
+        {
+            std::copy (values.begin(), values.end(), buffers.prev_.begin());
+            buffers.hasPrevious_ = false;
+        }
+
+        std::copy (values.begin(), values.end(), buffers.curr_.begin());
+        std::copy (values.begin(), values.end(), buffers.display_.begin());
+    }
+
+    buffers.captureTimestampMs_ = captureTimestampMs;
+    buffers.hasCurrent_ = true;
+}
+
+void AnalyzerDisplayView::interpolateTraceFrame (TraceFrameBuffers& buffers, double nowMs)
+{
+    if (! buffers.hasCurrent_)
+        return;
+
+    if (! buffers.hasPrevious_
+        || buffers.prev_.size() != buffers.curr_.size()
+        || buffers.display_.size() != buffers.curr_.size())
+    {
+        std::copy (buffers.curr_.begin(), buffers.curr_.end(), buffers.display_.begin());
+        return;
+    }
+
+    // Frame-edge choice: no one-frame render delay. Alpha clamps to 1.0 so the
+    // display holds the latest data frame until the next 30 Hz snapshot arrives.
+    const float alpha = static_cast<float> (juce::jlimit (0.0,
+                                                         1.0,
+                                                         (nowMs - buffers.captureTimestampMs_) / kAnalyzerDataIntervalMs));
+    for (size_t i = 0; i < buffers.curr_.size(); ++i)
+        buffers.display_[i] = buffers.prev_[i] + (buffers.curr_[i] - buffers.prev_[i]) * alpha;
 }
 
 AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& processor)
@@ -152,8 +218,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
     // Initialize analyzer display ranges
     analyzerBridgeWidget_.setFrequencyRange (20.0f, 20000.0f);
     targetMinDb_ = dbRangeToMinDb (dbRange_);
-    minDbAnim_.reset (static_cast<double> (kAnalyzerDisplayTimerHz), 0.20);
-    minDbAnim_.setCurrentAndTargetValue (targetMinDb_);
+    minDbAnimStartDb_ = targetMinDb_;
     lastAppliedMinDb_ = targetMinDb_;
     analyzerBridgeWidget_.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
     appliedDbRange_ = dbRange_;
@@ -214,9 +279,10 @@ void AnalyzerDisplayView::setDbRange (DbRange r)
     dbRange_ = r;
     targetMinDb_ = dbRangeToMinDb (dbRange_);
 
-    minDbAnim_.reset (static_cast<double> (kAnalyzerDisplayTimerHz), 0.20);
-    minDbAnim_.setTargetValue (targetMinDb_);
-    analyzerBridgeWidget_.setDbRange (kSpectrumTopDb, targetMinDb_);
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
+    minDbAnimStartDb_ = lastAppliedMinDb_;
+    minDbAnimStartMs_ = nowMs;
+    minDbAnimActive_ = true;
     kickSnapshotPumpImmediate();
     repaint();
 }
@@ -797,7 +863,7 @@ void AnalyzerDisplayView::accumulateDiagnosticsAndMaybeHud (bool tickFromVBlank)
 }
 #endif
 
-void AnalyzerDisplayView::analyzerUiTickCore()
+bool AnalyzerDisplayView::analyzerUiTickCore (double nowMs)
 {
     // Read analyzer APVTS params used by view-side processing.
     auto& apvts = audioProcessor.getAPVTS();
@@ -821,15 +887,9 @@ void AnalyzerDisplayView::analyzerUiTickCore()
         }
     }
 
-    // Animate dB range changes (grid + FFT + peak mapping all derive from widget bottomDb).
-    const float minDb = minDbAnim_.getNextValue();
-    if (std::abs (minDb - lastAppliedMinDb_) > 1.0e-4f)
-    {
-        analyzerBridgeWidget_.setDbRange (kSpectrumTopDb, minDb);
-        lastAppliedMinDb_ = minDb;
-    }
+    const bool repaintRequestedByDbRange = advanceDbRangeAnimation (nowMs);
 
-    const bool flashActive = (peakFlashActive_ && juce::Time::getMillisecondCounterHiRes() < peakFlashUntilMs_);
+    const bool flashActive = (peakFlashActive_ && nowMs < peakFlashUntilMs_);
     if (peakFlashActive_ && !flashActive)
     {
         peakFlashActive_ = false;
@@ -837,7 +897,7 @@ void AnalyzerDisplayView::analyzerUiTickCore()
     }
 
     // If the FFT range is animating or Peak Range changed, remap peaks into the current FFT/grid space.
-    if ((minDbAnim_.isSmoothing() || peakScaleDirty_ || flashActive) && hasLastValid_)
+    if ((minDbAnimActive_ || peakScaleDirty_ || flashActive) && hasLastValid_)
     {
         // REMOVED Independent Peak Scaling.
         // To ensure Peak Trace is always >= RMS Trace visually on the same grid,
@@ -851,7 +911,6 @@ void AnalyzerDisplayView::analyzerUiTickCore()
                 const bool hasPeaks = (!fftPeakDb_.empty() && fftPeakDb_.size() == fftDb_.size());
                 if (hasPeaks)
                 {
-                    const auto& peakHoldDb = renderStateProvider_.peakHoldDb();
                     fftPeakDbDisplay_.resize (fftPeakDb_.size());
                     for (size_t i = 0; i < fftPeakDb_.size(); ++i)
                     {
@@ -864,9 +923,6 @@ void AnalyzerDisplayView::analyzerUiTickCore()
                             peakDb = juce::jmin (0.0f, peakDb + 2.0f);
                         fftPeakDbDisplay_[i] = peakDb;
                     }
-                    analyzerBridgeWidget_.setFFTData (fftDb_, 
-                                           &fftPeakDbDisplay_,
-                                           !peakHoldDb.empty() ? &peakHoldDb : nullptr);
                 }
                 break;
             }
@@ -888,7 +944,6 @@ void AnalyzerDisplayView::analyzerUiTickCore()
                             result = juce::jmin (0.0f, result + 2.0f);
                         bandsPeakDbDisplay_[i] = result;
                     }
-                    analyzerBridgeWidget_.setBandData (bandsDb_, &bandsPeakDbDisplay_);
                 }
                 break;
             }
@@ -910,7 +965,6 @@ void AnalyzerDisplayView::analyzerUiTickCore()
                             result = juce::jmin (0.0f, result + 2.0f);
                         logPeakDbDisplay_[i] = result;
                     }
-                    analyzerBridgeWidget_.setLogData (logDb_, &logPeakDbDisplay_);
                 }
                 break;
             }
@@ -921,6 +975,119 @@ void AnalyzerDisplayView::analyzerUiTickCore()
 
     // Apply any pending FFT resize on the message thread (RT-safe: allocations happen here, not on audio thread).
     audioProcessor.getAnalyzerEngine().applyPendingFftSizeIfNeeded();
+    return repaintRequestedByDbRange;
+}
+
+bool AnalyzerDisplayView::advanceDbRangeAnimation (double nowMs)
+{
+    if (! minDbAnimActive_)
+        return false;
+
+    const double alpha = juce::jlimit (0.0, 1.0, (nowMs - minDbAnimStartMs_) / kDbRangeAnimationMs);
+    const float minDb = static_cast<float> (static_cast<double> (minDbAnimStartDb_)
+                                            + (static_cast<double> (targetMinDb_ - minDbAnimStartDb_) * alpha));
+
+    bool requestedRepaint = false;
+    if (std::abs (minDb - lastAppliedMinDb_) > 1.0e-4f || alpha >= 1.0)
+    {
+        analyzerBridgeWidget_.setDbRange (kSpectrumTopDb, minDb);
+        lastAppliedMinDb_ = minDb;
+        requestedRepaint = true;
+    }
+
+    if (alpha >= 1.0)
+    {
+        lastAppliedMinDb_ = targetMinDb_;
+        minDbAnimStartDb_ = targetMinDb_;
+        minDbAnimActive_ = false;
+    }
+
+    return requestedRepaint;
+}
+
+void AnalyzerDisplayView::feedInterpolatedRenderFrame (double nowMs)
+{
+    if (renderNoDataPending_)
+    {
+        analyzerBridgeWidget_.setNoData (renderNoDataReason_.isNotEmpty() ? renderNoDataReason_ : juce::String ("No Data"));
+        return;
+    }
+
+    interpolateTraceFrame (fftFrame_, nowMs);
+    interpolateTraceFrame (bandFrame_, nowMs);
+    interpolateTraceFrame (logFrame_, nowMs);
+    interpolateTraceFrame (multiTraceLFrame_, nowMs);
+    interpolateTraceFrame (multiTraceRFrame_, nowMs);
+    interpolateTraceFrame (multiTraceMidFrame_, nowMs);
+    interpolateTraceFrame (multiTraceSideFrame_, nowMs);
+    interpolateTraceFrame (multiTraceMonoFrame_, nowMs);
+
+    switch (currentMode_)
+    {
+        case Mode::FFT:
+        {
+            if (fftFrame_.hasCurrent_)
+            {
+                const bool usePeaks = (! fftPeakDbDisplay_.empty()
+                                       && fftPeakDbDisplay_.size() == fftFrame_.display_.size());
+                const auto& peakHoldDb = renderStateProvider_.peakHoldDb();
+                analyzerBridgeWidget_.setFFTData (fftFrame_.display_,
+                                                  usePeaks ? &fftPeakDbDisplay_ : nullptr,
+                                                  (! peakHoldDb.empty() && renderStateProvider_.usePeakHold()) ? &peakHoldDb : nullptr);
+                analyzerBridgeWidget_.setSessionMarker (renderStateProvider_.sessionMarkerVisible(),
+                                                        renderStateProvider_.sessionMarkerBin(),
+                                                        renderStateProvider_.sessionMarkerDb());
+            }
+
+            if (latestMultiTraceEnabled_
+                && multiTraceLFrame_.hasCurrent_
+                && multiTraceRFrame_.hasCurrent_
+                && multiTraceMidFrame_.hasCurrent_
+                && multiTraceSideFrame_.hasCurrent_
+                && multiTraceMonoFrame_.hasCurrent_
+                && multiTraceRFrame_.display_.size() == multiTraceLFrame_.display_.size()
+                && multiTraceMidFrame_.display_.size() == multiTraceLFrame_.display_.size()
+                && multiTraceSideFrame_.display_.size() == multiTraceLFrame_.display_.size()
+                && multiTraceMonoFrame_.display_.size() == multiTraceLFrame_.display_.size())
+            {
+                analyzerBridgeWidget_.setMultiTraceData (multiTraceLFrame_.display_.data(),
+                                                         multiTraceRFrame_.display_.data(),
+                                                         multiTraceMidFrame_.display_.data(),
+                                                         multiTraceSideFrame_.display_.data(),
+                                                         multiTraceMonoFrame_.display_.data(),
+                                                         static_cast<int> (multiTraceLFrame_.display_.size()));
+            }
+            else
+            {
+                analyzerBridgeWidget_.setMultiTraceData (nullptr, nullptr, nullptr, nullptr, nullptr, 0);
+            }
+            break;
+        }
+
+        case Mode::BAND:
+        {
+            if (bandFrame_.hasCurrent_)
+            {
+                const bool usePeaks = (! bandsPeakDbDisplay_.empty()
+                                       && bandsPeakDbDisplay_.size() == bandFrame_.display_.size());
+                analyzerBridgeWidget_.setBandData (bandFrame_.display_,
+                                                   usePeaks ? &bandsPeakDbDisplay_ : nullptr);
+            }
+            break;
+        }
+
+        case Mode::LOG:
+        {
+            if (logFrame_.hasCurrent_)
+            {
+                const bool usePeaks = (! logPeakDbDisplay_.empty()
+                                       && logPeakDbDisplay_.size() == logFrame_.display_.size());
+                analyzerBridgeWidget_.setLogData (logFrame_.display_,
+                                                  usePeaks ? &logPeakDbDisplay_ : nullptr);
+            }
+            break;
+        }
+    }
 }
 
 void AnalyzerDisplayView::timerCallback()
@@ -928,10 +1095,14 @@ void AnalyzerDisplayView::timerCallback()
     if (isShutdown)
         return;
 
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
 #if ANALYZERPRO_DEV_DIAGNOSTICS
     accumulateDiagnosticsAndMaybeHud (false);
 #endif
-    analyzerUiTickCore();
+    const bool repaintAlreadyRequested = analyzerUiTickCore (nowMs);
+    feedInterpolatedRenderFrame (nowMs);
+    if (! repaintAlreadyRequested)
+        analyzerBridgeWidget_.repaintDisplay();
 }
 
 void AnalyzerDisplayView::VBlankRenderMarshaler::handleAsyncUpdate()
@@ -939,11 +1110,14 @@ void AnalyzerDisplayView::VBlankRenderMarshaler::handleAsyncUpdate()
     if (owner.isAnalyzerViewShutdown())
         return;
 
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
 #if ANALYZERPRO_DEV_DIAGNOSTICS
     owner.accumulateDiagnosticsAndMaybeHud (true);
 #endif
-    owner.analyzerUiTickCore();
-    owner.analyzerBridgeWidget_.repaintDisplay();
+    const bool repaintAlreadyRequested = owner.analyzerUiTickCore (nowMs);
+    owner.feedInterpolatedRenderFrame (nowMs);
+    if (! repaintAlreadyRequested)
+        owner.analyzerBridgeWidget_.repaintDisplay();
 }
 
 void AnalyzerDisplayView::handlePumpedSnapshot (const AnalyzerSnapshot& snapshot)
@@ -1001,13 +1175,17 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
 #endif
         if (currentMode_ == Mode::FFT)
         {
-             analyzerBridgeWidget_.setNoData (prep.noDataReason.isNotEmpty() ? prep.noDataReason : juce::String ("No Data"));
+            renderNoDataPending_ = true;
+            renderNoDataReason_ = prep.noDataReason.isNotEmpty() ? prep.noDataReason : juce::String ("No Data");
         }
         return; // Skip update on mismatch
     }
 
     const int validBins = prep.validBins;
     binMismatch_ = false;
+    renderNoDataPending_ = false;
+    renderNoDataReason_.clear();
+    const double dataFrameTimestampMs = juce::Time::getMillisecondCounterHiRes();
 #if JUCE_DEBUG
     dropReason_.clear();
 #endif
@@ -1023,7 +1201,6 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
 
     // Centralized Latch: Apply True Freeze logic to fftPeakDb_ BEFORE mode conversion
     // This ensures BAND and LOG modes also inherit the frozen peak values.
-    juce::ignoreUnused (validBinsSize);
     
     // -------------------------------------------------------------------------
     // 1b. WEIGHTING + SMOOTHING + BALLISTICS PIPELINE
@@ -1171,8 +1348,6 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                                                      fftPeakDb_,
                                                      usePeaks,
                                                      fftPeakDbDisplay_);
-            const bool usePeakHold = renderStateProvider_.usePeakHold();
-            const auto& fftPeakHoldDb = renderStateProvider_.peakHoldDb();
 
             // Keep RMS under peak, but leave multi-traces untouched to avoid clipped/squared tops.
             if (usePeaks && fftPeakDbDisplay_.size() == validBinsSize)
@@ -1185,14 +1360,8 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                 }
             }
 
-            // Feed widget with FFT data (ONLY in FFT mode)
-            // Send data to Display (including session marker)
-            analyzerBridgeWidget_.setFFTData (fftDb_, 
-                                   usePeaks ? &fftPeakDbDisplay_ : nullptr,
-                                   usePeakHold ? &fftPeakHoldDb : nullptr);
-            analyzerBridgeWidget_.setSessionMarker (renderStateProvider_.sessionMarkerVisible(),
-                                                    renderStateProvider_.sessionMarkerBin(),
-                                                    renderStateProvider_.sessionMarkerDb());
+            // Latch current FFT data; VBlank feeds the interpolated display frame.
+            latchTraceFrame (fftFrame_, fftDb_, dataFrameTimestampMs);
             
             // Multi-trace: Feed L/R/Mid/Side/Mono power data if available
             // Logic moved to Step 1b to unify weighting application and ballistics
@@ -1210,14 +1379,17 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                          << " Mid[0]=" << scratchPowerMid_[0] << " Side[0]=" << scratchPowerSide_[0]);
                  }
 #endif
-                 analyzerBridgeWidget_.setMultiTraceData (scratchPowerL_.data(), scratchPowerR_.data(),
-                                               scratchPowerMid_.data(), scratchPowerSide_.data(), scratchPowerMono_.data(),
-                                               validBins);
+                 latchTraceFrame (multiTraceLFrame_, scratchPowerL_, dataFrameTimestampMs);
+                 latchTraceFrame (multiTraceRFrame_, scratchPowerR_, dataFrameTimestampMs);
+                 latchTraceFrame (multiTraceMidFrame_, scratchPowerMid_, dataFrameTimestampMs);
+                 latchTraceFrame (multiTraceSideFrame_, scratchPowerSide_, dataFrameTimestampMs);
+                 latchTraceFrame (multiTraceMonoFrame_, scratchPowerMono_, dataFrameTimestampMs);
+                 latestMultiTraceEnabled_ = true;
             }
             else
             {
                 // Clear stale multi-trace state so legend / hasMultiTrace / crosshair columns stay in sync.
-                analyzerBridgeWidget_.setMultiTraceData (nullptr, nullptr, nullptr, nullptr, nullptr, 0);
+                latestMultiTraceEnabled_ = false;
             }
 #if JUCE_DEBUG
             if (snapshot.multiTraceEnabled
@@ -1246,7 +1418,8 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             // BANDS mode: Convert FFT bins to 1/3-octave bands
             if (fftBinCount <= 0 || snapshot.fftSize <= 0 || snapshot.sampleRate <= 0.0)
             {
-                analyzerBridgeWidget_.setNoData ("Invalid snapshot for BANDS");
+                renderNoDataPending_ = true;
+                renderNoDataReason_ = "Invalid snapshot for BANDS";
                 break;
             }
             
@@ -1279,7 +1452,8 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                     warnedEmptyBands = true;
                 }
 #endif
-                analyzerBridgeWidget_.setNoData ("No BANDS data");
+                renderNoDataPending_ = true;
+                renderNoDataReason_ = "No BANDS data";
                 break;
             }
 
@@ -1302,7 +1476,8 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                 analyzerBridgeWidget_.setBandCenters (bandCentersHz_);
             }
             
-            // Feed widget with band data
+            // Latch current band data; VBlank feeds the interpolated display frame.
+            latchTraceFrame (bandFrame_, bandsDb_, dataFrameTimestampMs);
             const bool useBandPeaks = !bandsPeakDb_.empty() && bandsPeakDb_.size() == bandsDb_.size() && bandsDb_.size() == bandCentersHz_.size();
             if (useBandPeaks)
             {
@@ -1325,11 +1500,6 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                         
                      bandsPeakDbDisplay_[i] = peakDb;
                 }
-                analyzerBridgeWidget_.setBandData (bandsDb_, &bandsPeakDbDisplay_);
-            }
-            else
-            {
-                analyzerBridgeWidget_.setBandData (bandsDb_, nullptr);
             }
             
 #if JUCE_DEBUG
@@ -1358,7 +1528,8 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             // LOG mode: Convert FFT bins to log-spaced bins
             if (fftBinCount <= 0 || snapshot.fftSize <= 0 || snapshot.sampleRate <= 0.0)
             {
-                analyzerBridgeWidget_.setNoData ("Invalid snapshot for LOG");
+                renderNoDataPending_ = true;
+                renderNoDataReason_ = "Invalid snapshot for LOG";
                 break;
             }
             
@@ -1380,7 +1551,8 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             logDb_ = renderStateProvider_.logDb();
             logPeakDb_ = renderStateProvider_.logPeakDb();
             
-            // Feed widget with LOG data
+            // Latch current LOG data; VBlank feeds the interpolated display frame.
+            latchTraceFrame (logFrame_, logDb_, dataFrameTimestampMs);
             const bool useLogPeaks = !logPeakDb_.empty() && logPeakDb_.size() == logDb_.size();
             if (useLogPeaks)
             {
@@ -1403,11 +1575,6 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
                          
                      logPeakDbDisplay_[i] = peakDb;
                 }
-                analyzerBridgeWidget_.setLogData (logDb_, &logPeakDbDisplay_);
-            }
-            else
-            {
-                analyzerBridgeWidget_.setLogData (logDb_, nullptr);
             }
             
 #if JUCE_DEBUG
