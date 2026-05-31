@@ -124,6 +124,8 @@ private:
     void kickSnapshotPumpImmediate();
     void feedInterpolatedRenderFrame (double nowMs);
     bool advanceDbRangeAnimation (double nowMs);
+    bool isRenderDispatchCapped (double nowMs) const noexcept;
+    bool shouldSkipRenderFrame (double nowMs) const noexcept;
 
     // Map AnalyzerDisplayView::Mode to widget mode (0=FFT, 1=LOG, 2=BAND)
     static int toRtaMode (Mode m) noexcept;
@@ -141,6 +143,7 @@ private:
         const std::vector<float>& display() const noexcept { return display_; }
     };
 
+    static bool traceFrameIsMoving (const TraceFrameBuffers& buffers, double nowMs) noexcept;
     static void latchTraceFrame (TraceFrameBuffers& buffers,
                                  const std::vector<float>& values,
                                  double captureTimestampMs);
@@ -210,6 +213,9 @@ private:
     bool latestMultiTraceEnabled_ = false;
     bool renderNoDataPending_ = false;
     juce::String renderNoDataReason_;
+    uint64_t dataFrameSerial_ = 0;
+    uint64_t renderedDataFrameSerial_ = 0;
+    bool forceNextRenderFrame_ = true;
     std::vector<float> rmsState_;    // Ballistics state for Main RMS
     // NOTE: Multi-trace ballistics state removed (Fix 3)
     // Engine already applies full RMS ballistics to multi-traces in AnalyzerEngine::computeFFT
@@ -337,6 +343,8 @@ private:
     };
     VBlankRenderMarshaler vBlankRenderMarshaler_;
     juce::VBlankAttachment vBlankAttachment_;
+    double lastRenderDispatchMs_ = -1.0;
+    bool vBlankAsyncPending_ = false;
     
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     struct ModeDebugOverlay final : public juce::Component

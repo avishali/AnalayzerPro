@@ -11,6 +11,14 @@
 #define ANALYZERPRO_FFT_DEBUG_LINE 1
 #endif
 
+#if !defined(ANALYZERPRO_USE_VBLANK_INTERPOLATION)
+#define ANALYZERPRO_USE_VBLANK_INTERPOLATION 1
+#endif
+
+#if !defined(ANALYZERPRO_MAX_RENDER_HZ)
+#define ANALYZERPRO_MAX_RENDER_HZ 60
+#endif
+
 //==============================================================================
 static float dbRangeToMinDb (AnalyzerDisplayView::DbRange r) noexcept
 {
@@ -32,7 +40,9 @@ static constexpr float kSpectrumTopDb = 6.0f;
 
 // Snapshot pump remains the 30 Hz data source; VBlank drives visual render ticks.
 static constexpr int kAnalyzerDisplayTimerHz = 30;
+static constexpr int kMaxRenderHz = ANALYZERPRO_MAX_RENDER_HZ;
 static constexpr double kAnalyzerDataIntervalMs = 1000.0 / static_cast<double> (kAnalyzerDisplayTimerHz);
+static constexpr double kMaxRenderIntervalMs = 1000.0 / static_cast<double> (kMaxRenderHz > 0 ? kMaxRenderHz : 60);
 static constexpr double kDbRangeAnimationMs = 200.0;
 
 static inline bool isInvalidPeakDb (float db) noexcept
@@ -92,6 +102,13 @@ void AnalyzerDisplayView::latchTraceFrame (TraceFrameBuffers& buffers,
 
     buffers.captureTimestampMs_ = captureTimestampMs;
     buffers.hasCurrent_ = true;
+}
+
+bool AnalyzerDisplayView::traceFrameIsMoving (const TraceFrameBuffers& buffers, double nowMs) noexcept
+{
+    return buffers.hasCurrent_
+        && buffers.hasPrevious_
+        && (nowMs - buffers.captureTimestampMs_) < kAnalyzerDataIntervalMs;
 }
 
 void AnalyzerDisplayView::interpolateTraceFrame (TraceFrameBuffers& buffers, double nowMs)
@@ -251,6 +268,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
     });
     analyzerBridgeWidget_.start (kAnalyzerDisplayTimerHz);
 
+#if ANALYZERPRO_USE_VBLANK_INTERPOLATION
     vBlankAttachment_ = juce::VBlankAttachment (
         this,
         [this] (double)
@@ -258,8 +276,20 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
             if (isShutdown)
                 return;
 
+            const double nowMs = juce::Time::getMillisecondCounterHiRes();
+            if (vBlankAsyncPending_
+                || isRenderDispatchCapped (nowMs)
+                || shouldSkipRenderFrame (nowMs))
+                return;
+
+            lastRenderDispatchMs_ = nowMs;
+            vBlankAsyncPending_ = true;
             vBlankRenderMarshaler_.triggerAsyncUpdate();
         });
+#else
+    // Kill-switch fallback: keep the 30 Hz snapshot pump and feed/paint from juce::Timer.
+    startTimerHz (kAnalyzerDisplayTimerHz);
+#endif
 
 #if ANALYZERPRO_DEV_DIAGNOSTICS
     analyzerBridgeWidget_.getRTADisplay().setPaintTimingCallback (
@@ -283,6 +313,7 @@ void AnalyzerDisplayView::setDbRange (DbRange r)
     minDbAnimStartDb_ = lastAppliedMinDb_;
     minDbAnimStartMs_ = nowMs;
     minDbAnimActive_ = true;
+    forceNextRenderFrame_ = true;
     kickSnapshotPumpImmediate();
     repaint();
 }
@@ -301,6 +332,7 @@ void AnalyzerDisplayView::setPeakDbRange (DbRange r)
     peakDbRange_ = r;
     peakScaleDirty_ = true;
     analyzerBridgeWidget_.setPeakDbRange (dbRangeToMinDb (peakDbRange_));
+    forceNextRenderFrame_ = true;
     kickSnapshotPumpImmediate();
     repaint();
 }
@@ -310,6 +342,7 @@ void AnalyzerDisplayView::resetSessionMarker()
     renderStateProvider_.resetSessionMarker();
     // Force immediate update to display
     analyzerBridgeWidget_.setSessionMarker (false, -1, -1000.0f);
+    forceNextRenderFrame_ = true;
 }
 
 void AnalyzerDisplayView::resetViewPeaks()
@@ -339,6 +372,7 @@ void AnalyzerDisplayView::resetViewPeaks()
 
     // Force remap/repaint
     peakScaleDirty_ = true;
+    forceNextRenderFrame_ = true;
     repaint();
 }
 
@@ -347,6 +381,7 @@ void AnalyzerDisplayView::triggerPeakFlash()
     peakFlashActive_ = true;
     peakFlashUntilMs_ = juce::Time::getMillisecondCounterHiRes() + 150.0;
     peakScaleDirty_ = true;
+    forceNextRenderFrame_ = true;
     repaint();
 }
 
@@ -615,6 +650,7 @@ void AnalyzerDisplayView::setFrequencyView (float minHz, float maxHz)
     viewFreqMin_ = std::pow (2.0f, logMin);
     viewFreqMax_ = std::pow (2.0f, logMax);
     analyzerBridgeWidget_.setFrequencyRange (viewFreqMin_, viewFreqMax_);
+    forceNextRenderFrame_ = true;
 }
 
 void AnalyzerDisplayView::zoomFrequency (float factor, float centerHz)
@@ -638,6 +674,7 @@ void AnalyzerDisplayView::panFrequencyOctaves (float octaves)
 
 void AnalyzerDisplayView::resetFrequencyView()
 {
+    forceNextRenderFrame_ = true;
     setFrequencyView (kAbsFreqMin, kAbsFreqMax);
 }
 
@@ -726,6 +763,7 @@ void AnalyzerDisplayView::setMode (Mode mode)
     updateModeOverlayText();
 #endif
     
+    forceNextRenderFrame_ = true;
     kickSnapshotPumpImmediate();
     // Force repaint
     repaint();
@@ -735,22 +773,26 @@ void AnalyzerDisplayView::setSpectrumFftOrder (int order)
 {
     juce::ignoreUnused(order);
     analyzerBridgeWidget_.setSpectrumFftOrder (order);
+    forceNextRenderFrame_ = true;
 }
 
 void AnalyzerDisplayView::setSpectrumDecayRate (float decay)
 {
     juce::ignoreUnused(decay);
     analyzerBridgeWidget_.setSpectrumDecayRate (decay);
+    forceNextRenderFrame_ = true;
 }
 
 void AnalyzerDisplayView::setDisplayGainDb (float db)
 {
     analyzerBridgeWidget_.setDisplayGainDb (db);
+    forceNextRenderFrame_ = true;
 }
 
 void AnalyzerDisplayView::setTiltMode (TiltMode mode)
 {
     analyzerBridgeWidget_.setTiltMode (static_cast<int> (mode));
+    forceNextRenderFrame_ = true;
 }
 
 void AnalyzerDisplayView::setTraceConfig (const mdsp::gui::AnalyzerDisplayWidget::TraceConfig& cfg)
@@ -771,6 +813,7 @@ void AnalyzerDisplayView::setTraceConfig (const mdsp::gui::AnalyzerDisplayWidget
     providerCfg.weightingMode = traceConfig_.weightingMode;
     providerCfg.holdReleaseMs = traceConfig_.holdReleaseMs;
     renderStateProvider_.setConfig (providerCfg);
+    forceNextRenderFrame_ = true;
     kickSnapshotPumpImmediate();
 }
 
@@ -908,10 +951,11 @@ bool AnalyzerDisplayView::analyzerUiTickCore (double nowMs)
         {
             case Mode::FFT:
             {
-                const bool hasPeaks = (!fftPeakDb_.empty() && fftPeakDb_.size() == fftDb_.size());
+                const bool hasPeaks = (!fftPeakDb_.empty()
+                                       && fftPeakDb_.size() == fftDb_.size()
+                                       && fftPeakDbDisplay_.size() == fftPeakDb_.size());
                 if (hasPeaks)
                 {
-                    fftPeakDbDisplay_.resize (fftPeakDb_.size());
                     for (size_t i = 0; i < fftPeakDb_.size(); ++i)
                     {
                         float peakDb = fftPeakDb_[i];
@@ -928,10 +972,11 @@ bool AnalyzerDisplayView::analyzerUiTickCore (double nowMs)
             }
             case Mode::BAND:
             {
-                const bool hasPeaks = (!bandsPeakDb_.empty() && bandsPeakDb_.size() == bandsDb_.size());
+                const bool hasPeaks = (!bandsPeakDb_.empty()
+                                       && bandsPeakDb_.size() == bandsDb_.size()
+                                       && bandsPeakDbDisplay_.size() == bandsPeakDb_.size());
                 if (hasPeaks)
                 {
-                    bandsPeakDbDisplay_.resize (bandsPeakDb_.size());
                     for (size_t i = 0; i < bandsPeakDb_.size(); ++i)
                     {
                         float peakDb = bandsPeakDb_[i];
@@ -949,10 +994,11 @@ bool AnalyzerDisplayView::analyzerUiTickCore (double nowMs)
             }
             case Mode::LOG:
             {
-                const bool hasPeaks = (!logPeakDb_.empty() && logPeakDb_.size() == logDb_.size());
+                const bool hasPeaks = (!logPeakDb_.empty()
+                                       && logPeakDb_.size() == logDb_.size()
+                                       && logPeakDbDisplay_.size() == logPeakDb_.size());
                 if (hasPeaks)
                 {
-                    logPeakDbDisplay_.resize (logPeakDb_.size());
                     for (size_t i = 0; i < logPeakDb_.size(); ++i)
                     {
                         float peakDb = logPeakDb_[i];
@@ -1005,6 +1051,53 @@ bool AnalyzerDisplayView::advanceDbRangeAnimation (double nowMs)
     return requestedRepaint;
 }
 
+bool AnalyzerDisplayView::isRenderDispatchCapped (double nowMs) const noexcept
+{
+    if (lastRenderDispatchMs_ < 0.0)
+        return false;
+
+    // Small tolerance prevents nominal 60 Hz VBlank jitter from becoming 30 Hz.
+    return (nowMs - lastRenderDispatchMs_) < (kMaxRenderIntervalMs * 0.92);
+}
+
+bool AnalyzerDisplayView::shouldSkipRenderFrame (double nowMs) const noexcept
+{
+    if (forceNextRenderFrame_ || dataFrameSerial_ != renderedDataFrameSerial_)
+        return false;
+
+    const bool flashActive = (peakFlashActive_ && nowMs < peakFlashUntilMs_);
+    if (minDbAnimActive_ || peakScaleDirty_ || flashActive)
+        return false;
+
+    switch (currentMode_)
+    {
+        case Mode::FFT:
+            if (traceFrameIsMoving (fftFrame_, nowMs))
+                return false;
+
+            if (latestMultiTraceEnabled_
+                && (traceFrameIsMoving (multiTraceLFrame_, nowMs)
+                    || traceFrameIsMoving (multiTraceRFrame_, nowMs)
+                    || traceFrameIsMoving (multiTraceMidFrame_, nowMs)
+                    || traceFrameIsMoving (multiTraceSideFrame_, nowMs)
+                    || traceFrameIsMoving (multiTraceMonoFrame_, nowMs)))
+                return false;
+            break;
+
+        case Mode::BAND:
+            if (traceFrameIsMoving (bandFrame_, nowMs))
+                return false;
+            break;
+
+        case Mode::LOG:
+            if (traceFrameIsMoving (logFrame_, nowMs))
+                return false;
+            break;
+    }
+
+    return true;
+}
+
 void AnalyzerDisplayView::feedInterpolatedRenderFrame (double nowMs)
 {
     if (renderNoDataPending_)
@@ -1013,19 +1106,20 @@ void AnalyzerDisplayView::feedInterpolatedRenderFrame (double nowMs)
         return;
     }
 
-    interpolateTraceFrame (fftFrame_, nowMs);
-    interpolateTraceFrame (bandFrame_, nowMs);
-    interpolateTraceFrame (logFrame_, nowMs);
-    interpolateTraceFrame (multiTraceLFrame_, nowMs);
-    interpolateTraceFrame (multiTraceRFrame_, nowMs);
-    interpolateTraceFrame (multiTraceMidFrame_, nowMs);
-    interpolateTraceFrame (multiTraceSideFrame_, nowMs);
-    interpolateTraceFrame (multiTraceMonoFrame_, nowMs);
-
     switch (currentMode_)
     {
         case Mode::FFT:
         {
+            interpolateTraceFrame (fftFrame_, nowMs);
+            if (latestMultiTraceEnabled_)
+            {
+                interpolateTraceFrame (multiTraceLFrame_, nowMs);
+                interpolateTraceFrame (multiTraceRFrame_, nowMs);
+                interpolateTraceFrame (multiTraceMidFrame_, nowMs);
+                interpolateTraceFrame (multiTraceSideFrame_, nowMs);
+                interpolateTraceFrame (multiTraceMonoFrame_, nowMs);
+            }
+
             if (fftFrame_.hasCurrent_)
             {
                 const bool usePeaks = (! fftPeakDbDisplay_.empty()
@@ -1066,6 +1160,7 @@ void AnalyzerDisplayView::feedInterpolatedRenderFrame (double nowMs)
 
         case Mode::BAND:
         {
+            interpolateTraceFrame (bandFrame_, nowMs);
             if (bandFrame_.hasCurrent_)
             {
                 const bool usePeaks = (! bandsPeakDbDisplay_.empty()
@@ -1078,6 +1173,7 @@ void AnalyzerDisplayView::feedInterpolatedRenderFrame (double nowMs)
 
         case Mode::LOG:
         {
+            interpolateTraceFrame (logFrame_, nowMs);
             if (logFrame_.hasCurrent_)
             {
                 const bool usePeaks = (! logPeakDbDisplay_.empty()
@@ -1092,6 +1188,7 @@ void AnalyzerDisplayView::feedInterpolatedRenderFrame (double nowMs)
 
 void AnalyzerDisplayView::timerCallback()
 {
+    // Fallback-only path used when ANALYZERPRO_USE_VBLANK_INTERPOLATION=0.
     if (isShutdown)
         return;
 
@@ -1100,13 +1197,17 @@ void AnalyzerDisplayView::timerCallback()
     accumulateDiagnosticsAndMaybeHud (false);
 #endif
     const bool repaintAlreadyRequested = analyzerUiTickCore (nowMs);
+    juce::ignoreUnused (repaintAlreadyRequested);
     feedInterpolatedRenderFrame (nowMs);
-    if (! repaintAlreadyRequested)
-        analyzerBridgeWidget_.repaintDisplay();
+    analyzerBridgeWidget_.repaintDisplay();
+    renderedDataFrameSerial_ = dataFrameSerial_;
+    forceNextRenderFrame_ = false;
 }
 
 void AnalyzerDisplayView::VBlankRenderMarshaler::handleAsyncUpdate()
 {
+    owner.vBlankAsyncPending_ = false;
+
     if (owner.isAnalyzerViewShutdown())
         return;
 
@@ -1115,9 +1216,11 @@ void AnalyzerDisplayView::VBlankRenderMarshaler::handleAsyncUpdate()
     owner.accumulateDiagnosticsAndMaybeHud (true);
 #endif
     const bool repaintAlreadyRequested = owner.analyzerUiTickCore (nowMs);
+    juce::ignoreUnused (repaintAlreadyRequested);
     owner.feedInterpolatedRenderFrame (nowMs);
-    if (! repaintAlreadyRequested)
-        owner.analyzerBridgeWidget_.repaintDisplay();
+    owner.analyzerBridgeWidget_.repaintDisplay();
+    owner.renderedDataFrameSerial_ = owner.dataFrameSerial_;
+    owner.forceNextRenderFrame_ = false;
 }
 
 void AnalyzerDisplayView::handlePumpedSnapshot (const AnalyzerSnapshot& snapshot)
@@ -1177,6 +1280,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
         {
             renderNoDataPending_ = true;
             renderNoDataReason_ = prep.noDataReason.isNotEmpty() ? prep.noDataReason : juce::String ("No Data");
+            ++dataFrameSerial_;
         }
         return; // Skip update on mismatch
     }
@@ -1186,6 +1290,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     renderNoDataPending_ = false;
     renderNoDataReason_.clear();
     const double dataFrameTimestampMs = juce::Time::getMillisecondCounterHiRes();
+    ++dataFrameSerial_;
 #if JUCE_DEBUG
     dropReason_.clear();
 #endif
