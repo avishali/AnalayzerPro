@@ -427,7 +427,7 @@ void AnalyzerDisplayView::paintOverChildren (juce::Graphics& g)
     {
         g.setColour (theme.warning.withAlpha (0.90f));
         g.setFont (juce::Font (juce::FontOptions().withHeight (11.0f)));
-        g.drawText (devModeDebugLine_, 8, 38, 700, 14, juce::Justification::centredLeft);
+        g.drawFittedText (devModeDebugLine_, 8, 38, getWidth() - 16, 48, juce::Justification::topLeft, 3);
     }
 #endif
 }
@@ -802,26 +802,16 @@ void AnalyzerDisplayView::accumulateDiagnosticsAndMaybeHud (bool tickFromVBlank)
         const float scale = static_cast<float> (getDesktopScaleFactor());
         const float expectedMsF = static_cast<float> (expectedMs);
 
-        const char* formatName =
-#if JucePlugin_Build_AAX
-            "AAX";
-#elif JucePlugin_Build_VST3
-            "VST3";
-#elif JucePlugin_Build_Standalone
-            "Standalone";
-#else
-            "Plugin";
-#endif
-
+        const juce::String formatName = juce::AudioProcessor::getWrapperTypeDescription (audioProcessor.wrapperType);
         devModeDebugLine_ = "[" + juce::String (formatName) + " UI] tick=" + juce::String (tickFromVBlank ? "VBlank" : "Timer")
+            + "  paint/s=" + juce::String (paintsPerSec)
+            + "  paint_ms(last)=" + juce::String (uiDiagLastPaintMs_, 2)
+            + "  timer_jitter_avg_ms=" + juce::String (jitterAvg, 3)
             + "  target_fps=" + juce::String (kAnalyzerUiFps)
             + "  actual_fps=" + juce::String (actualFps, 1)
             + "  actual_timer_ms_avg=" + juce::String (actualTimerMsAvg, 2)
             + "  expect_timer_ms=" + juce::String (expectedMsF, 2)
             + "  timer_late_cnt/s=" + juce::String (latePerSec)
-            + "  timer_jitter_avg_ms=" + juce::String (jitterAvg, 3)
-            + "  paint_ms(last)=" + juce::String (uiDiagLastPaintMs_, 2)
-            + "  paint/s=" + juce::String (paintsPerSec)
             + "  spec_resized/s=" + juce::String (specResizesPerSec)
             + "  pump_throttle/s=" + juce::String (static_cast<int> (uiDiagPumpThrottleAccum_))
             + "  pump_reject/s=" + juce::String (static_cast<int> (uiDiagPumpRejectAccum_))
