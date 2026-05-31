@@ -63,6 +63,13 @@ Do NOT mix the two. The scripts/* and PROMPTS/* changes are unrelated tooling �
 STOP and report the two commit hashes.
 
 STEP 0.2 — Capture numbers (owner will run, or you run if permitted)
+MEASUREMENT BUILD (required): the HUD is gated on PLUGIN_DEV_MODE only, and scripts/build_release.sh forces -DPLUGIN_DEV_MODE=OFF (shipping stays clean). So produce a SEPARATE optimized build with the HUD on — do NOT reuse the shipping build_release.sh output for measurement:
+    cmake -S . -B build-release-dev -DCMAKE_BUILD_TYPE=Release \
+      -DJUCE_PATH=/Users/avishaylidani/DEV/SDK/JUCE \
+      -DAAX_SDK_PATH=/Users/avishaylidani/Downloads/aax-sdk-2-8-0 \
+      -DUniversalBinary=ON -DPLUGIN_DEV_MODE=1 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+    cmake --build build-release-dev --config Release -j
+This is Release-optimized (perf-honest) AND has the HUD. Keep it OUT of installer/signing scripts — it is a measurement-only build. Load these VST3/Standalone artefacts directly for the read.
 With audio running, record for Standalone vs VST3 (and AAX if available):
 - actual_fps, timer_jitter_avg_ms, paint_ms(last), paint/s, pump_throttle/reject.
 STOP and write PROMPTS/MISSIONS/ANALYZER_DISPLAY_SMOOTHNESS_PHASE0_RESULT.md with the measurements and your read:
