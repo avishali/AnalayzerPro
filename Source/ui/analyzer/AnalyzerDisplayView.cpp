@@ -31,9 +31,9 @@ static constexpr float kUiPeakInvalidSentinelDb = -90.0f;
 static constexpr float kSpectrumTopDb = 6.0f;
 
 // Snapshot pump + view timer (message thread). Keep in sync with minDbAnim_ reset() sample rate.
-// AAX: 15 Hz reduces pressure on Pro Tools' message thread vs 24 Hz; for A/B vs 24, temporarily change 15→24.
+// AAX uses the same 30 Hz cadence as the other plugin formats.
 #if JucePlugin_Build_AAX
-constexpr int kAnalyzerUiFps = 15;
+constexpr int kAnalyzerUiFps = 30;
 #else
 constexpr int kAnalyzerUiFps = 30;
 #endif
@@ -842,7 +842,7 @@ void AnalyzerDisplayView::analyzerUiTickCore()
             smoothingOctaves_ = kSmoothingOctaves[index];
             ++smoothingGen_; // SMOOTHING_RENDERING_STABILITY_V2
             
-            // Reset ballistics state to prevent glitches during smoothing transitions
+            // Legacy UI ballistics state. The engine owns analyzer ballistics now.
             rmsState_.clear();
         }
     }
@@ -1087,8 +1087,8 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     }
     
     // D. RMS Ballistics (Time Smoothing)
-    // Applied to the now-weighted fftDb_
-    applyBallistics (fftDb_.data(), rmsState_, validBinsSize, releaseMs_);
+    // Already applied engine-side. Do not smooth again on the message thread, or
+    // the analyzer feels sluggish even when the UI timer is running at normal FPS.
     
     // Multi-Trace Processing (moved here to share weighting table)
     // =========================================================================
