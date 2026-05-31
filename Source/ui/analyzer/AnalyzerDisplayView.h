@@ -30,12 +30,6 @@
 #define ANALYZERPRO_DEV_DIAGNOSTICS 0
 #endif
 
-// AAX-only: drive UI pump from display VBlank (throttled to kAnalyzerUiFps) instead of juce::Timer.
-// Pass -DANALYZERPRO_AAX_USE_VBLANK_UI_TICK=1 when building the AAX target to compare in Pro Tools.
-#ifndef ANALYZERPRO_AAX_USE_VBLANK_UI_TICK
-#define ANALYZERPRO_AAX_USE_VBLANK_UI_TICK 0
-#endif
-
 //==============================================================================
 /**
     AnalyzerDisplayView hosts analyzer display widget with mode switching.
@@ -114,7 +108,7 @@ public:
     /** Shutdown: stop timer and clear references. Safe to call multiple times. */
     void shutdown();
 
-    /** Used by AAX VBlank marshaler; avoids exposing internal shutdown flag to nested types. */
+    /** Used by VBlank marshaler; avoids exposing internal shutdown flag to nested types. */
     bool isAnalyzerViewShutdown() const noexcept { return isShutdown; }
 
 private:
@@ -302,17 +296,14 @@ private:
     uint32_t uiDiagPumpRejectAccum_ = 0;
 #endif
 
-#if JucePlugin_Build_AAX && ANALYZERPRO_AAX_USE_VBLANK_UI_TICK
-    struct AaxVBlankMarshaler final : public juce::AsyncUpdater
+    struct VBlankRenderMarshaler final : public juce::AsyncUpdater
     {
-        explicit AaxVBlankMarshaler (AnalyzerDisplayView& ownerIn) : owner (ownerIn) {}
+        explicit VBlankRenderMarshaler (AnalyzerDisplayView& ownerIn) : owner (ownerIn) {}
         void handleAsyncUpdate() override;
         AnalyzerDisplayView& owner;
     };
-    AaxVBlankMarshaler aaxVBlankMarshaler_;
-    juce::VBlankAttachment aaxVBlankAttachment_;
-    double aaxVBlankLastDispatchMs_ = -1.0;
-#endif
+    VBlankRenderMarshaler vBlankRenderMarshaler_;
+    juce::VBlankAttachment vBlankAttachment_;
     
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     struct ModeDebugOverlay final : public juce::Component
