@@ -62,6 +62,17 @@ The working tree currently mixes two unrelated changes in AnalyzerDisplayView.cp
 Do NOT mix the two. The scripts/* and PROMPTS/* changes are unrelated tooling — commit or leave as the owner prefers, but keep them out of A and B.
 STOP and report the two commit hashes.
 
+STEP 0.1d — Instrumentation correctness fixes (found in first measurement, 2026-05-31)
+First measurement exposed two HUD bugs that must be fixed before numbers are usable. UI-only, render path only.
+  BUG 1 — Format label always prints "AAX": the HUD uses `#if JucePlugin_Build_AAX/VST3/Standalone`, but those macros are compile-time and TRUE for every format the project builds, so the chain always resolves to AAX in all binaries. The label is meaningless.
+    FIX: derive the label at runtime from the wrapper:
+      const juce::String formatName = juce::AudioProcessor::getWrapperTypeDescription (audioProcessor.wrapperType);
+    Use that in devModeDebugLine_. (Returns "VST3"/"AU"/"AAX"/"Standalone" per instance.)
+  BUG 2 — HUD line truncated: drawn at AnalyzerDisplayView.cpp ~430 as g.drawText(devModeDebugLine_, 8, 38, 700, 14, ...) — fixed 700px single line, no wrap. The decisive fields (timer_jitter_avg_ms, paint_ms(last), paint/s, pump_throttle/reject) are clipped off-screen.
+    FIX: render without truncation — e.g. g.drawFittedText (devModeDebugLine_, 8, 38, getWidth() - 16, 48, juce::Justification::topLeft, 3) so it wraps to up to 3 lines at full width. Additionally reorder the line so the discriminating metrics (paint/s, paint_ms(last), timer_jitter_avg_ms) come FIRST, before target_fps/expect_timer_ms/scale.
+  Commit as a fixup to commit B's area. msg: "Analyzer HUD: runtime wrapper label + non-truncated multi-line draw"
+STOP and report the fix + commit hash. Then re-measure (STEP 0.2).
+
 STEP 0.2 — Capture numbers (owner will run, or you run if permitted)
 MEASUREMENT BUILD (required): the HUD is gated on PLUGIN_DEV_MODE only, and scripts/build_release.sh forces -DPLUGIN_DEV_MODE=OFF (shipping stays clean). So produce a SEPARATE optimized build with the HUD on — do NOT reuse the shipping build_release.sh output for measurement:
     cmake -S . -B build-release-dev -DCMAKE_BUILD_TYPE=Release \
