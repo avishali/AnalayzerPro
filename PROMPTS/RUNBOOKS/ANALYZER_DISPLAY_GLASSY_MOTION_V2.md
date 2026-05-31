@@ -63,10 +63,12 @@ STEP 2.3 — Interpolate on VBlank
 - display_[i] = lerp(prev_[i], curr_[i], alpha) for the RMS/spectrum/band trace.
 - PEAKS: peak-hold and peak markers snap to the latest value (no downward tween); do not lerp peaks below curr_.
 - Feed display_ to the existing path builder / renderer. Reuse existing path construction; only the input values change.
-STOP and report the interpolation math, alpha handling, and peak treatment.
+- ALSO FIX (regression from STEP 2.1): minDbAnim_ is reset with sample rate kAnalyzerDisplayTimerHz (30) at AnalyzerDisplayView.cpp ~155 and ~217, but getNextValue() now ticks at the VBlank rate (~60/120Hz) → the dB-range glide runs 2–4× too fast. Make the dB-range animation TIME-BASED (advance by measured wall-clock delta, reusing the same now/timestamp you compute for alpha) instead of assuming a fixed 30Hz call rate. Do NOT leave the 30Hz reset assumption.
+STOP and report the interpolation math, alpha handling, peak treatment, and the dB-anim time-base fix.
 
 STEP 2.4 — CPU guards (owner priority)
-- Render-rate cap: add a config (e.g. kMaxRenderHz, default 60) so 120 Hz ProMotion displays don't paint 120×/s unless explicitly enabled. Skip VBlank ticks that exceed the cap.
+- Render-rate cap: add a config (e.g. kMaxRenderHz, default 60) so 120 Hz ProMotion displays don't paint 120×/s unless explicitly enabled. The cap MUST gate the marshaler DISPATCH (the VBlank → triggerAsyncUpdate / handleAsyncUpdate path), not just the repaint — otherwise analyzerUiTickCore (APVTS reads, applyPendingFftSizeIfNeeded, dB anim) also runs at full display rate. Capping the dispatch caps both tick logic AND paint.
+- Cleanup: timerCallback() is now dead (the view's juce::Timer is never started after STEP 2.1). Either remove the Timer base/override or leave a clear comment; ensure no path relies on it. Confirm no -Wreorder warning from the constructor init-list change (navOverlay_).
 - Idle skip: if data is unchanged AND alpha has reached 1.0 (trace fully settled / no motion), skip the repaint that frame. Resume on next data change.
 - Kill-switch: a compile-time or APVTS-independent flag to disable interpolation+vblank and fall back to the 30 Hz timer path (for A/B and conservative shipping).
 - Verify NO allocations in paint() or the VBlank path (preallocated buffers only).
