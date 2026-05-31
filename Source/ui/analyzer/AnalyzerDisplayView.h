@@ -21,7 +21,13 @@
 #endif
 
 #if !defined(PLUGIN_DEV_MODE)
-#define PLUGIN_DEV_MODE 1  // Temporary debug overlay
+#define PLUGIN_DEV_MODE 0
+#endif
+
+#if PLUGIN_DEV_MODE
+#define ANALYZERPRO_DEV_DIAGNOSTICS 1
+#else
+#define ANALYZERPRO_DEV_DIAGNOSTICS 0
 #endif
 
 // AAX-only: drive UI pump from display VBlank (throttled to kAnalyzerUiFps) instead of juce::Timer.
@@ -116,8 +122,8 @@ private:
     void timerCallback() override;
     /** Message-thread spectrum UI pump (APVTS read, ballistics, pump FFT apply). */
     void analyzerUiTickCore();
-#if JucePlugin_Build_AAX
-    void aaxAccumulateDiagnosticsAndMaybeHud (bool tickFromVBlank);
+#if ANALYZERPRO_DEV_DIAGNOSTICS
+    void accumulateDiagnosticsAndMaybeHud (bool tickFromVBlank);
 #endif
     void updateFromSnapshot (const AnalyzerSnapshot& snapshot);
     void handlePumpedSnapshot (const AnalyzerSnapshot& snapshot);
@@ -235,7 +241,7 @@ private:
 #if JUCE_DEBUG && ANALYZERPRO_FFT_DEBUG_LINE
     juce::String fftDebugLine_;
 #endif
-#if defined(PLUGIN_DEV_MODE) && PLUGIN_DEV_MODE
+#if ANALYZERPRO_DEV_DIAGNOSTICS
     juce::String devModeDebugLine_;  // Temporary: UI/widget mode / bins / min/max dB
 #endif
 
@@ -280,20 +286,20 @@ private:
     uint32_t traceDataGen_ = 0;   // Increments when trace buffer content changes
     uint32_t smoothingGen_ = 0;   // Increments when smoothing param changes
 
-#if JucePlugin_Build_AAX
-    /** AAX visual diagnostics (message thread only; HUD refreshed from timerCallback). */
-    float aaxDiagLastPaintMs_ = 0.0f;
-    uint32_t aaxDiagPaintEventsAccum_ = 0;
-    uint32_t aaxDiagSpectrumResizesAccum_ = 0;
-    double aaxDiagTimerPrevMs_ = 0.0;
-    double aaxDiagTimerJitterSumMs_ = 0.0;
-    int aaxDiagTimerJitterSamples_ = 0;
-    double aaxDiagTimerDtSumMs_ = 0.0;
-    int aaxDiagTimerTickCount_ = 0;
-    uint32_t aaxDiagTimerLateCountAccum_ = 0;
-    double aaxDiagHudWallMs_ = 0.0;
-    uint32_t aaxDiagPumpThrottleAccum_ = 0;
-    uint32_t aaxDiagPumpRejectAccum_ = 0;
+#if ANALYZERPRO_DEV_DIAGNOSTICS
+    /** Visual diagnostics (message thread only; HUD refreshed from timerCallback or VBlank marshaler). */
+    float uiDiagLastPaintMs_ = 0.0f;
+    uint32_t uiDiagPaintEventsAccum_ = 0;
+    uint32_t uiDiagSpectrumResizesAccum_ = 0;
+    double uiDiagTimerPrevMs_ = 0.0;
+    double uiDiagTimerJitterSumMs_ = 0.0;
+    int uiDiagTimerJitterSamples_ = 0;
+    double uiDiagTimerDtSumMs_ = 0.0;
+    int uiDiagTimerTickCount_ = 0;
+    uint32_t uiDiagTimerLateCountAccum_ = 0;
+    double uiDiagHudWallMs_ = 0.0;
+    uint32_t uiDiagPumpThrottleAccum_ = 0;
+    uint32_t uiDiagPumpRejectAccum_ = 0;
 #endif
 
 #if JucePlugin_Build_AAX && ANALYZERPRO_AAX_USE_VBLANK_UI_TICK

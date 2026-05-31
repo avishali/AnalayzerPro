@@ -217,12 +217,12 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
     startTimerHz (kAnalyzerDisplayTimerHz);
 #endif
 
-#if JucePlugin_Build_AAX
+#if ANALYZERPRO_DEV_DIAGNOSTICS
     analyzerBridgeWidget_.getRTADisplay().setPaintTimingCallback (
         [this] (float paintMs)
         {
-            aaxDiagLastPaintMs_ = paintMs;
-            ++aaxDiagPaintEventsAccum_;
+            uiDiagLastPaintMs_ = paintMs;
+            ++uiDiagPaintEventsAccum_;
         });
 #endif
 }
@@ -421,7 +421,7 @@ void AnalyzerDisplayView::paintOverChildren (juce::Graphics& g)
 #endif
 #endif
 
-#if defined(PLUGIN_DEV_MODE) && PLUGIN_DEV_MODE
+#if ANALYZERPRO_DEV_DIAGNOSTICS
     // Temporary debug overlay: UI/widget mode / bins / min/max dB
     if (!devModeDebugLine_.isEmpty())
     {
@@ -602,8 +602,8 @@ void AnalyzerDisplayView::resetFrequencyView()
 
 void AnalyzerDisplayView::resized()
 {
-#if JucePlugin_Build_AAX
-    ++aaxDiagSpectrumResizesAccum_;
+#if ANALYZERPRO_DEV_DIAGNOSTICS
+    ++uiDiagSpectrumResizesAccum_;
 #endif
     auto bounds = getLocalBounds();
     analyzerBridgeWidget_.setBounds (bounds);
@@ -742,47 +742,47 @@ void AnalyzerDisplayView::kickSnapshotPumpImmediate()
     analyzerBridgeWidget_.emitNowIfDirty (true);
 }
 
-#if JucePlugin_Build_AAX
-void AnalyzerDisplayView::aaxAccumulateDiagnosticsAndMaybeHud (bool tickFromVBlank)
+#if ANALYZERPRO_DEV_DIAGNOSTICS
+void AnalyzerDisplayView::accumulateDiagnosticsAndMaybeHud (bool tickFromVBlank)
 {
     const double nowMs = juce::Time::getMillisecondCounterHiRes();
     const double expectedMs = 1000.0 / static_cast<double> (juce::jmax (1, kAnalyzerDisplayTimerHz));
 
-    if (aaxDiagTimerPrevMs_ > 0.0)
+    if (uiDiagTimerPrevMs_ > 0.0)
     {
-        const double dt = nowMs - aaxDiagTimerPrevMs_;
-        aaxDiagTimerDtSumMs_ += dt;
-        ++aaxDiagTimerTickCount_;
-        aaxDiagTimerJitterSumMs_ += std::abs (dt - expectedMs);
-        ++aaxDiagTimerJitterSamples_;
+        const double dt = nowMs - uiDiagTimerPrevMs_;
+        uiDiagTimerDtSumMs_ += dt;
+        ++uiDiagTimerTickCount_;
+        uiDiagTimerJitterSumMs_ += std::abs (dt - expectedMs);
+        ++uiDiagTimerJitterSamples_;
         if (dt > expectedMs * 1.25)
-            ++aaxDiagTimerLateCountAccum_;
+            ++uiDiagTimerLateCountAccum_;
     }
 
-    aaxDiagTimerPrevMs_ = nowMs;
+    uiDiagTimerPrevMs_ = nowMs;
 
     uint32_t throttle = 0, rejected = 0;
     analyzerBridgeWidget_.getAndResetPumpDiagnostics (throttle, rejected);
-    aaxDiagPumpThrottleAccum_ += throttle;
-    aaxDiagPumpRejectAccum_ += rejected;
+    uiDiagPumpThrottleAccum_ += throttle;
+    uiDiagPumpRejectAccum_ += rejected;
 
-    if (aaxDiagHudWallMs_ <= 0.0)
-        aaxDiagHudWallMs_ = nowMs;
+    if (uiDiagHudWallMs_ <= 0.0)
+        uiDiagHudWallMs_ = nowMs;
 
-    if (nowMs - aaxDiagHudWallMs_ >= 1000.0)
+    if (nowMs - uiDiagHudWallMs_ >= 1000.0)
     {
-        aaxDiagHudWallMs_ = nowMs;
+        uiDiagHudWallMs_ = nowMs;
 
-        const float jitterAvg = (aaxDiagTimerJitterSamples_ > 0)
-            ? static_cast<float> (aaxDiagTimerJitterSumMs_ / static_cast<double> (aaxDiagTimerJitterSamples_))
+        const float jitterAvg = (uiDiagTimerJitterSamples_ > 0)
+            ? static_cast<float> (uiDiagTimerJitterSumMs_ / static_cast<double> (uiDiagTimerJitterSamples_))
             : 0.0f;
-        aaxDiagTimerJitterSumMs_ = 0.0;
-        aaxDiagTimerJitterSamples_ = 0;
+        uiDiagTimerJitterSumMs_ = 0.0;
+        uiDiagTimerJitterSamples_ = 0;
 
-        const int ticksThisSec = aaxDiagTimerTickCount_;
-        const double dtSumThisSec = aaxDiagTimerDtSumMs_;
-        aaxDiagTimerTickCount_ = 0;
-        aaxDiagTimerDtSumMs_ = 0.0;
+        const int ticksThisSec = uiDiagTimerTickCount_;
+        const double dtSumThisSec = uiDiagTimerDtSumMs_;
+        uiDiagTimerTickCount_ = 0;
+        uiDiagTimerDtSumMs_ = 0.0;
 
         const float actualTimerMsAvg = (ticksThisSec > 0)
             ? static_cast<float> (dtSumThisSec / static_cast<double> (ticksThisSec))
@@ -790,35 +790,44 @@ void AnalyzerDisplayView::aaxAccumulateDiagnosticsAndMaybeHud (bool tickFromVBla
         const float actualFps = (actualTimerMsAvg > 1.0e-4f)
             ? (1000.0f / actualTimerMsAvg)
             : 0.0f;
-        const int latePerSec = static_cast<int> (aaxDiagTimerLateCountAccum_);
-        aaxDiagTimerLateCountAccum_ = 0;
+        const int latePerSec = static_cast<int> (uiDiagTimerLateCountAccum_);
+        uiDiagTimerLateCountAccum_ = 0;
 
-        const int paintsPerSec = static_cast<int> (aaxDiagPaintEventsAccum_);
-        aaxDiagPaintEventsAccum_ = 0;
+        const int paintsPerSec = static_cast<int> (uiDiagPaintEventsAccum_);
+        uiDiagPaintEventsAccum_ = 0;
 
-        const int specResizesPerSec = static_cast<int> (aaxDiagSpectrumResizesAccum_);
-        aaxDiagSpectrumResizesAccum_ = 0;
+        const int specResizesPerSec = static_cast<int> (uiDiagSpectrumResizesAccum_);
+        uiDiagSpectrumResizesAccum_ = 0;
 
         const float scale = static_cast<float> (getDesktopScaleFactor());
         const float expectedMsF = static_cast<float> (expectedMs);
 
-#if defined(PLUGIN_DEV_MODE) && PLUGIN_DEV_MODE
-        devModeDebugLine_ = "[AAX UI] tick=" + juce::String (tickFromVBlank ? "VBlank" : "Timer")
+        const char* formatName =
+#if JucePlugin_Build_AAX
+            "AAX";
+#elif JucePlugin_Build_VST3
+            "VST3";
+#elif JucePlugin_Build_Standalone
+            "Standalone";
+#else
+            "Plugin";
+#endif
+
+        devModeDebugLine_ = "[" + juce::String (formatName) + " UI] tick=" + juce::String (tickFromVBlank ? "VBlank" : "Timer")
             + "  target_fps=" + juce::String (kAnalyzerUiFps)
             + "  actual_fps=" + juce::String (actualFps, 1)
             + "  actual_timer_ms_avg=" + juce::String (actualTimerMsAvg, 2)
             + "  expect_timer_ms=" + juce::String (expectedMsF, 2)
             + "  timer_late_cnt/s=" + juce::String (latePerSec)
             + "  timer_jitter_avg_ms=" + juce::String (jitterAvg, 3)
-            + "  paint_ms(last)=" + juce::String (aaxDiagLastPaintMs_, 2)
+            + "  paint_ms(last)=" + juce::String (uiDiagLastPaintMs_, 2)
             + "  paint/s=" + juce::String (paintsPerSec)
             + "  spec_resized/s=" + juce::String (specResizesPerSec)
-            + "  pump_throttle/s=" + juce::String (static_cast<int> (aaxDiagPumpThrottleAccum_))
-            + "  pump_reject/s=" + juce::String (static_cast<int> (aaxDiagPumpRejectAccum_))
+            + "  pump_throttle/s=" + juce::String (static_cast<int> (uiDiagPumpThrottleAccum_))
+            + "  pump_reject/s=" + juce::String (static_cast<int> (uiDiagPumpRejectAccum_))
             + "  scale=" + juce::String (scale, 2);
-#endif
-        aaxDiagPumpThrottleAccum_ = 0;
-        aaxDiagPumpRejectAccum_ = 0;
+        uiDiagPumpThrottleAccum_ = 0;
+        uiDiagPumpRejectAccum_ = 0;
     }
 }
 #endif
@@ -959,8 +968,8 @@ void AnalyzerDisplayView::timerCallback()
 
 #if JucePlugin_Build_AAX && ANALYZERPRO_AAX_USE_VBLANK_UI_TICK
     return;
-#elif JucePlugin_Build_AAX
-    aaxAccumulateDiagnosticsAndMaybeHud (false);
+#elif ANALYZERPRO_DEV_DIAGNOSTICS
+    accumulateDiagnosticsAndMaybeHud (false);
 #endif
     analyzerUiTickCore();
 }
@@ -971,7 +980,9 @@ void AnalyzerDisplayView::AaxVBlankMarshaler::handleAsyncUpdate()
     if (owner.isAnalyzerViewShutdown())
         return;
 
-    owner.aaxAccumulateDiagnosticsAndMaybeHud (true);
+#if ANALYZERPRO_DEV_DIAGNOSTICS
+    owner.accumulateDiagnosticsAndMaybeHud (true);
+#endif
     owner.analyzerUiTickCore();
 }
 #endif
