@@ -136,6 +136,7 @@ private:
         std::vector<float> curr_;
         std::vector<float> display_;
         double captureTimestampMs_ = 0.0;
+        double lastChangeTimestampMs_ = 0.0;
         bool hasCurrent_ = false;
         bool hasPrevious_ = false;
 
@@ -144,7 +145,7 @@ private:
     };
 
     static bool traceFrameIsMoving (const TraceFrameBuffers& buffers, double nowMs) noexcept;
-    static void latchTraceFrame (TraceFrameBuffers& buffers,
+    static bool latchTraceFrame (TraceFrameBuffers& buffers,
                                  const std::vector<float>& values,
                                  double captureTimestampMs);
     static void interpolateTraceFrame (TraceFrameBuffers& buffers, double nowMs);
