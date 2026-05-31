@@ -28,6 +28,11 @@ Each runbook is a STOP-gated Cursor prompt (IMPLEMENTER + VERIFIER). Apply one p
   - Build (universal Release) → PACE-sign AAX → delete duplicates → install one canonical copy per format → verify version + build date.
   - Version is already wired to CMake via `scripts/plugin_version.sh` (do not hardcode).
 
+### Restore shippable state after dev iteration
+- `RUNBOOKS/RESTORE_SHIPPING_STATE_V1_1_1.md`
+  - Run after the smoothness/Phase-2 work, before any beta hand-off.
+  - Rebuilds SHIPPING (PLUGIN_DEV_MODE=OFF, no HUD), re-signs AAX (PACE, not adhoc), reinstalls one canonical signed copy per format incl. AU. Undoes the dev/HUD/adhoc/stale-AU state left by the investigation.
+
 ---
 
 (Existing `.txt` runbooks under `PROMPTS/RUNBOOKS/` are not yet all catalogued here.)
