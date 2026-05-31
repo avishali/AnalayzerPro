@@ -8,10 +8,15 @@ Each runbook is a STOP-gated Cursor prompt (IMPLEMENTER + VERIFIER). Apply one p
 ## Display Performance / Rendering Cadence
 
 ### Steppy/juddery analyzer in VST3 & AAX (smooth in Standalone)
-- `RUNBOOKS/ANALYZER_DISPLAY_SMOOTHNESS_V1.md`
-  - Root cause: three independent 30 Hz timers + per-setter repaint() → irregular in-host cadence.
-  - Phase 0 = instrument & measure (gate). Phase 1 = single vsync-aligned cadence. Phase 2 (optional, needs sign-off) = render/data decoupling + interpolation.
-  - Render-only; no DSP/data-rate increase. CPU-first.
+- `RUNBOOKS/ANALYZER_DISPLAY_SMOOTHNESS_V1.md`  [Phase 0 CLOSED 2026-05-31]
+  - Phase 0 RESULT: NOT a cadence/render problem. VST3 == Standalone on all metrics. The reported difference was a STALE-BUILD comparison artifact (duplicate installs), resolved by the clean matched 1.1.1 install. Phase 1 (collapsing clocks) NOT pursued — unjustified by data.
+  - See `MISSIONS/ANALYZER_DISPLAY_SMOOTHNESS_PHASE0_RESULT.md`.
+
+### Glassy analyzer motion (absolute smoothness, all formats)
+- `RUNBOOKS/ANALYZER_DISPLAY_GLASSY_MOTION_V2.md`  [active]
+  - VBlank-driven render at display native rate (60/120Hz) + inter-frame interpolation of trace geometry between 30Hz data frames. Data pump stays 30Hz (no DSP cost).
+  - STEP 2.0 prerequisite: gate COPY_PLUGIN_AFTER_BUILD so dev builds stop clobbering installs.
+  - CPU-first: render-rate cap, idle-skip, kill-switch. Render-only; no DSP changes.
 
 ---
 
