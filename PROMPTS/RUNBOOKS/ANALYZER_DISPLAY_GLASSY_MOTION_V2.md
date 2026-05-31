@@ -88,6 +88,27 @@ STOP and write PROMPTS/MISSIONS/ANALYZER_DISPLAY_GLASSY_MOTION_V2_RESULT.md:
 - whether the cap/idle-skip kept CPU acceptable
 End with STOP.
 
+STEP 2.6 — Post-measurement fixes (found in STEP 2.5 owner measurement, 2026-06-01)
+Fold into ONE commit. UI/render-only, no DSP.
+
+2.6a — HUD jitter/expected artifact:
+- timer_jitter_avg_ms and expect_timer_ms are computed against kAnalyzerDisplayTimerHz (30 → 33.33ms), but the tick now runs at the VBlank/render rate (~17ms/60Hz). This makes jitter read ~16ms (a false alarm) and expect_timer_ms misleading.
+- FIX: base the diagnostics "expected interval" and jitter on the ACTUAL render cadence (e.g. derive expected from kMaxRenderHz or the measured VBlank period), and/or split the HUD into data_fps (30, the pump) vs render_fps (the VBlank tick) with jitter measured against the render period. Goal: jitter reflects real tick-to-tick deviation (should be small), not the 30-vs-60 mismatch.
+
+2.6b — Idle-skip is INEFFECTIVE (primary CPU concern):
+- Owner measured both Standalone and VST3 at IDLE (transport stopped, playback off) still painting ~60 fps (paint/s 78–80). Root cause: idle-skip triggers on dataFrameSerial_ (a NEW frame arriving), but the audio engine keeps calling processBlock when transport is stopped, so snapshots keep arriving and the serial keeps bumping → skip never fires.
+- FIX: make idle-skip VALUE-BASED. In latchTraceFrame, compare the incoming values to the previous curr_ (now prev_); if the max abs delta across the trace is below an epsilon (e.g. ~0.05 dB), treat the frame as UNCHANGED. Track a "last actual change" timestamp/serial per active-mode trace (bump only on real change). 
+  - A trace is "moving" only while (now - lastChangeMs) < kAnalyzerDataIntervalMs (so the tween from the last real change still completes).
+  - shouldSkipRenderFrame uses the value-change signal (not raw frame arrival): skip when all active-mode traces are unchanged AND settled AND no dB-range/flash/peak-remap/force is active.
+  - Peak-hold decay: if a decay is animating values, that counts as "changing" → keeps painting (correct). Infinite-hold static → idle → skip (correct).
+- Expected result: at idle (static/silent signal), paint/s falls toward ~0; CPU drops. With moving audio, paint/s stays ~60 (glassy).
+- Keep forceNextRenderFrame_ wake coverage from 2.4 intact.
+
+2.6c — Confirm paints bounded to the cap (optional, CPU hygiene):
+- paint/s measured ~76–85 vs ~58 tick rate (~1.5×), implying extra/partial repaints beyond one-per-tick. Confirm the paint-timing callback isn't counting redundant FULL repaints; if there is a redundant full repaint per frame, remove it so paints are bounded to the render cap. Partial-region repaints (crosshair/markers) are acceptable.
+
+Build dev. STOP and re-measure: idle paint/s should now drop toward 0; moving paint/s ~60; jitter realistic. Update the V2_RESULT file.
+
 ============================================================
 VERIFIER PROMPT
 ============================================================
@@ -100,7 +121,7 @@ CHECK 2 — Data rate unchanged: SnapshotPump still 30 Hz; no FFT/DSP cost added
 CHECK 3 — Render decoupled: repaint driven by VBlank for ALL formats; exactly one repaint per VBlank (capped); redundant clocks/setters no longer repaint.
 CHECK 4 — Interpolation correctness: RMS/spectrum tweens between prev/curr by alpha; peaks snap up and never tween downward/lag; no overshoot beyond [prev,curr].
 CHECK 5 — No allocations in paint() or VBlank hot path.
-CHECK 6 — CPU guards present and effective: render-rate cap, idle-skip when static, working kill-switch.
+CHECK 6 — CPU guards present and effective: render-rate cap, working kill-switch, AND idle-skip MUST be value-based (per STEP 2.6b). Measured proof required: with transport STOPPED / signal static, paint/s falls toward ~0 (NOT ~60). Serial-only idle-skip is a FAIL — the engine keeps publishing frames when stopped.
 CHECK 7 — Runtime: motion visibly glassy in VST3 + Standalone; CPU within acceptable budget vs 30 Hz baseline; no tearing.
 
 OUTPUT
