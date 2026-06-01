@@ -25,6 +25,16 @@ Each runbook is a STOP-gated Cursor prompt (IMPLEMENTER + VERIFIER). Apply one p
 
 ---
 
+## UI/UX Overhaul (staged program — Cursor solo, owner supervises)
+- `RUNBOOKS/UI_OVERHAUL/00_MASTER_PLAN.md` — control inventory, proposed IA, stage list + sequencing + solo-safety. READ FIRST.
+- `01_FREQ_RANGE_AND_DETAIL.md` — 10 Hz→Nyquist range, larger FFT sizes, labeled Detail control. (concrete; do first)
+- `05_PANEL_RESIZE_LOCK.md` — lock placement + resize stability. (concrete; foundational, before 04)
+- `04_PHASE_SCOPE.md` — phase-arc scope visuals + resize. (after 05)
+- `06_METERS_FINISH.md` — meters final UI, reuse MasterLimiter. (concrete)
+- `03_LOOKFEEL_GENERALIZE.md` — generalize MasterLimiterLookAndFeel → shared mdsp_ui. (review-gated)
+- `02_CONTROL_IA_REORG.md` — dedupe rail/popup, module-context rail, surface all controls incl. Side. (review-gated; do last)
+- Locked decisions: 10 Hz→Nyquist · FFT-size + labeled Detail · design generalized into mdsp_ui · subjective stages = Cursor builds proposed IA, owner reviews.
+
 ## Build / Release / Install
 
 ### Rebuild 1.1.1 (Release) + replace stale/duplicate installs
