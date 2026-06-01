@@ -103,6 +103,7 @@ Fold into ONE commit. UI/render-only, no DSP.
   - Peak-hold decay: if a decay is animating values, that counts as "changing" → keeps painting (correct). Infinite-hold static → idle → skip (correct).
 - Expected result: at idle (static/silent signal), paint/s falls toward ~0; CPU drops. With moving audio, paint/s stays ~60 (glassy).
 - Keep forceNextRenderFrame_ wake coverage from 2.4 intact.
+- GAP found in 2.6 impl (501a68e): frameValueChanged covers only the main RMS + multi-trace buffers, NOT the peak/peak-hold trace. If peak-hold decay (Release control) outlasts the RMS release, RMS settles → idle-skip engages → peak decay FREEZES mid-fall. FIX: also factor peak-value change (fftPeakDbDisplay_/bandsPeakDbDisplay_/logPeakDbDisplay_ vs last rendered, or a peak-hold "is decaying" flag) into the not-idle condition. Verify by: play signal, stop transport, watch peak-hold fall smoothly to floor (must not freeze).
 
 2.6c — Confirm paints bounded to the cap (optional, CPU hygiene):
 - paint/s measured ~76–85 vs ~58 tick rate (~1.5×), implying extra/partial repaints beyond one-per-tick. Confirm the paint-timing callback isn't counting redundant FULL repaints; if there is a redundant full repaint per frame, remove it so paints are bounded to the render cap. Partial-region repaints (crosshair/markers) are acceptable.
