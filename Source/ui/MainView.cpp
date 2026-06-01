@@ -48,15 +48,15 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     header_.onRailToggleClicked = [this] { toggleRail(); };
     header_.setRailOpen (railIsOpen_);
 
-    // Module dropdown buttons → show settings popups
-    header_.onSpectrumClicked = [this] (juce::Component* anchor)
-        { showSettingsPopup (SettingsPopupPanel::Section::Spectrum, anchor); };
-    header_.onScopesClicked   = [this] (juce::Component* anchor)
-        { showSettingsPopup (SettingsPopupPanel::Section::Scopes,   anchor); };
-    header_.onMetersClicked   = [this] (juce::Component* anchor)
-        { showSettingsPopup (SettingsPopupPanel::Section::Meters,   anchor); };
-    header_.onTracesClicked   = [this] (juce::Component* anchor)
-        { showSettingsPopup (SettingsPopupPanel::Section::Traces,   anchor); };
+    // Module settings tabs select the single editable rail source of truth.
+    header_.onSpectrumClicked = [this]
+        { selectRailModule (HeaderBar::ActiveModule::Spectrum, ControlRail::ActiveModule::Spectrum); };
+    header_.onScopesClicked   = [this]
+        { selectRailModule (HeaderBar::ActiveModule::Scopes,   ControlRail::ActiveModule::Scopes); };
+    header_.onMetersClicked   = [this]
+        { selectRailModule (HeaderBar::ActiveModule::Meters,   ControlRail::ActiveModule::Meters); };
+    header_.onTracesClicked   = [this]
+        { selectRailModule (HeaderBar::ActiveModule::Traces,   ControlRail::ActiveModule::Traces); };
     rail_.setControlBinder (controls_.getBinder());
     rail_.setResetPeaksCallback ([this]
     {
@@ -537,63 +537,20 @@ bool MainView::keyPressed (const juce::KeyPress& key, juce::Component* originati
     return false;
 }
 
-void MainView::showSettingsPopup (SettingsPopupPanel::Section section, juce::Component* anchor)
+void MainView::selectRailModule (HeaderBar::ActiveModule headerModule, ControlRail::ActiveModule railModule)
 {
-    // If the same section popup is already open, toggle it closed
-    if (currentPopup_ != nullptr && currentPopupSection_ == section)
+    if (railIsOpen_ && rail_.getActiveModule() == railModule)
     {
-        if (auto* box = currentPopup_->findParentComponentOfClass<juce::CallOutBox>())
-            box->exitModalState (0);
-        currentPopup_ = nullptr;
+        toggleRail();
         return;
     }
 
-    // If a different popup is open, dismiss it first
-    if (currentPopup_ != nullptr)
-    {
-        if (auto* box = currentPopup_->findParentComponentOfClass<juce::CallOutBox>())
-            box->exitModalState (0);
-        currentPopup_ = nullptr;
-    }
+    header_.setActiveModule (headerModule);
+    rail_.setActiveModule (railModule);
+    railViewport_.setViewPosition (0, 0);
 
-    auto panel = std::make_unique<SettingsPopupPanel> (section, ui_, apvts_);
-    panel->setSize (SettingsPopupPanel::kWidth, panel->getPreferredHeight());
-
-    // Set initial state for non-APVTS controls
-    if (section == SettingsPopupPanel::Section::Spectrum)
-    {
-        panel->setCurrentMode (currentAnalyzerMode_);
-        panel->onModeChanged = [this] (int id)
-        {
-            currentAnalyzerMode_ = id;
-            // Push through APVTS so parameterChanged fires and syncs the view
-            if (apvts_ != nullptr)
-            {
-                if (auto* param = apvts_->getParameter ("Mode"))
-                {
-                    const float norm = static_cast<float> (juce::jlimit (0, 2, id - 1)) / 2.0f;
-                    param->beginChangeGesture();
-                    param->setValueNotifyingHost (norm);
-                    param->endChangeGesture();
-                }
-            }
-        };
-        panel->onResetPeaks = [this] { triggerResetPeaks(); };
-    }
-    else if (section == SettingsPopupPanel::Section::Scopes)
-    {
-        panel->setCurrentScopeMode  (currentScopeMode_);
-        panel->setCurrentScopeShape (currentScopeShape_);
-        panel->onScopeModeChanged  = [this] (int id) { currentScopeMode_  = id; };
-        panel->onScopeShapeChanged = [this] (int id) { currentScopeShape_ = id; };
-    }
-
-    currentPopupSection_ = section;
-    currentPopup_ = panel.get(); // SafePointer — auto-nulls when popup is destroyed
-
-    juce::CallOutBox::launchAsynchronously (std::move (panel),
-                                            anchor->getScreenBounds(),
-                                            nullptr);
+    if (! railIsOpen_)
+        toggleRail();
 }
 
 void MainView::triggerResetPeaks()

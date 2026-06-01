@@ -7,7 +7,6 @@
 #include <mdsp_ui/controls/ChoiceRow.h>
 #include <mdsp_ui/controls/ToggleRow.h>
 #include "DraggableParamValueLabel.h"
-#include <mdsp_ui/controls/CollapsibleSection.h>
 #include <functional>
 
 //==============================================================================
@@ -18,6 +17,14 @@
 class ControlRail : public juce::Component
 {
 public:
+    enum class ActiveModule
+    {
+        Spectrum,
+        Scopes,
+        Meters,
+        Traces
+    };
+
     explicit ControlRail (mdsp_ui::UiContext& ui);
     ~ControlRail() override;
 
@@ -29,10 +36,13 @@ public:
     /** Full height required to show all rows (for Viewport content size). */
     int getPreferredHeight() const noexcept;
 
-    /** Callback when section expand/collapse changes preferred height (parent should resized()). */
+    /** Callback when active-module content changes preferred height (parent should resized()). */
     std::function<void()> onPreferredHeightChanged;
 
-    /** Expand the Analysis Mode section (e.g. when HeaderBar "Mode…" is clicked). */
+    void setActiveModule (ActiveModule module);
+    ActiveModule getActiveModule() const noexcept { return activeModule_; }
+
+    /** Show the Spectrum rail module where the Analysis Mode controls now live. */
     void expandAnalysisModeSection();
 
     /** Mode sync: set from parameter/model. 1=FFT, 2=BAND, 3=LOG. */
@@ -51,6 +61,7 @@ public:
 private:
     int layoutMode_ = 1; // 0 Compact, 1 Normal, 2 Wide
     AnalyzerPro::ControlBinder* controlBinder = nullptr;
+    ActiveModule activeModule_ = ActiveModule::Spectrum;
 
     void triggerResetPeaks();
     void setSelectedModeId (int id) // 1=FFT, 2=BAND, 3=LOG
@@ -80,16 +91,11 @@ private:
     juce::ComboBox meterInputCombo; // New
     juce::ToggleButton meterPeakHoldButton;
     
-    // Section headers
-    mdsp_ui::SectionHeader navigateHeader;
-    mdsp_ui::SectionHeader analyzerHeader;
-    mdsp_ui::SectionHeader displayHeader;
+    // Active module section headers
+    mdsp_ui::SectionHeader spectrumHeader;
+    mdsp_ui::SectionHeader scopesHeader;
     mdsp_ui::SectionHeader metersHeader;
-
-    // Collapsible sections (Scopes, Traces, Analysis Mode — default collapsed)
-    mdsp_ui::CollapsibleSection scopesSection_;
-    mdsp_ui::CollapsibleSection tracesSection_;
-    mdsp_ui::CollapsibleSection analysisModeSection_;
+    mdsp_ui::SectionHeader tracesHeader;
 
     // Analysis Mode controls (moved from HeaderBar into rail)
     juce::TextButton fftButton_;
@@ -138,14 +144,5 @@ private:
     juce::ComboBox weightingCombo;
     mdsp_ui::ChoiceRow weightingRow;
     
-    // Navigate section (placeholder)
-    juce::Label placeholderLabel1;
-    
-    // Display section (placeholder)
-    juce::Label placeholderLabel3;
-    
-    // Meters section (placeholder)
-    juce::Label placeholderLabel4;
-
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ControlRail)
 };

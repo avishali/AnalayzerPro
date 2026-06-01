@@ -5,7 +5,6 @@
 #include "../../presets/PresetManager.h"
 #include "../../presets/ABStateManager.h"
 #include <functional>
-#include <memory>
 
 namespace AnalyzerPro { class ControlBinder; }
 
@@ -16,6 +15,14 @@ namespace AnalyzerPro { class ControlBinder; }
 class HeaderBar : public juce::Component
 {
 public:
+    enum class ActiveModule
+    {
+        Spectrum,
+        Scopes,
+        Meters,
+        Traces
+    };
+
     explicit HeaderBar (mdsp_ui::UiContext& ui);
     ~HeaderBar() override;
 
@@ -27,6 +34,7 @@ public:
     std::function<void (int)> onPeakRangeChanged;
     void setPeakRangeSelectedId (int id);
     void setRailOpen (bool isOpen);
+    void setActiveModule (ActiveModule module);
 
     // FFT Zoom (dB range)
     juce::ComboBox dbRangeBox_;
@@ -41,28 +49,25 @@ public:
     // Control Rail Toggle
     std::function<void()> onRailToggleClicked;
 
-    // Module dropdown buttons — callback receives the button component as anchor for CallOutBox
-    std::function<void (juce::Component*)> onSpectrumClicked;
-    std::function<void (juce::Component*)> onScopesClicked;
-    std::function<void (juce::Component*)> onMetersClicked;
-    std::function<void (juce::Component*)> onTracesClicked;
-
-    // Expose buttons so MainView can get their screen bounds for CallOutBox
-    juce::TextButton& spectrumButton() noexcept { return spectrumBtn_; }
-    juce::TextButton& scopesButton()   noexcept { return scopesBtn_;   }
-    juce::TextButton& metersButton()   noexcept { return metersBtn_;   }
-    juce::TextButton& tracesButton()   noexcept { return tracesBtn_;   }
+    // Module settings tabs
+    std::function<void()> onSpectrumClicked;
+    std::function<void()> onScopesClicked;
+    std::function<void()> onMetersClicked;
+    std::function<void()> onTracesClicked;
 
     // State Management
     void setManagers (AnalyzerPro::presets::PresetManager* pm, AnalyzerPro::presets::ABStateManager* sm);
     
 private:
     void updateActiveSlot();
+    void updateModuleButtons();
 
     mdsp_ui::UiContext& ui_;
     AnalyzerPro::ControlBinder* controlBinder = nullptr;
     AnalyzerPro::presets::PresetManager* presetManager = nullptr;
     AnalyzerPro::presets::ABStateManager* abStateManager = nullptr;
+    ActiveModule activeModule_ = ActiveModule::Spectrum;
+    bool railOpen_ = false;
 
     juce::Label titleLabel;
     juce::ComboBox peakRangeBox_;
@@ -87,8 +92,6 @@ private:
     juce::TextButton   spectrumBtn_, scopesBtn_, metersBtn_, tracesBtn_;
     juce::Component    moduleBtnContainer_;
     juce::Viewport     moduleScrollPort_;
-
-    std::unique_ptr<juce::LookAndFeel> headerBarLook_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HeaderBar)
 };

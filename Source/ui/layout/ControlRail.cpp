@@ -5,13 +5,10 @@
 ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     : ui_ (ui),
       releaseTimeValue_ (ui),
-      navigateHeader (ui, "Navigate"),
-      analyzerHeader (ui, "Analyzer"),
-      displayHeader (ui, "Display"),
+      spectrumHeader (ui, "Spectrum"),
+      scopesHeader (ui, "Scopes"),
       metersHeader (ui, "Meters"),
-      scopesSection_ (ui, "Scopes"),
-      tracesSection_ (ui, "Traces"),
-      analysisModeSection_ (ui, "Analysis Mode"),
+      tracesHeader (ui, "Traces"),
       fftSizeRow_ (ui, "FFT Size", fftSizeCombo_),
       detailRow_ (ui, "Detail", detailCombo_),
       holdRow (ui, "Hold", holdButton),
@@ -36,33 +33,10 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     const auto& type = ui_.type();
 
     // Attach section headers to parent
-    navigateHeader.attachToParent (*this);
-    analyzerHeader.attachToParent (*this);
-    displayHeader.attachToParent (*this);
+    spectrumHeader.attachToParent (*this);
+    scopesHeader.attachToParent (*this);
     metersHeader.attachToParent (*this);
-
-    // Collapsible sections (default collapsed)
-    scopesSection_.setExpanded (false);
-    tracesSection_.setExpanded (false);
-    analysisModeSection_.setExpanded (false);
-    scopesSection_.attachToParent (*this);
-    tracesSection_.attachToParent (*this);
-    analysisModeSection_.attachToParent (*this);
-    scopesSection_.onToggle = [this]
-    {
-        if (onPreferredHeightChanged) onPreferredHeightChanged();
-        resized();
-    };
-    tracesSection_.onToggle = [this]
-    {
-        if (onPreferredHeightChanged) onPreferredHeightChanged();
-        resized();
-    };
-    analysisModeSection_.onToggle = [this]
-    {
-        if (onPreferredHeightChanged) onPreferredHeightChanged();
-        resized();
-    };
+    tracesHeader.attachToParent (*this);
 
     // Analysis Mode controls (FFT/BAND/LOG + FFT size)
     auto initModeBtn = [&](juce::TextButton& b, const juce::String& text)
@@ -206,24 +180,6 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     };
     addAndMakeVisible (resetPeaksButton);
 
-    // Placeholder labels
-    placeholderLabel1.setText ("Controls...", juce::dontSendNotification);
-    placeholderLabel1.setFont (type.placeholderFont());
-    placeholderLabel1.setJustificationType (juce::Justification::centredLeft);
-    placeholderLabel1.setColour (juce::Label::textColourId, theme.grey);
-    addAndMakeVisible (placeholderLabel1);
-
-    placeholderLabel3.setText ("Controls...", juce::dontSendNotification);
-    placeholderLabel3.setFont (type.placeholderFont());
-    placeholderLabel3.setJustificationType (juce::Justification::centredLeft);
-    placeholderLabel3.setColour (juce::Label::textColourId, theme.grey);
-    addAndMakeVisible (placeholderLabel3);
-
-    placeholderLabel4.setText ("Controls...", juce::dontSendNotification);
-    placeholderLabel4.setFont (type.placeholderFont());
-    placeholderLabel4.setJustificationType (juce::Justification::centredLeft);
-    placeholderLabel4.setColour (juce::Label::textColourId, theme.grey);
-    addAndMakeVisible (placeholderLabel4);
 }
 
 ControlRail::~ControlRail() = default;
@@ -271,15 +227,23 @@ void ControlRail::triggerResetPeaks()
 
 void ControlRail::expandAnalysisModeSection()
 {
-    analysisModeSection_.setExpanded (true);
-    if (onPreferredHeightChanged)
-        onPreferredHeightChanged();
-    resized();
+    setActiveModule (ActiveModule::Spectrum);
 }
 
 void ControlRail::setMode (int modeIndex)
 {
     setSelectedModeId (modeIndex);
+}
+
+void ControlRail::setActiveModule (ActiveModule module)
+{
+    if (activeModule_ == module)
+        return;
+
+    activeModule_ = module;
+    if (onPreferredHeightChanged)
+        onPreferredHeightChanged();
+    resized();
 }
 
 int ControlRail::getPreferredHeight() const noexcept
@@ -299,28 +263,29 @@ int ControlRail::getPreferredHeight() const noexcept
     const int toggleRowH = secondaryHeight + buttonSmallH + gapSmall;
     const int valueLabelH = secondaryHeight * 2;
 
-    // Same order and conditions as resized()
     int y = padSmall;
-    y += headerH + secondaryHeight + sectionSpacing;                                    // Navigate
-    y += headerH + toggleRowH + secondaryHeight + valueLabelH + gapSmall + sectionSpacing; // Analyzer
-    y += headerH + choiceRowH + sectionSpacing;                                          // Display (tilt only)
-    y += headerH;                                                                        // Scopes header
-    if (scopesSection_.isExpanded())
-        y += choiceRowH * 3 + toggleRowH;
-    y += sectionSpacing;
-    y += headerH;                                                                        // Traces header
-    if (tracesSection_.isExpanded())
-        y += toggleRowH * 7;
-    y += sectionSpacing;
-    y += choiceRowH + sectionSpacing;                                                    // Smoothing
-    y += choiceRowH + sectionSpacing;                                                    // Weighting
-    y += headerH;                                                                        // Analysis Mode header
-    if (analysisModeSection_.isExpanded())
-        y += buttonSmallH + gapSmall + choiceRowH * 2;
-    y += sectionSpacing;
-    y += headerH + choiceRowH + toggleRowH + secondaryHeight;                           // Meters (meter input + meter hold only)
+    y += headerH;
 
-    return y + padSmall;
+    switch (activeModule_)
+    {
+        case ActiveModule::Spectrum:
+            y += buttonSmallH + gapSmall;       // FFT / BAND / LOG
+            y += choiceRowH * 5;                // FFT size, detail, smoothing, weighting, tilt
+            y += toggleRowH;                    // Hold + Reset
+            y += secondaryHeight + valueLabelH + gapSmall;
+            break;
+        case ActiveModule::Scopes:
+            y += choiceRowH * 3 + toggleRowH;
+            break;
+        case ActiveModule::Meters:
+            y += choiceRowH + toggleRowH;
+            break;
+        case ActiveModule::Traces:
+            y += toggleRowH * 7;
+            break;
+    }
+
+    return y + sectionSpacing + padSmall;
 }
 
 void ControlRail::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
@@ -350,7 +315,6 @@ void ControlRail::resized()
     const int secondaryHeight = juce::roundToInt (static_cast<double> (m.secondaryHeight));
     const int gapSmall = juce::roundToInt (static_cast<double> (m.gapSmall));
     const int buttonSmallH = juce::roundToInt (static_cast<double> (m.buttonSmallH));
-    const int sectionSpacing = juce::roundToInt (static_cast<double> (m.sectionSpacing));
     const int buttonSmallW = juce::roundToInt (static_cast<double> (m.buttonSmallW));
     const int buttonW = juce::roundToInt (static_cast<double> (m.buttonW));
     const int comboH = juce::roundToInt (static_cast<double> (m.comboH));
@@ -365,198 +329,145 @@ void ControlRail::resized()
     const int w = bounds.getWidth();
     int y = bounds.getY();
 
+    auto setChoiceVisible = [] (mdsp_ui::ChoiceRow& row, bool visible)
+    {
+        row.getLabel().setVisible (visible);
+        row.getCombo().setVisible (visible);
+    };
+    auto setToggleVisible = [] (mdsp_ui::ToggleRow& row, bool visible)
+    {
+        row.getLabel().setVisible (visible);
+        row.getToggle().setVisible (visible);
+    };
+    auto setHeaderVisible = [] (mdsp_ui::SectionHeader& header, bool visible)
+    {
+        header.getLabel().setVisible (visible);
+    };
+
+    setHeaderVisible (spectrumHeader, false);
+    setHeaderVisible (scopesHeader, false);
+    setHeaderVisible (metersHeader, false);
+    setHeaderVisible (tracesHeader, false);
+
+    fftButton_.setVisible (false);
+    bandButton_.setVisible (false);
+    logButton_.setVisible (false);
+    resetPeaksButton.setVisible (false);
+    releaseTimeLabel_.setVisible (false);
+    releaseTimeValue_.setVisible (false);
+
+    setChoiceVisible (fftSizeRow_, false);
+    setChoiceVisible (detailRow_, false);
+    setChoiceVisible (smoothingRow, false);
+    setChoiceVisible (weightingRow, false);
+    setChoiceVisible (tiltRow, false);
+    setChoiceVisible (scopeModeRow, false);
+    setChoiceVisible (scopeShapeRow, false);
+    setChoiceVisible (scopeInputRow, false);
+    setChoiceVisible (meterInputRow, false);
+
+    setToggleVisible (holdRow, false);
+    setToggleVisible (scopePeakHoldRow, false);
+    setToggleVisible (meterPeakHoldRow, false);
+    setToggleVisible (showLrRow, false);
+    setToggleVisible (showMonoRow, false);
+    setToggleVisible (showLRow, false);
+    setToggleVisible (showRRow, false);
+    setToggleVisible (showMidRow, false);
+    setToggleVisible (showSideRow, false);
+    setToggleVisible (showRmsRow, false);
+
     auto addSectionHeader = [&](mdsp_ui::SectionHeader& header)
     {
+        setHeaderVisible (header, true);
         const int y0 = y;
         header.layout (bounds, y);
         y = y0 + headerH;
     };
-    auto addGap = [&](int px) { y += px; };
-
-    // Navigate
-    addSectionHeader (navigateHeader);
-    placeholderLabel1.setBounds (x, y, w, secondaryHeight);
-    y += secondaryHeight;
-    addGap (sectionSpacing);
-
-    // Analyzer
-    addSectionHeader (analyzerHeader);
+    auto placeChoiceRow = [&] (mdsp_ui::ChoiceRow& row)
     {
+        setChoiceVisible (row, true);
         const int y0 = y;
-        holdRow.layout (bounds, y);
+        row.layout (bounds, y);
+        y = y0 + choiceRowH;
+    };
+    auto placeToggleRow = [&] (mdsp_ui::ToggleRow& row)
+    {
+        setToggleVisible (row, true);
+        const int y0 = y;
+        row.layout (bounds, y);
         y = y0 + toggleRowH;
-    }
-    y -= buttonSmallH + gapSmall;
-    resetPeaksButton.setBounds (x + buttonSmallW + gapSmall, y, buttonW, buttonSmallH);
-    y += buttonSmallH + gapSmall;
-    releaseTimeLabel_.setBounds (x, y, w, secondaryHeight);
-    y += secondaryHeight;
-    releaseTimeValue_.setBounds (x, y, w, valueLabelH);
-    y += valueLabelH + gapSmall;
-    addGap (sectionSpacing);
-
-    // Display (tilt only; scope controls moved to Scopes collapsible)
-    addSectionHeader (displayHeader);
-    {
-        int y0 = y;
-        tiltRow.layout (bounds, y);
-        y = y0 + choiceRowH;
-    }
-    addGap (sectionSpacing);
-
-    // Scopes (collapsible): header always; children only when expanded
-    scopesSection_.setVisible (true);
-    scopesSection_.setBounds (x, y, w, headerH);
-    y += headerH;
-    auto setScopeRowsVisible = [](bool visible, mdsp_ui::ChoiceRow& r)
-    {
-        r.getLabel().setVisible (visible);
-        r.getCombo().setVisible (visible);
     };
-    auto setScopeToggleVisible = [](bool visible, mdsp_ui::ToggleRow& r)
-    {
-        r.getLabel().setVisible (visible);
-        r.getToggle().setVisible (visible);
-    };
-    if (scopesSection_.isExpanded())
-    {
-        auto placeScopeChoiceRow = [&](mdsp_ui::ChoiceRow& row)
-        {
-            setScopeRowsVisible (true, row);
-            const int y0 = y;
-            row.layout (bounds, y);
-            y = y0 + choiceRowH;
-        };
-        auto placeScopeToggleRow = [&](mdsp_ui::ToggleRow& row)
-        {
-            setScopeToggleVisible (true, row);
-            const int y0 = y;
-            row.layout (bounds, y);
-            y = y0 + toggleRowH;
-        };
-        placeScopeChoiceRow (scopeModeRow);
-        placeScopeChoiceRow (scopeShapeRow);
-        placeScopeChoiceRow (scopeInputRow);
-        placeScopeToggleRow (scopePeakHoldRow);
-    }
-    else
-    {
-        setScopeRowsVisible (false, scopeModeRow);
-        setScopeRowsVisible (false, scopeShapeRow);
-        setScopeRowsVisible (false, scopeInputRow);
-        setScopeToggleVisible (false, scopePeakHoldRow);
-    }
-    addGap (sectionSpacing);
 
-    // Traces (collapsible): header always; children only when expanded
-    tracesSection_.setVisible (true);
-    tracesSection_.setBounds (x, y, w, headerH);
-    y += headerH;
-    auto setTraceRowsVisible = [](bool visible, mdsp_ui::ToggleRow& r)
+    switch (activeModule_)
     {
-        r.getLabel().setVisible (visible);
-        r.getToggle().setVisible (visible);
-    };
-    if (tracesSection_.isExpanded())
-    {
-        auto placeTraceRow = [&](mdsp_ui::ToggleRow& row)
+        case ActiveModule::Spectrum:
         {
-            setTraceRowsVisible (true, row);
-            const int y0 = y;
-            row.layout (bounds, y);
-            y = y0 + toggleRowH;
-        };
-        placeTraceRow (showLrRow);
-        placeTraceRow (showMonoRow);
-        placeTraceRow (showLRow);
-        placeTraceRow (showRRow);
-        placeTraceRow (showMidRow);
-        placeTraceRow (showSideRow);
-        placeTraceRow (showRmsRow);
-    }
-    else
-    {
-        setTraceRowsVisible (false, showLrRow);
-        setTraceRowsVisible (false, showMonoRow);
-        setTraceRowsVisible (false, showLRow);
-        setTraceRowsVisible (false, showRRow);
-        setTraceRowsVisible (false, showMidRow);
-        setTraceRowsVisible (false, showSideRow);
-        setTraceRowsVisible (false, showRmsRow);
-    }
-    addGap (sectionSpacing);
+            addSectionHeader (spectrumHeader);
 
-    // Smoothing
-    {
-        const int y0 = y;
-        smoothingRow.layout (bounds, y);
-        y = y0 + choiceRowH;
-    }
-    addGap (sectionSpacing);
+            const int modeBtnW = juce::jmax (1, juce::jmin (56, (w - gapSmall * 2) / 3));
+            int mx = x;
+            fftButton_.setVisible (true);
+            fftButton_.setBounds (mx, y, modeBtnW, buttonSmallH);
+            mx += modeBtnW + gapSmall;
+            bandButton_.setVisible (true);
+            bandButton_.setBounds (mx, y, modeBtnW, buttonSmallH);
+            mx += modeBtnW + gapSmall;
+            logButton_.setVisible (true);
+            logButton_.setBounds (mx, y, modeBtnW, buttonSmallH);
+            y += buttonSmallH + gapSmall;
 
-    // Weighting
-    {
-        const int y0 = y;
-        weightingRow.layout (bounds, y);
-        y = y0 + choiceRowH;
-    }
-    addGap (sectionSpacing);
+            placeChoiceRow (fftSizeRow_);
+            placeChoiceRow (detailRow_);
+            placeChoiceRow (smoothingRow);
+            placeChoiceRow (weightingRow);
+            placeChoiceRow (tiltRow);
 
-    // Analysis Mode (collapsible): header always; children only when expanded
-    analysisModeSection_.setVisible (true);
-    analysisModeSection_.setBounds (x, y, w, headerH);
-    y += headerH;
-    if (analysisModeSection_.isExpanded())
-    {
-        const int modeBtnW = juce::jmin (56, w / 3 - gapSmall);
-        int mx = x;
-        fftButton_.setVisible (true);
-        fftButton_.setBounds (mx, y, modeBtnW, buttonSmallH);
-        mx += modeBtnW + gapSmall;
-        bandButton_.setVisible (true);
-        bandButton_.setBounds (mx, y, modeBtnW, buttonSmallH);
-        mx += modeBtnW + gapSmall;
-        logButton_.setVisible (true);
-        logButton_.setBounds (mx, y, modeBtnW, buttonSmallH);
-        y += buttonSmallH + gapSmall;
-        fftSizeRow_.getLabel().setVisible (true);
-        fftSizeRow_.getCombo().setVisible (true);
-        detailRow_.getLabel().setVisible (true);
-        detailRow_.getCombo().setVisible (true);
-        {
-            const int y0 = y;
-            fftSizeRow_.layout (bounds, y);
-            y = y0 + choiceRowH;
+            setToggleVisible (holdRow, true);
+            const int holdY = y;
+            holdRow.layout (bounds, y);
+            resetPeaksButton.setVisible (true);
+            resetPeaksButton.setBounds (x + buttonSmallW + gapSmall,
+                                        holdY + secondaryHeight,
+                                        buttonW,
+                                        buttonSmallH);
+            y = holdY + toggleRowH;
+
+            releaseTimeLabel_.setVisible (true);
+            releaseTimeLabel_.setBounds (x, y, w, secondaryHeight);
+            y += secondaryHeight;
+            releaseTimeValue_.setVisible (true);
+            releaseTimeValue_.setBounds (x, y, w, valueLabelH);
+            y += valueLabelH + gapSmall;
+            break;
         }
+        case ActiveModule::Scopes:
         {
-            const int y0 = y;
-            detailRow_.layout (bounds, y);
-            y = y0 + choiceRowH;
+            addSectionHeader (scopesHeader);
+            placeChoiceRow (scopeModeRow);
+            placeChoiceRow (scopeShapeRow);
+            placeChoiceRow (scopeInputRow);
+            placeToggleRow (scopePeakHoldRow);
+            break;
+        }
+        case ActiveModule::Meters:
+        {
+            addSectionHeader (metersHeader);
+            placeChoiceRow (meterInputRow);
+            placeToggleRow (meterPeakHoldRow);
+            break;
+        }
+        case ActiveModule::Traces:
+        {
+            addSectionHeader (tracesHeader);
+            placeToggleRow (showLrRow);
+            placeToggleRow (showMonoRow);
+            placeToggleRow (showLRow);
+            placeToggleRow (showRRow);
+            placeToggleRow (showMidRow);
+            placeToggleRow (showSideRow);
+            placeToggleRow (showRmsRow);
+            break;
         }
     }
-    else
-    {
-        fftButton_.setVisible (false);
-        bandButton_.setVisible (false);
-        logButton_.setVisible (false);
-        fftSizeRow_.getLabel().setVisible (false);
-        fftSizeRow_.getCombo().setVisible (false);
-        detailRow_.getLabel().setVisible (false);
-        detailRow_.getCombo().setVisible (false);
-    }
-    addGap (sectionSpacing);
-
-    // Meters (scope input/hold moved to Scopes collapsible)
-    addSectionHeader (metersHeader);
-    {
-        const int y0 = y;
-        meterInputRow.layout (bounds, y);
-        y = y0 + choiceRowH;
-    }
-    {
-        const int y0 = y;
-        meterPeakHoldRow.layout (bounds, y);
-        y = y0 + toggleRowH;
-    }
-    placeholderLabel4.setBounds (x, y, w, secondaryHeight);
 }

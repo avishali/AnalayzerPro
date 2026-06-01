@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../melechdsp-hq"
+		},
+		{
+			"path": "../MasterLimiter"
 		}
 	],
 	"settings": {}

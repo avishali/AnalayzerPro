@@ -2,305 +2,15 @@
 #include "PixelSnap.h"
 #include "../../control/ControlIds.h"
 #include "../../control/ControlBinder.h"
-#include <mdsp_ui/ButtonStyle.h>
 #include <mdsp_ui/UiContext.h>
 #include <cmath>
 
 using namespace AnalyzerPro::Layout;
 
-namespace
-{
-constexpr float kInsideStrokePx = 1.0f;
-
-static void getStateColours (const juce::Button& b, const mdsp_ui::ButtonStyle& s,
-                             juce::Colour& bg, juce::Colour& border)
-{
-    bg = s.bg;
-    border = s.border;
-    if (! b.isEnabled())
-    {
-        bg = s.bgDisabled;
-        border = s.border.withMultipliedAlpha (0.5f);
-    }
-    else if (b.isDown())
-    {
-        bg = s.bgDown;
-        border = s.borderDown;
-    }
-    else if (b.isOver())
-    {
-        bg = s.bgHover;
-        border = s.borderHover;
-    }
-}
-
-class HeaderBarLookAndFeel : public juce::LookAndFeel_V4
-{
-public:
-    explicit HeaderBarLookAndFeel (mdsp_ui::UiContext& ui) : ui_ (ui) {}
-
-    void drawButtonBackground (juce::Graphics& g, juce::Button& button,
-                              const juce::Colour&, bool, bool) override
-    {
-        const juce::Rectangle<float> fillR = snapRectToPixels (button.getLocalBounds().toFloat());
-
-        // Bypass button: drawn in drawToggleButton (JUCE ToggleButton uses drawToggleButton for rendering).
-        if (button.getComponentID() == "bypass")
-            return;
-
-        const float radius = snapRadius (juce::jmin (ui_.metrics().rMed, fillR.getHeight() * 0.5f));
-        const float strokeRadius = snapRadius (juce::jmax (0.0f, radius - 0.5f));
-        const juce::Rectangle<float> strokeR = insetForInsideStroke (fillR, kInsideStrokePx);
-
-        // Module dropdown buttons: neutral gray background, no primary-style colour
-        if (button.getComponentID().startsWith ("module-"))
-        {
-            const auto bg = button.isOver()
-                ? button.findColour (juce::TextButton::buttonColourId).brighter (0.15f)
-                : button.findColour (juce::TextButton::buttonColourId);
-            g.setColour (bg);
-            g.fillRoundedRectangle (fillR, radius);
-            g.setColour (ui_.theme().borderDivider);
-            g.drawRoundedRectangle (strokeR, strokeRadius, kInsideStrokePx);
-            return;
-        }
-
-        auto* toggle = dynamic_cast<juce::ToggleButton*> (&button);
-        if (toggle != nullptr)
-        {
-            juce::Colour bgColour, borderColour;
-            auto style = mdsp_ui::makeToggleButtonStyle (ui_, toggle->getToggleState(), toggle->isEnabled());
-            getStateColours (button, style, bgColour, borderColour);
-            g.setColour (bgColour);
-            g.fillRoundedRectangle (fillR, radius);
-            g.setColour (borderColour);
-            g.drawRoundedRectangle (strokeR, strokeRadius, kInsideStrokePx);
-            if (toggle->getToggleState())
-            {
-                const float indSize = 6.0f;
-                const float indX = fillR.getX() + radius + 4.0f;
-                const float indY = fillR.getCentreY();
-                g.setColour (toggle->isEnabled() ? style.text : style.textDisabled);
-                g.fillEllipse (indX - indSize * 0.5f, indY - indSize * 0.5f, indSize, indSize);
-            }
-        }
-        else
-        {
-            // Preset / Save / A / B / zoom reset: respect per-button colours (neutral gray), not accent fills.
-            juce::Colour bgColour = button.findColour (juce::TextButton::buttonColourId);
-            if (button.getClickingTogglesState() && button.getToggleState())
-                bgColour = button.findColour (juce::TextButton::buttonOnColourId);
-
-            juce::Colour borderColour = ui_.theme().borderDivider;
-            if (! button.isEnabled())
-            {
-                bgColour = bgColour.withMultipliedAlpha (0.55f);
-                borderColour = borderColour.withMultipliedAlpha (0.5f);
-            }
-            else if (button.isDown())
-            {
-                bgColour = bgColour.darker (0.12f);
-                borderColour = borderColour.darker (0.15f);
-            }
-            else if (button.isOver())
-            {
-                bgColour = bgColour.brighter (0.12f);
-                borderColour = borderColour.brighter (0.12f);
-            }
-
-            g.setColour (bgColour);
-            g.fillRoundedRectangle (fillR, radius);
-            g.setColour (borderColour);
-            g.drawRoundedRectangle (strokeR, strokeRadius, kInsideStrokePx);
-        }
-        if (button.hasKeyboardFocus (true))
-        {
-            const float focusPx = ui_.metrics().strokeThin;
-            auto focusBounds = snapRectToPixels (fillR.expanded (focusPx));
-            g.setColour (ui_.theme().lightGrey.withAlpha (0.55f));
-            g.drawRoundedRectangle (focusBounds.toFloat(), radius + focusPx, focusPx);
-        }
-    }
-
-    void drawToggleButton (juce::Graphics& g, juce::ToggleButton& button,
-                          bool, bool) override
-    {
-        const juce::Rectangle<float> fillR = snapRectToPixels (button.getLocalBounds().toFloat());
-
-        // Rail toggle: compact icon button with centered chevron.
-        if (button.getComponentID() == "rail-toggle")
-        {
-            const float radius = snapRadius (juce::jmin (ui_.metrics().rMed, fillR.getHeight() * 0.5f));
-            const float strokeRadius = snapRadius (juce::jmax (0.0f, radius - 0.5f));
-            const juce::Rectangle<float> strokeR = insetForInsideStroke (fillR, kInsideStrokePx);
-            auto style = mdsp_ui::makeToggleButtonStyle (ui_, button.getToggleState(), button.isEnabled());
-            juce::Colour bgColour, borderColour;
-            getStateColours (button, style, bgColour, borderColour);
-            g.setColour (bgColour);
-            g.fillRoundedRectangle (fillR, radius);
-            g.setColour (borderColour);
-            g.drawRoundedRectangle (strokeR, strokeRadius, kInsideStrokePx);
-            g.setColour (button.isEnabled() ? style.text : style.textDisabled);
-            g.setFont (ui_.type().labelFont());
-            g.drawFittedText (button.getButtonText(), fillR.toNearestInt(), juce::Justification::centred, 1);
-            return;
-        }
-
-        // Bypass button: icon-only pill. For ToggleButton, JUCE draws via drawToggleButton (not drawButtonBackground).
-        if (button.getComponentID() == "bypass")
-        {
-            const float radius = snapRadius (juce::jmin (ui_.metrics().rMed, fillR.getHeight() * 0.5f));
-            const float strokeRadius = snapRadius (juce::jmax (0.0f, radius - 0.5f));
-            const juce::Rectangle<float> strokeR = insetForInsideStroke (fillR, kInsideStrokePx);
-            auto style = mdsp_ui::makeToggleButtonStyle (ui_, button.getToggleState(), button.isEnabled());
-            juce::Colour bgColour, borderColour;
-            getStateColours (button, style, bgColour, borderColour);
-            g.setColour (bgColour);
-            g.fillRoundedRectangle (fillR, radius);
-            g.setColour (borderColour);
-            g.drawRoundedRectangle (strokeR, strokeRadius, kInsideStrokePx);
-            const float indSize = 6.0f;
-            const float indX = fillR.getX() + radius + 4.0f;
-            const float indY = fillR.getCentreY();
-            if (button.getToggleState())
-            {
-                g.setColour (button.isEnabled() ? style.text : style.textDisabled);
-                g.fillEllipse (indX - indSize * 0.5f, indY - indSize * 0.5f, indSize, indSize);
-            }
-            juce::Rectangle<float> textBounds = fillR;
-            const float leftMargin = button.getToggleState()
-                ? (indX + indSize * 0.5f + 4.0f - fillR.getX())
-                : (radius + 4.0f);
-            textBounds.removeFromLeft (leftMargin);
-            g.setColour (button.isEnabled() ? style.text : style.textDisabled);
-            g.setFont (ui_.type().labelFont());
-            g.drawFittedText (button.getButtonText().isEmpty() ? "BYPASS" : button.getButtonText(),
-                             textBounds.toNearestInt(), juce::Justification::centredLeft, 1);
-            if (button.hasKeyboardFocus (true))
-            {
-                const float focusPx = ui_.metrics().strokeThin;
-                auto focusBounds = snapRectToPixels (fillR.expanded (focusPx));
-                g.setColour (style.focusRing);
-                g.drawRoundedRectangle (focusBounds.toFloat(), radius + focusPx, focusPx);
-            }
-            return;
-        }
-
-        // Other toggle buttons (rail, etc.): use pill style from drawButtonBackground
-        const float radius = snapRadius (juce::jmin (ui_.metrics().rMed, fillR.getHeight() * 0.5f));
-        const float strokeRadius = snapRadius (juce::jmax (0.0f, radius - 0.5f));
-        const juce::Rectangle<float> strokeR = insetForInsideStroke (fillR, kInsideStrokePx);
-        auto style = mdsp_ui::makeToggleButtonStyle (ui_, button.getToggleState(), button.isEnabled());
-        juce::Colour bgColour, borderColour;
-        getStateColours (button, style, bgColour, borderColour);
-        g.setColour (bgColour);
-        g.fillRoundedRectangle (fillR, radius);
-        g.setColour (borderColour);
-        g.drawRoundedRectangle (strokeR, strokeRadius, kInsideStrokePx);
-        if (button.getToggleState())
-        {
-            const float indSize = 6.0f;
-            const float indX = fillR.getX() + radius + 4.0f;
-            const float indY = fillR.getCentreY();
-            g.setColour (button.isEnabled() ? style.text : style.textDisabled);
-            g.fillEllipse (indX - indSize * 0.5f, indY - indSize * 0.5f, indSize, indSize);
-        }
-        if (button.hasKeyboardFocus (true))
-        {
-            const float focusPx = ui_.metrics().strokeThin;
-            auto focusBounds = snapRectToPixels (fillR.expanded (focusPx));
-            g.setColour (style.focusRing);
-            g.drawRoundedRectangle (focusBounds.toFloat(), radius + focusPx, focusPx);
-        }
-        juce::Rectangle<float> textBounds = fillR;
-        const float indSize = 6.0f;
-        const float leftMargin = button.getToggleState()
-            ? (radius + 4.0f + indSize * 0.5f + 4.0f)
-            : (radius + 4.0f);
-        textBounds.removeFromLeft (leftMargin);
-        g.setColour (button.isEnabled() ? style.text : style.textDisabled);
-        g.setFont (ui_.type().labelFont());
-        g.drawFittedText (button.getButtonText(), textBounds.toNearestInt(), juce::Justification::centredLeft, 1);
-    }
-
-    void drawButtonText (juce::Graphics& g, juce::TextButton& button,
-                         bool shouldDrawHighlighted, bool shouldDrawDown) override
-    {
-        // Bypass button: icon-only pill. Call base to invoke drawToggleButton (JUCE flow).
-        if (button.getComponentID() == "bypass")
-        {
-            juce::LookAndFeel_V4::drawButtonText (g, button, shouldDrawHighlighted, shouldDrawDown);
-            return;
-        }
-
-        const juce::Rectangle<float> fillR = snapRectToPixels (button.getLocalBounds().toFloat());
-
-        // Module dropdown buttons: colour-coded text from the button's own textColourOff
-        if (button.getComponentID().startsWith ("module-"))
-        {
-            const auto col = button.findColour (juce::TextButton::textColourOffId);
-            g.setColour (button.isEnabled() ? col : col.withAlpha (0.4f));
-            g.setFont (ui_.type().labelFont());
-            g.drawFittedText (button.getButtonText(), fillR.toNearestInt(),
-                              juce::Justification::centred, 1);
-            return;
-        }
-
-        auto* toggle = dynamic_cast<juce::ToggleButton*> (&button);
-        if (toggle != nullptr)
-        {
-            auto style = mdsp_ui::makeToggleButtonStyle (ui_, toggle->getToggleState(), toggle->isEnabled());
-            juce::Rectangle<float> textBounds = fillR;
-            const float radius = ui_.metrics().rMed;
-            const float indSize = 6.0f;
-            const float leftMargin = toggle->getToggleState()
-                ? (radius + 4.0f + indSize * 0.5f + 4.0f)
-                : (radius + 4.0f);
-            textBounds.removeFromLeft (leftMargin);
-            g.setColour (toggle->isEnabled() ? style.text : style.textDisabled);
-            g.setFont (ui_.type().labelFont());
-            g.drawFittedText (button.getButtonText(), textBounds.toNearestInt(), juce::Justification::centredLeft, 1);
-        }
-        else
-        {
-            const bool toggled = button.getClickingTogglesState() && button.getToggleState();
-            const auto textCol = toggled ? button.findColour (juce::TextButton::textColourOnId)
-                                        : button.findColour (juce::TextButton::textColourOffId);
-            g.setColour (button.isEnabled() ? textCol : textCol.withMultipliedAlpha (0.45f));
-            g.setFont (ui_.type().labelFont());
-            g.drawFittedText (button.getButtonText(), fillR.toNearestInt(), juce::Justification::centred, 1);
-        }
-    }
-
-private:
-    mdsp_ui::UiContext& ui_;
-};
-} // namespace
-
 //==============================================================================
 HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     : ui_ (ui)
 {
-    headerBarLook_ = std::make_unique<HeaderBarLookAndFeel> (ui_);
-    auto* laf = headerBarLook_.get();
-    presetButton.setLookAndFeel (laf);
-    saveButton.setLookAndFeel (laf);
-    slotAButton.setLookAndFeel (laf);
-    slotBButton.setLookAndFeel (laf);
-    zoomResetButton_.setLookAndFeel (laf);
-    freqPanLeftButton_.setLookAndFeel (laf);
-    freqPanRightButton_.setLookAndFeel (laf);
-    freqZoomInButton_.setLookAndFeel (laf);
-    freqZoomOutButton_.setLookAndFeel (laf);
-    freqResetButton_.setLookAndFeel (laf);
-    peakResetButton_.setLookAndFeel (laf);
-    bypassButton.setLookAndFeel (laf);
-    railToggleButton.setLookAndFeel (laf);
-    spectrumBtn_.setLookAndFeel (laf);
-    scopesBtn_.setLookAndFeel (laf);
-    metersBtn_.setLookAndFeel (laf);
-    tracesBtn_.setLookAndFeel (laf);
-
     const auto& theme = ui_.theme();
     const auto& type = ui_.type();
 
@@ -429,16 +139,19 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     bypassButton.setTooltip ("Bypass analyzer processing");
     addAndMakeVisible (bypassButton);
 
-    // Module dropdown buttons (Spectrum / Scopes / Meters / Traces) inside scrollable container
+    // Module settings tabs (Spectrum / Scopes / Meters / Traces) inside scrollable container
     auto initModuleBtn = [&] (juce::TextButton& b, const juce::String& text,
                               juce::Colour textCol,
-                              std::function<void (juce::Component*)>& cb)
+                              std::function<void()>& cb)
     {
         b.setComponentID ("module-" + text.toLowerCase());
         b.setButtonText (text);
+        b.setClickingTogglesState (false);
         b.setColour (juce::TextButton::buttonColourId,  theme.background.brighter (0.08f));
+        b.setColour (juce::TextButton::buttonOnColourId, theme.panel.brighter (0.24f));
         b.setColour (juce::TextButton::textColourOffId, textCol);
-        b.onClick = [&b, &cb] { if (cb) cb (&b); };
+        b.setColour (juce::TextButton::textColourOnId, textCol.brighter (0.22f));
+        b.onClick = [&cb] { if (cb) cb(); };
         moduleBtnContainer_.addAndMakeVisible (b);
     };
     initModuleBtn (spectrumBtn_, "Spectrum", theme.seriesPeak,   onSpectrumClicked);
@@ -470,26 +183,7 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     addAndMakeVisible (railToggleButton);
 }
 
-HeaderBar::~HeaderBar()
-{
-    presetButton.setLookAndFeel (nullptr);
-    saveButton.setLookAndFeel (nullptr);
-    slotAButton.setLookAndFeel (nullptr);
-    slotBButton.setLookAndFeel (nullptr);
-    zoomResetButton_.setLookAndFeel (nullptr);
-    freqPanLeftButton_.setLookAndFeel (nullptr);
-    freqPanRightButton_.setLookAndFeel (nullptr);
-    freqZoomInButton_.setLookAndFeel (nullptr);
-    freqZoomOutButton_.setLookAndFeel (nullptr);
-    freqResetButton_.setLookAndFeel (nullptr);
-    peakResetButton_.setLookAndFeel (nullptr);
-    bypassButton.setLookAndFeel (nullptr);
-    railToggleButton.setLookAndFeel (nullptr);
-    spectrumBtn_.setLookAndFeel (nullptr);
-    scopesBtn_  .setLookAndFeel (nullptr);
-    metersBtn_  .setLookAndFeel (nullptr);
-    tracesBtn_  .setLookAndFeel (nullptr);
-}
+HeaderBar::~HeaderBar() = default;
 
 void HeaderBar::paint (juce::Graphics& g)
 {
@@ -658,7 +352,27 @@ void HeaderBar::setPeakRangeSelectedId (int id)
 
 void HeaderBar::setRailOpen (bool isOpen)
 {
+    railOpen_ = isOpen;
     railToggleButton.setToggleState (isOpen, juce::dontSendNotification);
     railToggleButton.setButtonText (isOpen ? "Hide" : "Show");
     railToggleButton.setTooltip (isOpen ? "Collapse right control rail" : "Expand right control rail");
+    updateModuleButtons();
+}
+
+void HeaderBar::setActiveModule (ActiveModule module)
+{
+    if (activeModule_ == module)
+        return;
+
+    activeModule_ = module;
+    updateModuleButtons();
+}
+
+void HeaderBar::updateModuleButtons()
+{
+    const bool showActive = railOpen_;
+    spectrumBtn_.setToggleState (showActive && activeModule_ == ActiveModule::Spectrum, juce::dontSendNotification);
+    scopesBtn_  .setToggleState (showActive && activeModule_ == ActiveModule::Scopes,   juce::dontSendNotification);
+    metersBtn_  .setToggleState (showActive && activeModule_ == ActiveModule::Meters,   juce::dontSendNotification);
+    tracesBtn_  .setToggleState (showActive && activeModule_ == ActiveModule::Traces,   juce::dontSendNotification);
 }
