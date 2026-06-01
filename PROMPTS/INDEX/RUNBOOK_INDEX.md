@@ -39,6 +39,12 @@ Each runbook is a STOP-gated Cursor prompt (IMPLEMENTER + VERIFIER). Apply one p
   - CONFIRMED: shared/mdsp_dsp/{include,src}/dynamics MUST be committed (the build's CMakeLists compiles them); exclude cmake/cmake and dsp_bench.
   - Do this BEFORE RESTORE_SHIPPING_STATE so the beta build is reproducible.
 
+### Send a beta — signed + notarized .pkg (works on all macOS)
+- `RUNBOOKS/SEND_BETA_NOTARIZED_PKG_V1.md`
+  - `SIGN_AND_NOTARIZE_SKIP_AAX=1 ./scripts/sign_and_notarize.sh` → Developer-ID-sign (keep PACE AAX) → pkg → notarize → staple.
+  - Certs + AC_PASSWORD notarytool profile already set up (team C5UC779LGC). Deliverable: installer/AnalyzerPro-1.1.1-macOS-signed.pkg.
+  - Notarized+stapled = no Gatekeeper dance on macOS 15/older; supersedes the old unsigned "simple installer".
+
 ### Restore shippable state after dev iteration
 - `RUNBOOKS/RESTORE_SHIPPING_STATE_V1_1_1.md`
   - Run after the smoothness/Phase-2 work, before any beta hand-off.
