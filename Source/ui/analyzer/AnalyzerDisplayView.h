@@ -61,6 +61,7 @@ public:
     void resized() override;
     
     void mouseDown (const juce::MouseEvent& event) override;
+    void mouseDoubleClick (const juce::MouseEvent& event) override;
     void mouseDrag (const juce::MouseEvent& event) override;
     void mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
     void mouseMagnify (const juce::MouseEvent& event, float scaleFactor) override;
@@ -68,6 +69,7 @@ public:
     // Frequency axis zoom / pan
     void setFrequencyView (float minHz, float maxHz);
     void zoomFrequency (float factor, float centerHz); // factor > 1 = zoom in
+    void zoomFrequencyAroundViewCenter (float factor);
     void panFrequencyOctaves (float octaves);          // positive = shift to higher frequencies
     void resetFrequencyView();
     float pixelToFreq (float xPx) const noexcept;
@@ -78,6 +80,8 @@ public:
     void setDbRange (DbRange r);
     DbRange getDbRange() const noexcept { return dbRange_; }
     void setDbRangeFromChoiceIndex (int idx);
+    void setDbBottomContinuous (float bottomDb);
+    void setDisplayDetailFromChoiceIndex (int idx);
 
     // Session Marker
     void resetSessionMarker();
@@ -122,6 +126,9 @@ private:
     void updateFromSnapshot (const AnalyzerSnapshot& snapshot);
     void handlePumpedSnapshot (const AnalyzerSnapshot& snapshot);
     void kickSnapshotPumpImmediate();
+    void syncRenderProviderConfig();
+    float getEffectiveAbsFreqMax() const noexcept;
+    void resetViewToDefault();
     void feedInterpolatedRenderFrame (double nowMs);
     bool advanceDbRangeAnimation (double nowMs);
     bool isRenderDispatchCapped (double nowMs) const noexcept;
@@ -158,29 +165,34 @@ private:
     AnalayzerProAudioProcessor& audioProcessor;
     mdsp_ui::Theme theme_ { mdsp_ui::ThemeVariant::Custom };
     Mode currentMode_ = Mode::FFT;
-    DbRange dbRange_ = DbRange::Minus120;
-    DbRange appliedDbRange_ = DbRange::Minus120;
+    DbRange dbRange_ = DbRange::Minus90;
+    DbRange appliedDbRange_ = DbRange::Minus90;
     DbRange peakDbRange_ = DbRange::Minus90;
     bool peakScaleDirty_ = false;
 
     juce::Point<float> dragStartPos_;
-    DbRange dragStartDbRange_ = DbRange::Minus120;
+    float dragStartDbBottom_ = -90.0f;
 
     // Horizontal zoom / pan state
-    float viewFreqMin_ = 20.0f;
+    float viewFreqMin_ = kDefaultFreqMin;
     float viewFreqMax_ = 20000.0f;
-    float dragStartFreqMin_ = 20.0f;
+    float dragStartFreqMin_ = kDefaultFreqMin;
     float dragStartFreqMax_ = 20000.0f;
     bool dragAxisLocked_ = false;
     bool dragIsHorizontal_ = false;
 
-    static constexpr float kAbsFreqMin = 20.0f;
-    static constexpr float kAbsFreqMax = 20000.0f;
+    static constexpr float kAbsFreqMin = 10.0f;
+    static constexpr float kDefaultFreqMin = 10.0f;
+    static constexpr float kDefaultDbBottom = -90.0f;
+    static constexpr float kMinDbBottom = -160.0f;
+    static constexpr float kMaxDbBottom = -24.0f;
+    static constexpr float kFallbackAbsFreqMax = 20000.0f;
+    static constexpr float kHardFreqCeil = 96000.0f;
     static constexpr float kMinFreqSpanOctaves = 1.0f; // minimum 1-octave zoom window
 
-    float targetMinDb_ = -120.0f;
-    float lastAppliedMinDb_ = -120.0f;
-    float minDbAnimStartDb_ = -120.0f;
+    float targetMinDb_ = kDefaultDbBottom;
+    float lastAppliedMinDb_ = kDefaultDbBottom;
+    float minDbAnimStartDb_ = kDefaultDbBottom;
     double minDbAnimStartMs_ = 0.0;
     bool minDbAnimActive_ = false;
 
@@ -301,11 +313,14 @@ private:
     // Log-domain Gaussian smoother for 256 log bins (Option A: avoids squared tops)
     struct LogGaussianSmoother
     {
-        void setConfig (float octaves);
+        void setConfig (float octaves, int numBins, float minFreq, float maxFreq);
         void process (float* powerInOut, int numBins);
         
         float smoothingOctaves_ = 0.0f;
-        static constexpr int kMaxBins = 256;
+        int configuredBins_ = 0;
+        float configuredMinFreq_ = 0.0f;
+        float configuredMaxFreq_ = 0.0f;
+        static constexpr int kMaxBins = 1024;
         std::array<float, kMaxBins * 2 + 1> weights_{};
         std::array<float, kMaxBins> scratch_{};
         int radius_ = 0;
@@ -315,6 +330,7 @@ private:
     std::vector<float> scratchPowerR_;
     float smoothingOctaves_ = 1.0f / 6.0f; // Default 1/6 Oct
     int lastSmoothingIdx_ = -1; // Cache for param change detection
+    int detailLogBins_ = 512;
     
     // Generation counters for render stability (SMOOTHING_RENDERING_STABILITY_V2)
     uint32_t traceDataGen_ = 0;   // Increments when trace buffer content changes

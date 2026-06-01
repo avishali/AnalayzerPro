@@ -31,6 +31,12 @@ public:
     // FFT Zoom (dB range)
     juce::ComboBox dbRangeBox_;
     std::function<void()> onZoomReset;
+    std::function<void()> onFreqPanLeft;
+    std::function<void()> onFreqPanRight;
+    std::function<void()> onFreqZoomIn;
+    std::function<void()> onFreqZoomOut;
+    std::function<void()> onFreqReset;
+    std::function<void()> onResetPeaks;
 
     // Control Rail Toggle
     std::function<void()> onRailToggleClicked;
@@ -61,6 +67,12 @@ private:
     juce::Label titleLabel;
     juce::ComboBox peakRangeBox_;
     juce::TextButton zoomResetButton_;
+    juce::TextButton freqPanLeftButton_;
+    juce::TextButton freqPanRightButton_;
+    juce::TextButton freqZoomInButton_;
+    juce::TextButton freqZoomOutButton_;
+    juce::TextButton freqResetButton_;
+    juce::TextButton peakResetButton_;
     
     // Presets & State
     juce::TextButton presetButton; // Opens menu

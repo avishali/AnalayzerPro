@@ -1,5 +1,6 @@
 #include "AnalyzerDisplayView.h"
 #include <mdsp_ui/Theme.h>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -221,7 +222,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
         [this] { zoomFrequency (0.5f, std::sqrt (viewFreqMin_ * viewFreqMax_)); });
 
     // ↺  Reset
-    navOverlay_.addButton ("Reset to full range (20 Hz \xe2\x80\x93 20 kHz)",
+    navOverlay_.addButton ("Reset to full range (10 Hz \xe2\x80\x93 Nyquist)",
         [] (juce::Graphics& g, juce::Rectangle<float> r)
         {
             const float cx = r.getCentreX(), cy = r.getCentreY();
@@ -243,19 +244,19 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
                               ay + std::sin (endA) * hs * 1.4f);
             g.fillPath (head);
         },
-        [this] { resetFrequencyView(); });
+        [this] { resetViewToDefault(); });
 
     // Separator between zoom and reset — must be called after all buttons are added
     navOverlay_.setSeparatorsBefore ({ 4 });
 
-    addAndMakeVisible (navOverlay_);
+    navOverlay_.setVisible (false);
 
     // DISABLED: Use mdsp_gui default "Yellow Peak" aesthetic (sharp yellow stroke, gradient fill)
 
     // DISABLED: Initial FFT order: 4096 (order 12) for high-resolution spectrum
     // Initialize analyzer display ranges
-    analyzerBridgeWidget_.setFrequencyRange (20.0f, 20000.0f);
-    targetMinDb_ = dbRangeToMinDb (dbRange_);
+    analyzerBridgeWidget_.setFrequencyRange (kDefaultFreqMin, getEffectiveAbsFreqMax());
+    targetMinDb_ = kDefaultDbBottom;
     minDbAnimStartDb_ = targetMinDb_;
     lastAppliedMinDb_ = targetMinDb_;
     analyzerBridgeWidget_.setDbRange (kSpectrumTopDb, lastAppliedMinDb_);
@@ -264,6 +265,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
     // Initialize band centers
     bandCentersHz_ = mdsp_ui::analyzer::makeStandardThirdOctaveCenters();
     renderStateProvider_.setBandCenters (bandCentersHz_);
+    syncRenderProviderConfig();
     
     // Sync initial mode to analyzer display widget (currentMode_ defaults to FFT)
     analyzerBridgeWidget_.setViewMode (toRtaMode (currentMode_));
@@ -335,12 +337,21 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
 
 void AnalyzerDisplayView::setDbRange (DbRange r)
 {
-    if (dbRange_ == r)
+    const float nextBottomDb = dbRangeToMinDb (r);
+    if (dbRange_ == r && std::abs (targetMinDb_ - nextBottomDb) < 1.0e-4f)
         return;
 
     dbRange_ = r;
-    targetMinDb_ = dbRangeToMinDb (dbRange_);
+    setDbBottomContinuous (nextBottomDb);
+}
 
+void AnalyzerDisplayView::setDbBottomContinuous (float bottomDb)
+{
+    bottomDb = juce::jlimit (kMinDbBottom, kMaxDbBottom, bottomDb);
+    if (std::abs (targetMinDb_ - bottomDb) < 1.0e-4f)
+        return;
+
+    targetMinDb_ = bottomDb;
     const double nowMs = juce::Time::getMillisecondCounterHiRes();
     minDbAnimStartDb_ = lastAppliedMinDb_;
     minDbAnimStartMs_ = nowMs;
@@ -354,6 +365,22 @@ void AnalyzerDisplayView::setDbRangeFromChoiceIndex (int idx)
 {
     idx = juce::jlimit (0, 2, idx);
     setDbRange (static_cast<DbRange> (idx));
+}
+
+void AnalyzerDisplayView::setDisplayDetailFromChoiceIndex (int idx)
+{
+    static constexpr int kDetailBins[] = { 256, 512, 1024 };
+    static constexpr int kNumDetailBins = static_cast<int> (sizeof (kDetailBins) / sizeof (kDetailBins[0]));
+    idx = juce::jlimit (0, kNumDetailBins - 1, idx);
+
+    const int bins = kDetailBins[idx];
+    if (detailLogBins_ == bins)
+        return;
+
+    detailLogBins_ = bins;
+    syncRenderProviderConfig();
+    forceNextRenderFrame_ = true;
+    kickSnapshotPumpImmediate();
 }
 
 void AnalyzerDisplayView::setPeakDbRange (DbRange r)
@@ -379,8 +406,8 @@ void AnalyzerDisplayView::resetSessionMarker()
 
 void AnalyzerDisplayView::resetViewPeaks()
 {
-    // Clear bridge-owned hold-latch buffer
-    analyzerBridgeWidget_.clearHoldLatch();
+    // Clear bridge/model-owned peak and hold buffers before the next snapshot arrives.
+    analyzerBridgeWidget_.clearPeakAndHoldTraces();
 
     // CRITICAL: Clear UI-side peak trace buffers that retain stale max values
     // These are copies from snapshots and won't reset automatically
@@ -544,11 +571,19 @@ void AnalyzerDisplayView::paintOverChildren (juce::Graphics& g)
 void AnalyzerDisplayView::mouseDown (const juce::MouseEvent& e)
 {
     dragStartPos_     = e.position;
-    dragStartDbRange_ = dbRange_;
+    dragStartDbBottom_ = targetMinDb_;
     dragStartFreqMin_ = viewFreqMin_;
     dragStartFreqMax_ = viewFreqMax_;
     dragAxisLocked_   = false;
     dragIsHorizontal_ = false;
+}
+
+void AnalyzerDisplayView::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    const bool inView = e.position.x >= 0.0f && e.position.x <= static_cast<float> (getWidth())
+                     && e.position.y >= 0.0f && e.position.y <= static_cast<float> (getHeight());
+    if (inView)
+        resetViewToDefault();
 }
 
 void AnalyzerDisplayView::mouseDrag (const juce::MouseEvent& e)
@@ -583,20 +618,8 @@ void AnalyzerDisplayView::mouseDrag (const juce::MouseEvent& e)
     }
     else
     {
-        // Vertical drag → change dB range (60 px per discrete step)
-        // Drag up (-Y) → more range (-120 dB).  Drag down (+Y) → less range (-60 dB).
-        const int steps = static_cast<int> (dy / 60.0f);
-        if (steps != 0)
-        {
-            const int targetIdx = juce::jlimit (0, 2, static_cast<int> (dragStartDbRange_) - steps);
-            const DbRange nextRange = static_cast<DbRange> (targetIdx);
-            if (nextRange != dbRange_)
-            {
-                setDbRange (nextRange);
-                if (onDbRangeUserChanged)
-                    onDbRangeUserChanged (nextRange);
-            }
-        }
+        // Vertical drag -> continuous dB zoom. Drag up reveals more range.
+        setDbBottomContinuous (dragStartDbBottom_ + dy * 0.5f);
     }
 }
 
@@ -624,17 +647,8 @@ void AnalyzerDisplayView::mouseWheelMove (const juce::MouseEvent& e,
     }
     else if (! isCtrlOrCmd && absDy > absDx && absDy > 0.001f)
     {
-        // Plain vertical scroll → step dB range (up = more range, down = less)
-        const int currentIdx = static_cast<int> (dbRange_);
-        const int delta = wheel.deltaY > 0 ? 1 : -1;          // scroll up → index up → more range
-        const int targetIdx = juce::jlimit (0, 2, currentIdx + delta);
-        const DbRange nextRange = static_cast<DbRange> (targetIdx);
-        if (nextRange != dbRange_)
-        {
-            setDbRange (nextRange);
-            if (onDbRangeUserChanged)
-                onDbRangeUserChanged (nextRange);
-        }
+        // Plain vertical scroll -> continuous dB zoom.
+        setDbBottomContinuous (targetMinDb_ - wheel.deltaY * 40.0f);
     }
 }
 
@@ -657,13 +671,31 @@ float AnalyzerDisplayView::pixelToFreq (float xPx) const noexcept
     return std::pow (2.0f, std::log2 (viewFreqMin_) + t * (std::log2 (viewFreqMax_) - std::log2 (viewFreqMin_)));
 }
 
+float AnalyzerDisplayView::getEffectiveAbsFreqMax() const noexcept
+{
+    if (lastMetaSampleRate_ > 0.0)
+    {
+        const float nyquist = static_cast<float> (lastMetaSampleRate_ * 0.5);
+        if (std::isfinite (nyquist) && nyquist > kAbsFreqMin)
+            return juce::jmin (nyquist, kHardFreqCeil);
+    }
+
+    return kFallbackAbsFreqMax;
+}
+
 void AnalyzerDisplayView::setFrequencyView (float minHz, float maxHz)
 {
+    const float absFreqMax = getEffectiveAbsFreqMax();
     const float absLogMin = std::log2 (kAbsFreqMin);
-    const float absLogMax = std::log2 (kAbsFreqMax);
+    const float absLogMax = std::log2 (absFreqMax);
 
-    float logMin = std::log2 (juce::jmax (kAbsFreqMin, minHz));
-    float logMax = std::log2 (juce::jmin (kAbsFreqMax, maxHz));
+    float clampedMinHz = juce::jlimit (kAbsFreqMin, absFreqMax, minHz);
+    float clampedMaxHz = juce::jlimit (kAbsFreqMin, absFreqMax, maxHz);
+    if (clampedMaxHz < clampedMinHz)
+        std::swap (clampedMinHz, clampedMaxHz);
+
+    float logMin = std::log2 (clampedMinHz);
+    float logMax = std::log2 (clampedMaxHz);
 
     // Enforce minimum span
     if (logMax - logMin < kMinFreqSpanOctaves)
@@ -682,12 +714,13 @@ void AnalyzerDisplayView::setFrequencyView (float minHz, float maxHz)
     viewFreqMin_ = std::pow (2.0f, logMin);
     viewFreqMax_ = std::pow (2.0f, logMax);
     analyzerBridgeWidget_.setFrequencyRange (viewFreqMin_, viewFreqMax_);
+    syncRenderProviderConfig();
     forceNextRenderFrame_ = true;
 }
 
 void AnalyzerDisplayView::zoomFrequency (float factor, float centerHz)
 {
-    centerHz = juce::jlimit (kAbsFreqMin, kAbsFreqMax, centerHz);
+    centerHz = juce::jlimit (kAbsFreqMin, getEffectiveAbsFreqMax(), centerHz);
     const float logMin    = std::log2 (viewFreqMin_);
     const float logMax    = std::log2 (viewFreqMax_);
     const float logCenter = std::log2 (centerHz);
@@ -698,6 +731,11 @@ void AnalyzerDisplayView::zoomFrequency (float factor, float centerHz)
                       std::pow (2.0f, logCenter + (1.0f - ratio) * newSpan));
 }
 
+void AnalyzerDisplayView::zoomFrequencyAroundViewCenter (float factor)
+{
+    zoomFrequency (factor, std::sqrt (viewFreqMin_ * viewFreqMax_));
+}
+
 void AnalyzerDisplayView::panFrequencyOctaves (float octaves)
 {
     setFrequencyView (std::pow (2.0f, std::log2 (viewFreqMin_) + octaves),
@@ -706,8 +744,15 @@ void AnalyzerDisplayView::panFrequencyOctaves (float octaves)
 
 void AnalyzerDisplayView::resetFrequencyView()
 {
+    resetViewToDefault();
+}
+
+void AnalyzerDisplayView::resetViewToDefault()
+{
     forceNextRenderFrame_ = true;
-    setFrequencyView (kAbsFreqMin, kAbsFreqMax);
+    setFrequencyView (kDefaultFreqMin, getEffectiveAbsFreqMax());
+    dbRange_ = DbRange::Minus90;
+    setDbBottomContinuous (kDefaultDbBottom);
 }
 
 void AnalyzerDisplayView::resized()
@@ -719,14 +764,7 @@ void AnalyzerDisplayView::resized()
     analyzerBridgeWidget_.setBounds (bounds);
     analyzerBridgeWidget_.toFront (false);
 
-    // Nav overlay: bottom-right corner, above everything
-    const int margin = 8;
-    const int ow = navOverlay_.preferredWidth();
-    const int oh = navOverlay_.preferredHeight();
-    navOverlay_.setBounds (bounds.getRight()  - ow - margin,
-                           bounds.getBottom() - oh - margin,
-                           ow, oh);
-    navOverlay_.toFront (false);
+    navOverlay_.setBounds ({});
 
 #if JUCE_DEBUG && ANALYZERPRO_MODE_DEBUG_OVERLAY
     modeOverlay_.setBounds (8, 8, 260, 18);
@@ -768,18 +806,7 @@ void AnalyzerDisplayView::setMode (Mode mode)
     const int rtaMode = toRtaMode (currentMode_);
     analyzerBridgeWidget_.setMode (static_cast<mdsp::gui::AnalyzerDisplayWidget::Mode> (rtaMode));
     analyzerBridgeWidget_.setViewMode (rtaMode);
-    mdsp::gui::AnalyzerRenderStateProviderConfig providerCfg;
-    providerCfg.mode = rtaMode;
-    providerCfg.showLR = traceConfig_.showLR;
-    providerCfg.showMono = traceConfig_.showMono;
-    providerCfg.showL = traceConfig_.showL;
-    providerCfg.showR = traceConfig_.showR;
-    providerCfg.showMid = traceConfig_.showMid;
-    providerCfg.showSide = traceConfig_.showSide;
-    providerCfg.showRMS = traceConfig_.showRMS;
-    providerCfg.weightingMode = traceConfig_.weightingMode;
-    providerCfg.holdReleaseMs = traceConfig_.holdReleaseMs;
-    renderStateProvider_.setConfig (providerCfg);
+    syncRenderProviderConfig();
 
     // DISABLED: Sync shared spectrum engine analysis mode (Line / Log / Band)
     // mdsp::gui::SpectrumComponent::AnalysisMode specMode = mdsp::gui::SpectrumComponent::AnalysisMode::Log;
@@ -833,6 +860,13 @@ void AnalyzerDisplayView::setTraceConfig (const mdsp::gui::AnalyzerDisplayWidget
     releaseMs_ = cfg.holdReleaseMs;
     currentWeightingMode_ = cfg.weightingMode;
     analyzerBridgeWidget_.setTraceConfig (traceConfig_);
+    syncRenderProviderConfig();
+    forceNextRenderFrame_ = true;
+    kickSnapshotPumpImmediate();
+}
+
+void AnalyzerDisplayView::syncRenderProviderConfig()
+{
     mdsp::gui::AnalyzerRenderStateProviderConfig providerCfg;
     providerCfg.mode = toRtaMode (currentMode_);
     providerCfg.showLR = traceConfig_.showLR;
@@ -844,9 +878,10 @@ void AnalyzerDisplayView::setTraceConfig (const mdsp::gui::AnalyzerDisplayWidget
     providerCfg.showRMS = traceConfig_.showRMS;
     providerCfg.weightingMode = traceConfig_.weightingMode;
     providerCfg.holdReleaseMs = traceConfig_.holdReleaseMs;
+    providerCfg.numLogBins = detailLogBins_;
+    providerCfg.minFreq = viewFreqMin_;
+    providerCfg.maxFreq = juce::jmin (viewFreqMax_, getEffectiveAbsFreqMax());
     renderStateProvider_.setConfig (providerCfg);
-    forceNextRenderFrame_ = true;
-    kickSnapshotPumpImmediate();
 }
 
 void AnalyzerDisplayView::kickSnapshotPumpImmediate()
@@ -1278,11 +1313,18 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
     // ALWAYS call setFftMeta when snapshot has valid meta (required before first data frame)
     if (snapshot.fftSize > 0 && snapshot.sampleRate > 0.0)
     {
+        const bool hadMetaReady = fftMetaReady_;
         analyzerBridgeWidget_.setFftMeta (snapshot.sampleRate, snapshot.fftSize);
         lastMetaSampleRate_ = snapshot.sampleRate;
         lastMetaFftSize_ = snapshot.fftSize;
         expectedBins_ = snapshot.fftSize / 2 + 1;
         fftMetaReady_ = true;
+
+        const float dynamicMaxHz = getEffectiveAbsFreqMax();
+        if (! hadMetaReady)
+            setFrequencyView (kDefaultFreqMin, dynamicMaxHz);
+        else if (viewFreqMax_ > dynamicMaxHz || viewFreqMin_ < kAbsFreqMin)
+            setFrequencyView (viewFreqMin_, viewFreqMax_);
     }
     
     // Update Hold Status
@@ -1693,7 +1735,7 @@ void AnalyzerDisplayView::updateFromSnapshot (const AnalyzerSnapshot& snapshot)
             
             const float octaves = snapshot.smoothingOctaves;
             const bool applyGaussian = (!snapshot.engineDidSpectralSmooth && octaves > 0.0f);
-            logGaussian_.setConfig (octaves);
+            logGaussian_.setConfig (octaves, detailLogBins_, viewFreqMin_, juce::jmin (viewFreqMax_, getEffectiveAbsFreqMax()));
             renderStateProvider_.updateFromSnapshot (snapshot.isValid,
                                                      fftBinCount,
                                                      snapshot.fftSize,
@@ -1911,21 +1953,30 @@ void AnalyzerDisplayView::SmoothingProcessor::process (const float* inputPower, 
     }
 }
 
-void AnalyzerDisplayView::LogGaussianSmoother::setConfig (float octaves)
+void AnalyzerDisplayView::LogGaussianSmoother::setConfig (float octaves, int numBins, float minFreq, float maxFreq)
 {
-    if (std::abs (smoothingOctaves_ - octaves) < 1e-6f && radius_ > 0)
+    numBins = juce::jlimit (2, kMaxBins, numBins);
+    minFreq = juce::jmax (1.0f, minFreq);
+    maxFreq = juce::jmax (minFreq * 1.01f, maxFreq);
+
+    if (std::abs (smoothingOctaves_ - octaves) < 1e-6f
+        && configuredBins_ == numBins
+        && std::abs (configuredMinFreq_ - minFreq) < 1e-3f
+        && std::abs (configuredMaxFreq_ - maxFreq) < 1e-3f
+        && radius_ > 0)
         return;
     smoothingOctaves_ = octaves;
+    configuredBins_ = numBins;
+    configuredMinFreq_ = minFreq;
+    configuredMaxFreq_ = maxFreq;
     
     if (octaves <= 0.0f)
     {
         radius_ = 0;
         return;
     }
-    constexpr double kLogFreqMinHz = 20.0;
-    constexpr double kLogFreqMaxHz = 20000.0;
-    const double totalOctaves = std::log2 (kLogFreqMaxHz / kLogFreqMinHz);
-    const double binsPerOctave = static_cast<double> (kMaxBins) / totalOctaves;
+    const double totalOctaves = std::log2 (static_cast<double> (maxFreq) / static_cast<double> (minFreq));
+    const double binsPerOctave = static_cast<double> (numBins) / juce::jmax (1.0e-6, totalOctaves);
     const double sigmaBins = juce::jmax (0.5, binsPerOctave * static_cast<double> (octaves) / 2.355);
     const int radius = juce::jmin (static_cast<int> (std::floor (3.0 * sigmaBins + 0.5)),
                                    (static_cast<int> (weights_.size()) - 1) / 2);

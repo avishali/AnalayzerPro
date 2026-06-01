@@ -12,6 +12,7 @@ SettingsPopupPanel::SettingsPopupPanel (Section section,
       ui_ (ui),
       releaseTimeValue_ (ui),
       fftSizeRow_  (ui, "FFT Size",   fftSizeCombo_),
+      detailRow_   (ui, "Detail",     detailCombo_),
       tiltRow_     (ui, "Tilt",       tiltCombo_),
       smoothingRow_(ui, "Smoothing",  smoothingCombo_),
       weightingRow_(ui, "Weighting",  weightingCombo_),
@@ -78,9 +79,17 @@ void SettingsPopupPanel::initSpectrum (juce::AudioProcessorValueTreeState* /*apv
     fftSizeCombo_.addItem ("2048", 2);
     fftSizeCombo_.addItem ("4096", 3);
     fftSizeCombo_.addItem ("8192", 4);
-    fftSizeCombo_.setTooltip ("FFT size. Larger = better frequency resolution.");
+    fftSizeCombo_.addItem ("16384", 5);
+    fftSizeCombo_.setTooltip ("Analysis resolution (CPU). Larger = finer low-freq detail.");
     fftSizeRow_.attachToParent (*this);
     binder_->bindCombo (ControlId::AnalyzerFftSize, fftSizeCombo_);
+
+    detailCombo_.addItem ("Low",    1);
+    detailCombo_.addItem ("Medium", 2);
+    detailCombo_.addItem ("High",   3);
+    detailCombo_.setTooltip ("Display trace density. Higher = smoother, more detailed curve.");
+    detailRow_.attachToParent (*this);
+    binder_->bindCombo (ControlId::AnalyzerDetail, detailCombo_);
 
     // Hold + Reset
     holdBtn_.setButtonText ("Hold Peaks");
@@ -244,6 +253,7 @@ int SettingsPopupPanel::getPreferredHeight() const
         case Section::Spectrum:
             h += btnRowH + gap;     // mode buttons
             h += choiceH;           // FFT size
+            h += choiceH;           // detail
             h += toggleH;           // hold
             h += btnRowH + gap;     // reset button
             h += toggleH;           // release time label + value
@@ -320,6 +330,7 @@ void SettingsPopupPanel::resized()
             y += btnH + gap;
 
             placeChoice (fftSizeRow_);
+            placeChoice (detailRow_);
 
             // Hold row with Reset button inline
             holdRow_.layout (bounds, y);

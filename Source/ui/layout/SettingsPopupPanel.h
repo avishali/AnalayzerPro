@@ -50,7 +50,7 @@ private:
 
     // Spectrum
     juce::TextButton     fftBtn_, bandBtn_, logBtn_, resetBtn_;
-    juce::ComboBox       fftSizeCombo_, tiltCombo_, smoothingCombo_, weightingCombo_;
+    juce::ComboBox       fftSizeCombo_, detailCombo_, tiltCombo_, smoothingCombo_, weightingCombo_;
     juce::ToggleButton   holdBtn_;
     AnalyzerPro::DraggableParamValueLabel releaseTimeValue_;
     juce::Label          releaseTimeLabel_;
@@ -71,7 +71,7 @@ private:
     juce::Component      tracesContainer_;
 
     // ── SDK rows (must be after the control members they reference) ─────────
-    mdsp_ui::ChoiceRow   fftSizeRow_, tiltRow_, smoothingRow_, weightingRow_;
+    mdsp_ui::ChoiceRow   fftSizeRow_, detailRow_, tiltRow_, smoothingRow_, weightingRow_;
     mdsp_ui::ToggleRow   holdRow_;
     mdsp_ui::ChoiceRow   scopeModeRow_, scopeShapeRow_, scopeInputRow_;
     mdsp_ui::ToggleRow   scopeHoldRow_;

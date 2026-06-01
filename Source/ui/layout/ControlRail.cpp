@@ -13,6 +13,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
       tracesSection_ (ui, "Traces"),
       analysisModeSection_ (ui, "Analysis Mode"),
       fftSizeRow_ (ui, "FFT Size", fftSizeCombo_),
+      detailRow_ (ui, "Detail", detailCombo_),
       holdRow (ui, "Hold", holdButton),
       tiltRow (ui, "Tilt", tiltCombo),
       scopeModeRow (ui, "Scope Mode", scopeModeCombo),
@@ -88,10 +89,19 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     fftSizeCombo_.addItem ("2048", 2);
     fftSizeCombo_.addItem ("4096", 3);
     fftSizeCombo_.addItem ("8192", 4);
+    fftSizeCombo_.addItem ("16384", 5);
     fftSizeCombo_.setSelectedId (3, juce::dontSendNotification);
-    fftSizeCombo_.setTooltip ("FFT size (1024-8192). Larger = better frequency resolution, more CPU.");
+    fftSizeCombo_.setTooltip ("Analysis resolution (CPU). Larger = finer low-freq detail.");
     addAndMakeVisible (fftSizeCombo_);
     fftSizeRow_.attachToParent (*this);
+
+    detailCombo_.addItem ("Low", 1);
+    detailCombo_.addItem ("Medium", 2);
+    detailCombo_.addItem ("High", 3);
+    detailCombo_.setSelectedId (2, juce::dontSendNotification);
+    detailCombo_.setTooltip ("Display trace density. Higher = smoother, more detailed curve.");
+    addAndMakeVisible (detailCombo_);
+    detailRow_.attachToParent (*this);
 
     // Attach control rows to parent
     holdRow.attachToParent (*this);
@@ -244,6 +254,7 @@ void ControlRail::setControlBinder (AnalyzerPro::ControlBinder& binder)
         controlBinder->bindToggle (AnalyzerPro::ControlId::TraceShowSide, showSideButton);
         controlBinder->bindToggle (AnalyzerPro::ControlId::TraceShowRMS, showRmsButton);
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerFftSize, fftSizeCombo_);
+        controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerDetail, detailCombo_);
     }
 }
 
@@ -305,7 +316,7 @@ int ControlRail::getPreferredHeight() const noexcept
     y += choiceRowH + sectionSpacing;                                                    // Weighting
     y += headerH;                                                                        // Analysis Mode header
     if (analysisModeSection_.isExpanded())
-        y += buttonSmallH + gapSmall + choiceRowH;
+        y += buttonSmallH + gapSmall + choiceRowH * 2;
     y += sectionSpacing;
     y += headerH + choiceRowH + toggleRowH + secondaryHeight;                           // Meters (meter input + meter hold only)
 
@@ -510,9 +521,16 @@ void ControlRail::resized()
         y += buttonSmallH + gapSmall;
         fftSizeRow_.getLabel().setVisible (true);
         fftSizeRow_.getCombo().setVisible (true);
+        detailRow_.getLabel().setVisible (true);
+        detailRow_.getCombo().setVisible (true);
         {
             const int y0 = y;
             fftSizeRow_.layout (bounds, y);
+            y = y0 + choiceRowH;
+        }
+        {
+            const int y0 = y;
+            detailRow_.layout (bounds, y);
             y = y0 + choiceRowH;
         }
     }
@@ -523,6 +541,8 @@ void ControlRail::resized()
         logButton_.setVisible (false);
         fftSizeRow_.getLabel().setVisible (false);
         fftSizeRow_.getCombo().setVisible (false);
+        detailRow_.getLabel().setVisible (false);
+        detailRow_.getCombo().setVisible (false);
     }
     addGap (sectionSpacing);
 

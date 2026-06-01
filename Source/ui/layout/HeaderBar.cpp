@@ -288,6 +288,12 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     slotAButton.setLookAndFeel (laf);
     slotBButton.setLookAndFeel (laf);
     zoomResetButton_.setLookAndFeel (laf);
+    freqPanLeftButton_.setLookAndFeel (laf);
+    freqPanRightButton_.setLookAndFeel (laf);
+    freqZoomInButton_.setLookAndFeel (laf);
+    freqZoomOutButton_.setLookAndFeel (laf);
+    freqResetButton_.setLookAndFeel (laf);
+    peakResetButton_.setLookAndFeel (laf);
     bypassButton.setLookAndFeel (laf);
     railToggleButton.setLookAndFeel (laf);
     spectrumBtn_.setLookAndFeel (laf);
@@ -310,18 +316,35 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     dbRangeBox_.addItem ("-60 dB",  1);
     dbRangeBox_.addItem ("-90 dB",  2);
     dbRangeBox_.addItem ("-120 dB", 3);
-    dbRangeBox_.setSelectedId (3, juce::dontSendNotification);
-    dbRangeBox_.setTooltip ("FFT vertical zoom range. Also cycle with 'D'.");
+    dbRangeBox_.setSelectedId (2, juce::dontSendNotification);
+    dbRangeBox_.setTooltip ("FFT vertical zoom presets; drag or wheel the grid for continuous zoom.");
     addAndMakeVisible (dbRangeBox_);
 
-    // Zoom reset button — returns range to -120 dB default
+    // Zoom reset button — returns range to -90 dB default
     zoomResetButton_.setButtonText (juce::CharPointer_UTF8 ("\xe2\x86\xba")); // ↺
-    zoomResetButton_.setTooltip ("Reset zoom to -120 dB");
+    zoomResetButton_.setTooltip ("Reset view to 10 Hz-Nyquist and -90 dB");
     zoomResetButton_.setColour (juce::TextButton::buttonColourId, theme.panel);
     zoomResetButton_.setColour (juce::TextButton::textColourOffId, theme.text);
     zoomResetButton_.setColour (juce::TextButton::textColourOnId, theme.text);
     zoomResetButton_.onClick = [this] { if (onZoomReset) onZoomReset(); };
     addAndMakeVisible (zoomResetButton_);
+
+    auto initTinyButton = [&] (juce::TextButton& b, const juce::String& text, const juce::String& tip, std::function<void()>* cb)
+    {
+        b.setButtonText (text);
+        b.setTooltip (tip);
+        b.setColour (juce::TextButton::buttonColourId, theme.panel);
+        b.setColour (juce::TextButton::textColourOffId, theme.text);
+        b.setColour (juce::TextButton::textColourOnId, theme.text);
+        b.onClick = [cb] { if (cb != nullptr && *cb) (*cb)(); };
+        addAndMakeVisible (b);
+    };
+    initTinyButton (freqPanLeftButton_,  "<", "Pan to lower frequencies", &onFreqPanLeft);
+    initTinyButton (freqPanRightButton_, ">", "Pan to higher frequencies", &onFreqPanRight);
+    initTinyButton (freqZoomOutButton_,  "-", "Zoom out frequency range", &onFreqZoomOut);
+    initTinyButton (freqZoomInButton_,   "+", "Zoom in frequency range", &onFreqZoomIn);
+    initTinyButton (freqResetButton_,    "F", "Reset frequency range to 10 Hz-Nyquist", &onFreqReset);
+    initTinyButton (peakResetButton_,    "reset", "Reset analyzer peaks and holds", &onResetPeaks);
 
     // Preset & State Buttons
     presetButton.setButtonText ("Preset");
@@ -454,6 +477,12 @@ HeaderBar::~HeaderBar()
     slotAButton.setLookAndFeel (nullptr);
     slotBButton.setLookAndFeel (nullptr);
     zoomResetButton_.setLookAndFeel (nullptr);
+    freqPanLeftButton_.setLookAndFeel (nullptr);
+    freqPanRightButton_.setLookAndFeel (nullptr);
+    freqZoomInButton_.setLookAndFeel (nullptr);
+    freqZoomOutButton_.setLookAndFeel (nullptr);
+    freqResetButton_.setLookAndFeel (nullptr);
+    peakResetButton_.setLookAndFeel (nullptr);
     bypassButton.setLookAndFeel (nullptr);
     railToggleButton.setLookAndFeel (nullptr);
     spectrumBtn_.setLookAndFeel (nullptr);
@@ -480,6 +509,7 @@ void HeaderBar::resized()
     const int gapX = 8;
     const int comboW = 112;
     const int smallBtnW = 22;
+    const int peakResetW = 44;
     const int railBtnW = juce::jmax (60, juce::jlimit (1, 999, m.headerButtonW));
     const int presetW = juce::jlimit (1, 999, m.headerButtonW);
     const int bypassW = juce::jlimit (1, 999, m.headerButtonW);
@@ -496,9 +526,23 @@ void HeaderBar::resized()
     const bool hasPeakRange = peakRangeBox_.getParentComponent() == this;
     const int peakRangeW = hasPeakRange ? (comboW + gapX) : 0;
     const int zoomResetW = smallBtnW;
-    const int rightZoneWidth = peakRangeW + comboW + gapX + zoomResetW + gapX + presetW + gapX + presetW + gapX + smallBtnW + gapX + smallBtnW + gapX + bypassW + gapX + railBtnW;
+    const int navZoneWidth = smallBtnW * 5 + peakResetW + gapX * 6;
+    const int rightZoneWidth = navZoneWidth + peakRangeW + comboW + gapX + zoomResetW + gapX + presetW + gapX + presetW + gapX + smallBtnW + gapX + smallBtnW + gapX + bypassW + gapX + railBtnW;
     const juce::Rectangle<int> rightZone (row.getRight() - rightZoneWidth, row.getY(), rightZoneWidth, row.getHeight());
     int x = rightZone.getX();
+
+    freqPanLeftButton_.setBounds (x, y, smallBtnW, buttonH);
+    x += smallBtnW + gapX;
+    freqPanRightButton_.setBounds (x, y, smallBtnW, buttonH);
+    x += smallBtnW + gapX;
+    freqZoomOutButton_.setBounds (x, y, smallBtnW, buttonH);
+    x += smallBtnW + gapX;
+    freqZoomInButton_.setBounds (x, y, smallBtnW, buttonH);
+    x += smallBtnW + gapX;
+    freqResetButton_.setBounds (x, y, smallBtnW, buttonH);
+    x += smallBtnW + gapX;
+    peakResetButton_.setBounds (x, y, peakResetW, buttonH);
+    x += peakResetW + gapX;
 
     if (hasPeakRange)
     {

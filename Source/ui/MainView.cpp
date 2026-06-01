@@ -82,6 +82,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     {
         apvts->addParameterListener ("Mode", this);
         apvts->addParameterListener ("FftSize", this);
+        apvts->addParameterListener ("AnalyzerDetail", this);
         apvts->addParameterListener ("Averaging", this);
         apvts->addParameterListener ("HoldPeaks", this);
         apvts->addParameterListener ("PeakDecay", this);
@@ -141,7 +142,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
             *apvts_, "DbRange", header_.dbRangeBox_);
     }
 
-    // Reset button: restore zoom to −120 dB default
+    // Reset button: restore full analyzer view (10 Hz-Nyquist, -90 dB).
     header_.onZoomReset = [this]
     {
         if (apvts_ != nullptr)
@@ -149,11 +150,18 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
             if (auto* param = apvts_->getParameter ("DbRange"))
             {
                 param->beginChangeGesture();
-                param->setValueNotifyingHost (1.0f); // index 2 (-120 dB), norm = 2/2 = 1.0
+                param->setValueNotifyingHost (0.5f); // index 1 (-90 dB), norm = 1/2 = 0.5
                 param->endChangeGesture();
             }
         }
+        analyzerView_.resetFrequencyView();
     };
+    header_.onFreqPanLeft  = [this] { analyzerView_.panFrequencyOctaves (-1.0f); };
+    header_.onFreqPanRight = [this] { analyzerView_.panFrequencyOctaves ( 1.0f); };
+    header_.onFreqZoomIn   = [this] { analyzerView_.zoomFrequencyAroundViewCenter (2.0f); };
+    header_.onFreqZoomOut  = [this] { analyzerView_.zoomFrequencyAroundViewCenter (0.5f); };
+    header_.onFreqReset    = [this] { analyzerView_.resetFrequencyView(); };
+    header_.onResetPeaks   = [this] { triggerResetPeaks(); };
 
     analyzerView_.onDbRangeUserChanged = [this] (AnalyzerDisplayView::DbRange range)
     {
@@ -188,10 +196,12 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         }
         if (auto* raw = apvts_->getRawParameterValue ("FftSize"))
         {
-            const int index = juce::jlimit (0, 3, juce::roundToInt (raw->load()));
+            const int index = juce::jlimit (0, 4, juce::roundToInt (raw->load()));
             const int order = 10 + index;
             analyzerView_.setSpectrumFftOrder (order);
         }
+        if (auto* raw = apvts_->getRawParameterValue ("AnalyzerDetail"))
+            analyzerView_.setDisplayDetailFromChoiceIndex (juce::roundToInt (raw->load()));
         if (auto* raw = apvts_->getRawParameterValue ("PeakDecay"))
         {
             const float ms = raw->load();
@@ -261,6 +271,7 @@ void MainView::shutdown()
     {
         apvts_->removeParameterListener ("Mode", this);
         apvts_->removeParameterListener ("FftSize", this);
+        apvts_->removeParameterListener ("AnalyzerDetail", this);
         apvts_->removeParameterListener ("Averaging", this);
         apvts_->removeParameterListener ("HoldPeaks", this);
         apvts_->removeParameterListener ("PeakDecay", this);
@@ -336,14 +347,18 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
     else if (parameterID == "FftSize")
     {
         // Convert choice index to FFT size (handled in PluginProcessor::parameterChanged)
-        const int sizes[] = { 1024, 2048, 4096, 8192 };
+        const int sizes[] = { 1024, 2048, 4096, 8192, 16384 };
         const int index = juce::roundToInt (newValue);
-        if (index >= 0 && index < 4)
+        if (index >= 0 && index < 5)
         {
             audioProcessor.getAnalyzerEngine().setFftSize (sizes[index]);
-            const int order = 10 + index;  // 1024=10, 2048=11, 4096=12, 8192=13
+            const int order = 10 + index;  // 1024=10 ... 16384=14
             analyzerView_.setSpectrumFftOrder (order);
         }
+    }
+    else if (parameterID == "AnalyzerDetail")
+    {
+        analyzerView_.setDisplayDetailFromChoiceIndex (juce::roundToInt (newValue));
     }
     else if (parameterID == "Averaging")
     {
@@ -926,6 +941,7 @@ void MainView::auditApvtsParameters()
     std::set<juce::String> apvtsParams;
     apvtsParams.insert ("Mode");
     apvtsParams.insert ("FftSize");
+    apvtsParams.insert ("AnalyzerDetail");
     apvtsParams.insert ("Averaging");
     apvtsParams.insert ("PeakHold");
     apvtsParams.insert ("Hold");
@@ -949,6 +965,7 @@ void MainView::auditApvtsParameters()
     std::set<juce::String> uiRepresented;
     uiRepresented.insert ("Mode");
     uiRepresented.insert ("FftSize");
+    uiRepresented.insert ("AnalyzerDetail");
     uiRepresented.insert ("Averaging");
     uiRepresented.insert ("PeakHold");
     uiRepresented.insert ("Hold");

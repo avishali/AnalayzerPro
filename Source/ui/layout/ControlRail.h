@@ -96,7 +96,9 @@ private:
     juce::TextButton bandButton_;
     juce::TextButton logButton_;
     juce::ComboBox fftSizeCombo_;
+    juce::ComboBox detailCombo_;
     mdsp_ui::ChoiceRow fftSizeRow_;
+    mdsp_ui::ChoiceRow detailRow_;
     
     // Control rows
     mdsp_ui::ToggleRow holdRow;

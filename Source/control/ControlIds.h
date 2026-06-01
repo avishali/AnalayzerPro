@@ -21,6 +21,7 @@ enum class ControlId
     MeterInGain,
     AnalyzerMode,        // FFT / BANDS / LOG
     AnalyzerFftSize,
+    AnalyzerDetail,
     AnalyzerAveraging,
     AnalyzerHoldPeaks,   // Consolidated Hold
     AnalyzerPeakDecay,

@@ -408,7 +408,7 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     
     if (fftSizeParam != nullptr)
     {
-        constexpr int sizes[] = { 1024, 2048, 4096, 8192 };
+        constexpr int sizes[] = { 1024, 2048, 4096, 8192, 16384 };
         constexpr int kNumSizes = static_cast<int> (std::size (sizes));
 
         const float raw = fftSizeParam->load();
@@ -724,12 +724,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
     // Channel Mode REMOVED in favor of granular trace toggles
     // params.push_back (std::make_unique<juce::AudioParameterChoice> ("ChannelMode"...));
     
-    // Analyzer FFT Size (choice: 1024, 2048, 4096, 8192)
+    // Analyzer FFT Size (choice: 1024, 2048, 4096, 8192, 16384)
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
         "FftSize", "FFT Size",
-        juce::StringArray { "1024", "2048", "4096", "8192" },
+        juce::StringArray { "1024", "2048", "4096", "8192", "16384" },
         2,  // Default: 4096 (index 2)
         "FFT Size"));
+
+    // Analyzer Detail (display density only; independent from engine FFT size)
+    params.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "AnalyzerDetail", "Detail",
+        juce::StringArray { "Low", "Medium", "High" },
+        1,  // Default: Medium (512 log bins)
+        "Detail"));
     
     // Analyzer Smoothing (Fractional Octave)
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
@@ -772,7 +779,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
         "DbRange", "dB Range",
         juce::StringArray { "-60 dB", "-90 dB", "-120 dB" },
-        2,  // Default: -120 dB (index 2)
+        1,  // Default: -90 dB (index 1)
         "dB Range"));
 
     // Master Bypass (bool, default false)
