@@ -1,5 +1,7 @@
 #include "PhaseFanScopeComponent.h"
 
+#include "../theme/TraceColors.h"
+
 #include <cmath>
 
 namespace
@@ -9,6 +11,13 @@ constexpr float kContourMinDraw = 0.003f;
 constexpr float kPeakMinDraw    = 0.003f;
 constexpr float kInnerProportion = 0.12f;
 constexpr float kPiHalf = juce::MathConstants<float>::halfPi;
+
+juce::Colour traceColourOrFallback (AnalyzerPro::TraceColorStore* store,
+                                    AnalyzerPro::TraceId id,
+                                    juce::Colour fallback)
+{
+    return store != nullptr ? store->get (id) : fallback;
+}
 
 // Derive cx / cy / radiusPx from component bounds, filling the panel.
 // cy is placed at the bottom so the semicircle opens upward.
@@ -173,6 +182,25 @@ void PhaseFanScopeComponent::rebuildCachedPaths()
             }
         }
     }
+
+    // Gradient fill follows the contour, closed to the centre origin (like the RMS spectrum
+    // trace closing to its baseline). Built from the contour so it works in spectral mode.
+    fanFillPath_.clear();
+    {
+        constexpr int kBins = mdsp_ui::scopes::PhaseFanRenderState::kAngleBins;
+        bool any = false;
+        for (int a = 0; a < kBins; ++a)
+            if (state_.contourRNorm[static_cast<size_t> (a)] > kContourMinDraw) { any = true; break; }
+
+        if (any)
+        {
+            fanFillPath_.startNewSubPath (cx, cy);
+            for (int a = 0; a < kBins; ++a)
+                fanFillPath_.lineTo (pointFor (a, juce::jmax (0.0f, state_.contourRNorm[static_cast<size_t> (a)])));
+            fanFillPath_.lineTo (cx, cy);
+            fanFillPath_.closeSubPath();
+        }
+    }
 }
 
 void PhaseFanScopeComponent::paint (juce::Graphics& g)
@@ -208,35 +236,45 @@ void PhaseFanScopeComponent::paint (juce::Graphics& g)
         g.strokePath (arcPath_, juce::PathStrokeType (outer ? 1.0f : 0.5f));
     }
 
-    // ── Radial spokes every 15° ───────────────────────────────────────────────
+    // ── Radial spokes every 15°, with full-left / centre / full-right emphasised ──
     for (int deg = -90; deg <= 90; deg += 15)
     {
-        const bool  cardinal = (deg == 0 || deg == -90 || deg == 90);
-        const float alpha    = cardinal ? 0.55f : 0.30f;
+        const bool  reference = (deg == 0 || deg == -45 || deg == 45); // mono / full-L / full-R
+        const float alpha     = reference ? 0.62f : 0.26f;
         g.setColour (theme.grid.withAlpha (alpha));
         const float theta = static_cast<float> (deg) * juce::MathConstants<float>::pi / 180.0f;
         const float ex = cx + std::sin (theta) * radiusPx;
         const float ey = cy - std::cos (theta) * radiusPx;
-        g.drawLine (cx, cy, ex, ey, cardinal ? 1.0f : 0.5f);
+        g.drawLine (cx, cy, ex, ey, reference ? 1.2f : 0.5f);
     }
 
     // ── Signal ────────────────────────────────────────────────────────────────
+    const auto scopeColour = traceColourOrFallback (traceColors_, AnalyzerPro::TraceId::Peak, theme.seriesPeak);
+
     if (!fanFillPath_.isEmpty())
     {
-        g.setColour (theme.seriesPeak.withAlpha (0.33f));
+        // Gradient fill, like the spectrum RMS trace: brighter near the dome, fading to centre.
+        juce::ColourGradient grad (scopeColour.withAlpha (0.42f), cx, cy - radiusPx,
+                                   scopeColour.withAlpha (0.04f), cx, cy, false);
+        g.setGradientFill (grad);
         g.fillPath (fanFillPath_);
     }
 
     if (!contourPath_.isEmpty())
     {
-        g.setColour (theme.seriesPeak.withAlpha (0.85f));
+        g.setColour (scopeColour.withAlpha (0.90f));
         g.strokePath (contourPath_, juce::PathStrokeType (1.6f));
     }
 
     if (state_.peakHoldEnabled && !peakHoldPath_.isEmpty())
     {
-        g.setColour (juce::Colours::white.withAlpha (0.95f));
-        g.strokePath (peakHoldPath_, juce::PathStrokeType (1.1f));
+        // Same colour as the trace, thicker with a soft glow.
+        g.setColour (scopeColour.withAlpha (0.22f));
+        g.strokePath (peakHoldPath_, juce::PathStrokeType (4.5f, juce::PathStrokeType::curved,
+                                                           juce::PathStrokeType::rounded));
+        g.setColour (scopeColour.withAlpha (0.98f));
+        g.strokePath (peakHoldPath_, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved,
+                                                           juce::PathStrokeType::rounded));
     }
 
     // ── Labels at arc geometry positions ─────────────────────────────────────

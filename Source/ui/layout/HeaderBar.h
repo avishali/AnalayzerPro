@@ -82,6 +82,7 @@ private:
     // Presets & State
     juce::TextButton presetButton; // Opens menu
     juce::TextButton saveButton;
+    juce::TextButton overflowButton_; // "⋯" — collapses Preset/Save/A/B when header is narrow
     // juce::TextButton menuButton; // Removed or reused? Prefer A/B
     juce::TextButton slotAButton;
     juce::TextButton slotBButton;

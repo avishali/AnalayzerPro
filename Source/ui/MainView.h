@@ -78,6 +78,7 @@ private:
     AnalayzerProAudioProcessor& audioProcessor;
     juce::AudioProcessorValueTreeState* apvts_ = nullptr;
     AnalyzerPro::control::AnalyzerProControlContext controls_;
+    std::unique_ptr<AnalyzerPro::TraceColorStore> traceColors_; // user trace colours (shared by rail + display)
 
     mdsp_ui::UiContext& ui_;  // Reference to shared UiContext from PluginEditor
 

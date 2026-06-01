@@ -4,7 +4,7 @@ namespace AnalyzerPro
 {
 namespace Layout
 {
-    constexpr int outerPadding       = 24;
+    constexpr int outerPadding       = 10;  // thin outer frame (was 24)
     constexpr int gutterGap          = 16;
     constexpr int topBarHeight       = 32;
     constexpr int footerHeight       = 32;

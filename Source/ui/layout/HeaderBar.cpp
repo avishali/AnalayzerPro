@@ -139,6 +139,40 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     bypassButton.setTooltip ("Bypass analyzer processing");
     addAndMakeVisible (bypassButton);
 
+    // Overflow "⋯" — shown instead of Preset/Save/A/B when the header is too narrow.
+    overflowButton_.setButtonText (juce::CharPointer_UTF8 ("\xe2\x8b\xaf")); // ⋯
+    overflowButton_.setTooltip ("Presets and A/B");
+    overflowButton_.setColour (juce::TextButton::buttonColourId, theme.panel);
+    overflowButton_.setColour (juce::TextButton::textColourOffId, theme.text);
+    overflowButton_.setColour (juce::TextButton::textColourOnId, theme.text);
+    overflowButton_.onClick = [this]
+    {
+        juce::PopupMenu m;
+        if (presetManager)
+        {
+            juce::PopupMenu presets;
+            presets.addItem ("Factory",         [this] { presetManager->loadFactory(); });
+            presets.addItem ("Default",         [this] { presetManager->loadDefaultOrFactory(); });
+            presets.addItem ("Save as Default", [this] { presetManager->saveDefault(); });
+            presets.addSeparator();
+            for (const auto& p : presetManager->listPresets())
+                presets.addItem (p, [this, p] { presetManager->loadPreset (p); });
+            m.addSubMenu ("Preset", presets);
+            m.addItem ("Save Preset…", [this] { saveButton.triggerClick(); });
+            m.addSeparator();
+        }
+        const bool aActive = slotAButton.getToggleState();
+        m.addItem (1, "A", true, aActive);
+        m.addItem (2, "B", true, ! aActive);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&overflowButton_),
+                         [this] (int r)
+                         {
+                             if (r == 1) slotAButton.triggerClick();
+                             else if (r == 2) slotBButton.triggerClick();
+                         });
+    };
+    addChildComponent (overflowButton_); // visibility toggled in resized()
+
     // Module settings tabs (Spectrum / Scopes / Meters / Traces) inside scrollable container
     auto initModuleBtn = [&] (juce::TextButton& b, const juce::String& text,
                               juce::Colour textCol,
@@ -163,9 +197,11 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     metersBtn_  .setTooltip ("Level meter settings");
     tracesBtn_  .setTooltip ("Trace visibility settings");
 
-    // Scroll port — horizontal scroll via trackpad swipe, no visible scrollbars
+    // Scroll port — horizontal scroll via trackpad/wheel, no visible scrollbars.
+    // 4-arg setScrollBarsShown keeps bars hidden but ALLOWS wheel/trackpad scrolling
+    // (the 2-arg form disables wheel scrolling entirely when both bars are off).
     moduleScrollPort_.setViewedComponent (&moduleBtnContainer_, false);
-    moduleScrollPort_.setScrollBarsShown (false, false);
+    moduleScrollPort_.setScrollBarsShown (false, false, /*allowVertWithoutBar*/ true, /*allowHorizWithoutBar*/ true);
     moduleScrollPort_.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::never);
     addAndMakeVisible (moduleScrollPort_);
 
@@ -201,12 +237,18 @@ void HeaderBar::resized()
     const int paddingX = 12;
     const int paddingY = 4;
     const int gapX = 8;
-    const int comboW = 112;
+    const int groupGap = 16;        // wider separation between logical groups
+    const int comboW = 112;         // optional peak-range combo
+    const int dbRangeW = 62;        // narrowed dB-range combo (~"-120 dB" width)
     const int smallBtnW = 22;
     const int peakResetW = 44;
-    const int railBtnW = juce::jmax (60, juce::jlimit (1, 999, m.headerButtonW));
+    const int zoomResetW = smallBtnW;
+    const int overflowW = 28;
+    const int railW = smallBtnW;    // small chevron glyph now
     const int presetW = juce::jlimit (1, 999, m.headerButtonW);
     const int bypassW = juce::jlimit (1, 999, m.headerButtonW);
+    constexpr int kTitleFixedW = 110;
+    constexpr int kMinModulePort = 96; // keep at least this for module buttons before collapsing presets
 
     const int rowHeightTarget = juce::jmin (m.headerButtonH, getHeight() - 2 * paddingY);
     const int buttonH = juce::jlimit (1, getHeight() - 2 * paddingY, static_cast<int> (std::round (static_cast<float> (rowHeightTarget))));
@@ -214,80 +256,75 @@ void HeaderBar::resized()
     auto barArea = getLocalBounds();
     const int rightMargin = 48;  // extra margin so bypass/rail aren't clipped by host/window
     const juce::Rectangle<int> row = snapRectToPixels (barArea.reduced (paddingX, paddingY).withTrimmedRight (rightMargin).toNearestInt());
-    const int rowCentreY = row.getCentreY();
-    const int y = static_cast<int> (std::round (static_cast<float> (rowCentreY) - buttonH * 0.5f));
+    const int y = static_cast<int> (std::round (static_cast<float> (row.getCentreY()) - static_cast<float> (buttonH) * 0.5f));
 
-    const bool hasPeakRange = peakRangeBox_.getParentComponent() == this;
-    const int peakRangeW = hasPeakRange ? (comboW + gapX) : 0;
-    const int zoomResetW = smallBtnW;
-    const int navZoneWidth = smallBtnW * 5 + peakResetW + gapX * 6;
-    const int rightZoneWidth = navZoneWidth + peakRangeW + comboW + gapX + zoomResetW + gapX + presetW + gapX + presetW + gapX + smallBtnW + gapX + smallBtnW + gapX + bypassW + gapX + railBtnW;
-    const juce::Rectangle<int> rightZone (row.getRight() - rightZoneWidth, row.getY(), rightZoneWidth, row.getHeight());
-    int x = rightZone.getX();
-
-    freqPanLeftButton_.setBounds (x, y, smallBtnW, buttonH);
-    x += smallBtnW + gapX;
-    freqPanRightButton_.setBounds (x, y, smallBtnW, buttonH);
-    x += smallBtnW + gapX;
-    freqZoomOutButton_.setBounds (x, y, smallBtnW, buttonH);
-    x += smallBtnW + gapX;
-    freqZoomInButton_.setBounds (x, y, smallBtnW, buttonH);
-    x += smallBtnW + gapX;
-    freqResetButton_.setBounds (x, y, smallBtnW, buttonH);
-    x += smallBtnW + gapX;
-    peakResetButton_.setBounds (x, y, peakResetW, buttonH);
-    x += peakResetW + gapX;
-
-    if (hasPeakRange)
+    auto placeLtr = [&] (int& cursor, juce::Component& c, int w)
     {
-        peakRangeBox_.setBounds (x, y, comboW, buttonH);
-        x += comboW + gapX;
-    }
+        c.setBounds (cursor, y, w, buttonH);
+        cursor += w + gapX;
+    };
 
-    dbRangeBox_.setBounds (x, y, comboW, buttonH);
-    x += comboW + gapX;
-
-    zoomResetButton_.setBounds (x, y, zoomResetW, buttonH);
-    x += zoomResetW + gapX;
-
-    presetButton.setBounds (x, y, presetW, buttonH);
-    x += presetW + gapX;
-
-    saveButton.setBounds (x, y, presetW, buttonH);
-    x += presetW + gapX;
-
-    slotAButton.setBounds (x, y, smallBtnW, buttonH);
-    x += smallBtnW + gapX;
-
-    slotBButton.setBounds (x, y, smallBtnW, buttonH);
-    x += smallBtnW + gapX;
-
-    bypassButton.setBounds (x, y, bypassW, buttonH);
-    x += bypassW + gapX;
-
-    const int railW = juce::jmin (railBtnW, rightZone.getRight() - x);
-    railToggleButton.setBounds (x, y, railW, buttonH);
-
-    // Title area: fixed title on the left, scrollable module buttons to the right
-    const juce::Rectangle<int> leftArea (row.getX(), row.getY(), rightZone.getX() - row.getX(), row.getHeight());
-    const int titleCentreY = leftArea.getCentreY();
-    const int titleTop = static_cast<int> (std::round (static_cast<float> (titleCentreY) - ui_.type().titleH * 0.5f));
+    // ── Title (fixed, left) ──────────────────────────────────────────────
+    const int titleTop = static_cast<int> (std::round (static_cast<float> (row.getCentreY()) - ui_.type().titleH * 0.5f));
     const int titleH   = static_cast<int> (std::round (ui_.type().titleH + 6.0f));
-    constexpr int kTitleFixedW = 110;
-    constexpr int kModuleBtnW  = 72;
-    constexpr int kModuleGap   = 6;
-    constexpr int kNumBtns     = 4;
-    constexpr int kContainerW  = kNumBtns * kModuleBtnW + (kNumBtns - 1) * kModuleGap;
-
-    titleLabel.setBounds (leftArea.getX(), titleTop, kTitleFixedW, titleH);
+    titleLabel.setBounds (row.getX(), titleTop, kTitleFixedW, titleH);
     titleLabel.setJustificationType (juce::Justification::centredLeft);
 
-    // Module buttons live inside a scrollable viewport so they're always reachable
-    const int portX = leftArea.getX() + kTitleFixedW + kModuleGap;
-    const int portW = juce::jmax (0, leftArea.getRight() - portX);
+    // ── Group A: navigation + zoom (left-anchored, after title) ──────────
+    int xa = row.getX() + kTitleFixedW + groupGap;
+    placeLtr (xa, freqPanLeftButton_,  smallBtnW);
+    placeLtr (xa, freqPanRightButton_, smallBtnW);
+    placeLtr (xa, freqZoomOutButton_,  smallBtnW);
+    placeLtr (xa, freqZoomInButton_,   smallBtnW);
+    placeLtr (xa, freqResetButton_,    smallBtnW);
+    placeLtr (xa, peakResetButton_,    peakResetW);
+    placeLtr (xa, zoomResetButton_,    zoomResetW);
+    if (peakRangeBox_.getParentComponent() == this)
+        placeLtr (xa, peakRangeBox_, comboW);
+    placeLtr (xa, dbRangeBox_, dbRangeW);
+    const int groupAEnd = xa - gapX; // right edge of last Group-A control
+
+    // ── Group C: presets + bypass + rail (right-anchored, with overflow) ─
+    const int groupCFullW      = presetW + gapX + presetW + gapX + smallBtnW + gapX + smallBtnW + gapX + bypassW + gapX + railW;
+    const int groupCCollapsedW = overflowW + gapX + bypassW + gapX + railW;
+
+    const int moduleSpaceIfFull = row.getRight() - (groupAEnd + groupGap) - (groupGap + groupCFullW);
+    const bool collapse = moduleSpaceIfFull < kMinModulePort;
+
+    const int groupCW = collapse ? groupCCollapsedW : groupCFullW;
+    int xc = row.getRight() - groupCW;
+    const int groupCStart = xc;
+
+    overflowButton_.setVisible (collapse);
+    presetButton.setVisible (! collapse);
+    saveButton.setVisible (! collapse);
+    slotAButton.setVisible (! collapse);
+    slotBButton.setVisible (! collapse);
+
+    if (collapse)
+    {
+        placeLtr (xc, overflowButton_, overflowW);
+    }
+    else
+    {
+        placeLtr (xc, presetButton, presetW);
+        placeLtr (xc, saveButton,   presetW);
+        placeLtr (xc, slotAButton,  smallBtnW);
+        placeLtr (xc, slotBButton,  smallBtnW);
+    }
+    placeLtr (xc, bypassButton, bypassW);
+    railToggleButton.setBounds (xc, y, railW, buttonH);
+
+    // ── Group B: module setting buttons (elastic middle, scrollable) ─────
+    constexpr int kModuleBtnW = 72;
+    constexpr int kModuleGap  = 6;
+    constexpr int kNumBtns    = 4;
+    constexpr int kContainerW = kNumBtns * kModuleBtnW + (kNumBtns - 1) * kModuleGap;
+
+    const int portX = groupAEnd + groupGap;
+    const int portW = juce::jmax (0, groupCStart - groupGap - portX);
     moduleScrollPort_.setBounds (portX, y, portW, buttonH);
 
-    // Container is exactly wide enough for all 4 buttons side-by-side
     moduleBtnContainer_.setBounds (0, 0, kContainerW, buttonH);
     int mx = 0;
     spectrumBtn_.setBounds (mx, 0, kModuleBtnW, buttonH); mx += kModuleBtnW + kModuleGap;
@@ -354,7 +391,9 @@ void HeaderBar::setRailOpen (bool isOpen)
 {
     railOpen_ = isOpen;
     railToggleButton.setToggleState (isOpen, juce::dontSendNotification);
-    railToggleButton.setButtonText (isOpen ? "Hide" : "Show");
+    // Small chevron glyph instead of a wide "Show"/"Hide" label (rail is on the right edge).
+    railToggleButton.setButtonText (isOpen ? juce::CharPointer_UTF8 ("\xe2\x80\xba")   // ›  collapse
+                                           : juce::CharPointer_UTF8 ("\xe2\x80\xb9")); // ‹  expand
     railToggleButton.setTooltip (isOpen ? "Collapse right control rail" : "Expand right control rail");
     updateModuleButtons();
 }

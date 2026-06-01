@@ -7,6 +7,11 @@
 #include "../../PluginProcessor.h"
 #include "MeterComponent.h"
 
+namespace AnalyzerPro
+{
+class TraceColorStore;
+}
+
 class MeterGroupComponent : public juce::Component,
                             private juce::Timer
 {
@@ -37,6 +42,7 @@ public:
 
     void setScaleMode (ScaleMode mode);
     ScaleMode getScaleMode() const noexcept { return scaleMode_; }
+    void setTraceColorStore (AnalyzerPro::TraceColorStore* store) noexcept;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -59,10 +65,11 @@ private:
     DisplayMode displayMode_ = DisplayMode::Rms;
     ScaleMode scaleMode_ = ScaleMode::FullRange;
     ChannelMode channelMode_ = ChannelMode::Stereo; // Default Stereo
+    AnalyzerPro::TraceColorStore* traceColors_ = nullptr;
 
     juce::TextButton rmsButton_ { "RMS" };
     juce::TextButton peakButton_ { "PEAK" };
-    juce::TextButton scaleFullButton_ { "Full" };
+    juce::TextButton scaleFullButton_ { "F." };
     juce::TextButton scale24Button_ { "24" };
     juce::TextButton scale12Button_ { "12" };
     juce::TextButton scale6Button_ { "6" };

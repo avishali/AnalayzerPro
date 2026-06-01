@@ -1,10 +1,19 @@
 #include "StereoScopeComponent.h"
 
+#include "../theme/TraceColors.h"
+
 #include <cmath>
 
 namespace
 {
 constexpr float kEdgeInset = 0.5f;
+
+juce::Colour traceColourOrFallback (AnalyzerPro::TraceColorStore* store,
+                                    AnalyzerPro::TraceId id,
+                                    juce::Colour fallback)
+{
+    return store != nullptr ? store->get (id) : fallback;
+}
 }
 
 StereoScopeComponent::StereoScopeComponent (mdsp_ui::UiContext& ui)
@@ -209,6 +218,7 @@ void StereoScopeComponent::paint (juce::Graphics& g)
 
     if (enabled_)
     {
+        const auto scopeColour = traceColourOrFallback (traceColors_, AnalyzerPro::TraceId::Peak, theme.seriesPeak);
         g.saveState();
         g.reduceClipRegion (viewportRect_);
 
@@ -225,19 +235,19 @@ void StereoScopeComponent::paint (juce::Graphics& g)
                                          ? 1.0f
                                          : 1.0f - (static_cast<float> (age) / static_cast<float> (activeFrames - 1));
             const float alpha = juce::jmap (newestness, 0.08f, 0.62f);
-            g.setColour (theme.seriesPeak.withAlpha (alpha));
+            g.setColour (scopeColour.withAlpha (alpha));
             g.strokePath (path, juce::PathStrokeType (1.05f));
         }
 
         if (! cachedLivePath_.isEmpty())
         {
-            g.setColour (theme.seriesPeak.withAlpha (0.82f));
+            g.setColour (scopeColour.withAlpha (0.82f));
             g.strokePath (cachedLivePath_, juce::PathStrokeType (1.25f));
         }
 
         if (state_.holdEnabled && ! cachedHoldPath_.isEmpty())
         {
-            g.setColour (theme.seriesPeak.withAlpha (0.45f));
+            g.setColour (scopeColour.withAlpha (0.45f));
             g.strokePath (cachedHoldPath_, juce::PathStrokeType (1.8f));
         }
 

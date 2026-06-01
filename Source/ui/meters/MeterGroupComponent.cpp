@@ -182,6 +182,16 @@ void MeterGroupComponent::setHoldEnabled (bool hold)
     pushRenderStates();
 }
 
+void MeterGroupComponent::setTraceColorStore (AnalyzerPro::TraceColorStore* store) noexcept
+{
+    traceColors_ = store;
+
+    if (meter0_ != nullptr)
+        meter0_->setTraceColorStore (traceColors_);
+    if (meter1_ != nullptr)
+        meter1_->setTraceColorStore (traceColors_);
+}
+
 void MeterGroupComponent::setScaleMode (ScaleMode mode)
 {
     if (scaleMode_ == mode)
@@ -302,6 +312,7 @@ void MeterGroupComponent::resized()
 
     const int toggleTotalHeight = 44;
     toggleArea_ = b.removeFromBottom (toggleTotalHeight);
+    b.removeFromBottom (6); // gap so the readout/buttons sit clear of the meter bar
     metersArea_ = b.reduced (static_cast<int> (m.strokeThick), static_cast<int> (m.strokeThick));
 
     auto toggle = toggleArea_.reduced (m.padSmall, static_cast<int> (m.strokeThick));

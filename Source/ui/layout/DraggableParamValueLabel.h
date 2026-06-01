@@ -21,6 +21,10 @@ public:
 
     void setParameter (juce::RangedAudioParameter* param);
 
+    /** Manual (non-APVTS) mode: drag/wheel a plain value in [min,max]; reports via onManualChanged. */
+    void setManualValue (double value, double min, double max);
+    std::function<void (double)> onManualChanged;
+
     void paint (juce::Graphics& g) override;
     void timerCallback() override;
     void mouseEnter (const juce::MouseEvent&) override;
@@ -41,6 +45,12 @@ private:
     double startValue_ = 0.0;
     int startY_ = 0;
     juce::String suffix_ = " ms";
+
+    // Manual mode (no APVTS param)
+    bool   manual_ = false;
+    double manualValue_ = 0.0;
+    double manualMin_ = 0.0;
+    double manualMax_ = 1.0;
 
     static constexpr int kPixelsForFullRange = 800;
     static constexpr double kFineMultiplier = 0.1;

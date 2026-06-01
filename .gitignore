@@ -10,6 +10,9 @@ build-xcode/
 installer/
 .cache/
 
+# Agent-created backups (e.g. files moved aside during submodule checkout)
+.agent-backups/
+
 # CMake
 CMakeCache.txt
 CMakeFiles/

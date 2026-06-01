@@ -1,5 +1,7 @@
 #include "MeterComponent.h"
 
+#include "../theme/TraceColors.h"
+
 #include <mdsp_ui/UiContext.h>
 #include <mdsp_ui/meters/MeterRenderStateProvider.h>
 
@@ -16,6 +18,13 @@ constexpr float kDbScaleLineDense = 0.75f;
 static bool nearTick (float value, float target) noexcept
 {
     return std::abs (value - target) < 0.001f;
+}
+
+static juce::Colour traceColourOrFallback (AnalyzerPro::TraceColorStore* store,
+                                           AnalyzerPro::TraceId id,
+                                           juce::Colour fallback)
+{
+    return store != nullptr ? store->get (id) : fallback;
 }
 
 /** dB grid lines + labels for zoomed scales; uses same normalisation as MeterRenderStateProvider. */
@@ -234,6 +243,7 @@ void MeterComponent::resized()
 
     labelArea_ = b.removeFromTop (16);
     numericArea_ = b.removeFromBottom (20).reduced (2, 2);
+    b.removeFromBottom (5); // gap so the meter bar doesn't crowd the numeric readout
 
     ledArea_ = labelArea_.removeFromRight (14).withSizeKeepingCentre (10, 10);
     meterArea_ = b.reduced (6, 2);
@@ -243,6 +253,11 @@ void MeterComponent::paint (juce::Graphics& g)
 {
     const auto& theme = ui_.theme();
     const auto& m = ui_.metrics();
+    const auto peakColour = traceColourOrFallback (traceColors_, AnalyzerPro::TraceId::Peak, theme.seriesPeak);
+    const auto rmsColour = traceColourOrFallback (traceColors_, AnalyzerPro::TraceId::Rms, theme.accent);
+    const auto mainColour = (renderState_.displayMode == mdsp_ui::meters::MeterDisplayMode::Peak)
+                                ? peakColour
+                                : rmsColour;
 
     g.setColour (theme.panel.withAlpha (0.9f));
     g.fillRoundedRectangle (meterArea_.toFloat(), m.rSmall);
@@ -288,18 +303,18 @@ void MeterComponent::paint (juce::Graphics& g)
         const auto mainRectF = mainRect.toFloat();
 
         // Keep incoming signal visually in front with a subtle soft glow.
-        juce::ColourGradient signalGlow (theme.accent.withAlpha (0.34f),
+        juce::ColourGradient signalGlow (mainColour.withAlpha (0.34f),
                                          xLeft + (width * 0.5f), mainTop,
-                                         theme.accent.withAlpha (0.05f),
+                                         mainColour.withAlpha (0.05f),
                                          xLeft + (width * 0.5f), yMax,
                                          false);
         g.setGradientFill (signalGlow);
         g.fillRoundedRectangle (mainRectF.expanded (1.0f, 0.0f), m.rSmall);
 
-        g.setColour (theme.accent.withAlpha (0.85f));
+        g.setColour (mainColour.withAlpha (0.85f));
         g.fillRoundedRectangle (mainRectF, m.rSmall);
 
-        g.setColour (theme.accent.brighter (0.22f).withAlpha (0.72f));
+        g.setColour (mainColour.brighter (0.22f).withAlpha (0.72f));
         g.drawLine (xLeft + 1.0f,
                     mainTop + 0.5f,
                     xRight - 1.0f,
@@ -313,14 +328,14 @@ void MeterComponent::paint (juce::Graphics& g)
     {
         if (renderState_.peakNorm > renderState_.rmsNorm)
         {
-            g.setColour (theme.accent.withAlpha (0.3f));
+            g.setColour (peakColour.withAlpha (0.3f));
             g.fillRect (xLeft + 2.0f,
                         peakTop,
                         width - 4.0f,
                         mainTop - peakTop);
         }
 
-        g.setColour (theme.seriesPeak.withAlpha (0.95f));
+        g.setColour (peakColour.withAlpha (0.95f));
         g.drawLine (xLeft + m.strokeThick,
                     peakTop,
                     xRight - m.strokeThick,
@@ -329,7 +344,7 @@ void MeterComponent::paint (juce::Graphics& g)
     }
     else
     {
-        g.setColour (theme.seriesPeak.withAlpha (0.95f));
+        g.setColour (peakColour.withAlpha (0.95f));
         g.drawLine (xLeft + m.strokeThick,
                     mainTop,
                     xRight - m.strokeThick,
@@ -370,10 +385,10 @@ void MeterComponent::paint (juce::Graphics& g)
     auto peakBounds = numBounds.removeFromTop (numBounds.getHeight() / 2);
     auto rmsBounds = numBounds;
 
-    g.setColour (theme.seriesPeak.withAlpha (0.9f));
+    g.setColour (peakColour.withAlpha (0.9f));
     g.drawText (numericTextPeak_, peakBounds, juce::Justification::centred);
 
-    g.setColour (theme.accent.withAlpha (0.9f));
+    g.setColour (rmsColour.withAlpha (0.9f));
     g.drawText (numericTextRms_, rmsBounds, juce::Justification::centred);
 
     if (renderState_.bypassed)

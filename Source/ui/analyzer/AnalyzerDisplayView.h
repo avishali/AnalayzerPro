@@ -11,6 +11,7 @@
 #include <array>
 #include <vector>
 #include "../../PluginProcessor.h"
+#include "../theme/TraceColors.h"
 
 #if !defined(ANALYZERPRO_MODE_DEBUG_OVERLAY)
 #define ANALYZERPRO_MODE_DEBUG_OVERLAY 0
@@ -55,6 +56,9 @@ public:
 
     AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& processor);
     ~AnalyzerDisplayView() override;
+
+    /** User-customisable trace colours; applied to the render theme each frame. */
+    void setTraceColorStore (AnalyzerPro::TraceColorStore* store) { traceColors_ = store; }
 
     void paint (juce::Graphics& g) override;
     void paintOverChildren (juce::Graphics& g) override;
@@ -164,6 +168,7 @@ private:
     mdsp_ui::UiContext& ui_;
     AnalayzerProAudioProcessor& audioProcessor;
     mdsp_ui::Theme theme_ { mdsp_ui::ThemeVariant::Custom };
+    AnalyzerPro::TraceColorStore* traceColors_ = nullptr; // user trace colours (not owned)
     Mode currentMode_ = Mode::FFT;
     DbRange dbRange_ = DbRange::Minus90;
     DbRange appliedDbRange_ = DbRange::Minus90;

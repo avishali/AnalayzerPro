@@ -64,13 +64,34 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     });
     rail_.onPreferredHeightChanged = [this] { resized(); };
 
-    rail_.onScopeModeChanged = [] (int id)
+    // User-customisable trace colours: stored in apvts.state (so they persist with
+    // the session and inside presets) and shared by the rail swatches and the display.
+    if (apvts_ != nullptr)
     {
-        juce::ignoreUnused (id);
+        traceColors_ = std::make_unique<AnalyzerPro::TraceColorStore> (*apvts_);
+        traceColors_->loadUserDefaultIntoEmpty();
+        rail_.setTraceColorStore (traceColors_.get());
+        analyzerView_.setTraceColorStore (traceColors_.get());
+        inputMeters_.setTraceColorStore (traceColors_.get());
+        outputMeters_.setTraceColorStore (traceColors_.get());
+        stereoScopeComponent_.setTraceColorStore (traceColors_.get());
+        phaseFanScopeComponent_.setTraceColorStore (traceColors_.get());
+    }
+
+    rail_.onScopeModeChanged = [this] (int id)
+    {
+        // 1 = Peak (fast attack), 2 = RMS (smooth) — phase fan.
+        phaseFanProvider_.setPeakMode (id == 1);
+        phaseFanScopeComponent_.setRenderState (phaseFanProvider_.state());
     };
     rail_.onScopeShapeChanged = [] (int id)
     {
         juce::ignoreUnused (id);
+    };
+    rail_.onScopeReleaseChanged = [this] (float ms)
+    {
+        phaseFanProvider_.setReleaseMs (ms);
+        phaseFanScopeComponent_.setRenderState (phaseFanProvider_.state());
     };
 
     // Wire parameter changes to AnalyzerEngine and AnalyzerDisplayView.
@@ -653,6 +674,17 @@ void MainView::paint (juce::Graphics& g)
     // Background from shared theme (variant-aware)
     const auto& theme = ui_.theme();
     g.fillAll (theme.background);
+
+    // Thin outer bezel: a two-tone hairline frame just inside the window edge,
+    // giving the panel definition without the old thick empty margin.
+    {
+        auto frame = getLocalBounds().toFloat().reduced (1.5f);
+        const float radius = 5.0f;
+        g.setColour (theme.panel.brighter (0.18f));        // faint top highlight
+        g.drawRoundedRectangle (frame, radius, 1.0f);
+        g.setColour (theme.background.darker (0.45f));      // recessed inner line
+        g.drawRoundedRectangle (frame.reduced (1.0f), radius - 1.0f, 1.0f);
+    }
 
 #if JUCE_DEBUG
     // Temporary debug overlay

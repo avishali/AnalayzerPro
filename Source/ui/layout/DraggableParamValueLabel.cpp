@@ -28,6 +28,16 @@ void DraggableParamValueLabel::setParameter (juce::RangedAudioParameter* param)
     }
 }
 
+void DraggableParamValueLabel::setManualValue (double value, double min, double max)
+{
+    manual_ = true;
+    param_ = nullptr;
+    manualMin_ = min;
+    manualMax_ = max;
+    manualValue_ = juce::jlimit (min, max, value);
+    repaint();
+}
+
 void DraggableParamValueLabel::timerCallback()
 {
     if (param_ != nullptr && ! dragging_)
@@ -40,7 +50,9 @@ void DraggableParamValueLabel::paint (juce::Graphics& g)
     const auto& type = ui_.type();
 
     double value = 0.0;
-    if (param_ != nullptr)
+    if (manual_)
+        value = manualValue_;
+    else if (param_ != nullptr)
         value = param_->getNormalisableRange().convertFrom0to1 (param_->getValue());
 
     juce::String text = formatValue (value);
@@ -65,6 +77,14 @@ void DraggableParamValueLabel::mouseExit (const juce::MouseEvent&)
 
 void DraggableParamValueLabel::mouseDown (const juce::MouseEvent& e)
 {
+    if (manual_)
+    {
+        dragging_ = true;
+        startValue_ = manualValue_;
+        startY_ = e.getPosition().getY();
+        return;
+    }
+
     if (param_ == nullptr)
         return;
 
@@ -76,13 +96,25 @@ void DraggableParamValueLabel::mouseDown (const juce::MouseEvent& e)
 
 void DraggableParamValueLabel::mouseDrag (const juce::MouseEvent& e)
 {
-    if (param_ == nullptr || ! dragging_)
+    if (! dragging_)
         return;
 
     const int deltaY = startY_ - e.getPosition().getY(); // Up = positive = increase
     const bool fine = e.mods.isShiftDown();
     const bool coarse = e.mods.isCommandDown();
     const double sens = getSensitivity (fine, coarse);
+
+    if (manual_)
+    {
+        manualValue_ = juce::jlimit (manualMin_, manualMax_, startValue_ + deltaY * sens);
+        if (onManualChanged)
+            onManualChanged (manualValue_);
+        repaint();
+        return;
+    }
+
+    if (param_ == nullptr)
+        return;
 
     const auto& range = param_->getNormalisableRange();
     double newValue = startValue_ + deltaY * sens;
@@ -96,6 +128,13 @@ void DraggableParamValueLabel::mouseDrag (const juce::MouseEvent& e)
 
 void DraggableParamValueLabel::mouseUp (const juce::MouseEvent&)
 {
+    if (manual_)
+    {
+        dragging_ = false;
+        repaint();
+        return;
+    }
+
     if (param_ != nullptr && dragging_)
     {
         param_->endChangeGesture();
@@ -106,12 +145,21 @@ void DraggableParamValueLabel::mouseUp (const juce::MouseEvent&)
 
 void DraggableParamValueLabel::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& wheel)
 {
-    if (param_ == nullptr)
-        return;
-
     const bool fine = juce::ModifierKeys::getCurrentModifiers().isShiftDown();
     const bool coarse = juce::ModifierKeys::getCurrentModifiers().isCommandDown();
     const double sens = getSensitivity (fine, coarse);
+
+    if (manual_)
+    {
+        manualValue_ = juce::jlimit (manualMin_, manualMax_, manualValue_ + (-wheel.deltaY * sens * 5.0));
+        if (onManualChanged)
+            onManualChanged (manualValue_);
+        repaint();
+        return;
+    }
+
+    if (param_ == nullptr)
+        return;
 
     const auto& range = param_->getNormalisableRange();
     double value = range.convertFrom0to1 (param_->getValue());
@@ -134,11 +182,14 @@ juce::String DraggableParamValueLabel::formatValue (double value) const
 
 double DraggableParamValueLabel::getSensitivity (bool fine, bool coarse) const
 {
-    if (param_ == nullptr)
+    double fullRange;
+    if (manual_)
+        fullRange = manualMax_ - manualMin_;
+    else if (param_ != nullptr)
+        fullRange = param_->getNormalisableRange().end - param_->getNormalisableRange().start;
+    else
         return 1.0;
 
-    const auto& range = param_->getNormalisableRange();
-    const double fullRange = range.end - range.start;
     double step = fullRange / static_cast<double> (kPixelsForFullRange);
 
     if (fine)

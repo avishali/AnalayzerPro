@@ -164,12 +164,32 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
     , vBlankRenderMarshaler_ (*this)
     , navOverlay_ (ui)
 {
+    // Default trace colours (match the built-in look until a user store is attached).
     theme_.seriesRms = juce::Colours::lightblue.withAlpha (theme_.seriesRms.getFloatAlpha());
     theme_.seriesPeak = juce::Colour (0xffffff33).withAlpha (theme_.seriesPeak.getFloatAlpha());
     theme_.seriesHold = theme_.seriesPeak;
     addAndMakeVisible (analyzerBridgeWidget_);
     // Analyzer display widget owns render/model/controller internals.
-    analyzerBridgeWidget_.setGetTheme ([this]() -> const mdsp_ui::Theme& { return theme_; });
+    // The render reads the theme every frame, so applying user trace colours here
+    // makes edits (and preset/state reloads) appear live with no extra wiring.
+    analyzerBridgeWidget_.setGetTheme ([this]() -> const mdsp_ui::Theme&
+    {
+        if (traceColors_ != nullptr)
+        {
+            using AnalyzerPro::TraceId;
+            const float a = theme_.seriesPeak.getFloatAlpha();
+            theme_.seriesStereo = traceColors_->get (TraceId::LR);
+            theme_.seriesMono   = traceColors_->get (TraceId::Mono);
+            theme_.seriesLeft   = traceColors_->get (TraceId::L);
+            theme_.seriesRight  = traceColors_->get (TraceId::R);
+            theme_.seriesMid    = traceColors_->get (TraceId::Mid);
+            theme_.seriesSide   = traceColors_->get (TraceId::Side);
+            theme_.seriesRms    = traceColors_->get (TraceId::Rms);
+            theme_.seriesPeak   = traceColors_->get (TraceId::Peak).withAlpha (a);
+            theme_.seriesHold   = theme_.seriesPeak;
+        }
+        return theme_;
+    });
 
     // ── Nav overlay ──────────────────────────────────────────────────────
     // Icon painters: all lambdas receive (Graphics&, iconBounds). Colour is

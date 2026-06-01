@@ -7,7 +7,9 @@
 #include <mdsp_ui/controls/ChoiceRow.h>
 #include <mdsp_ui/controls/ToggleRow.h>
 #include "DraggableParamValueLabel.h"
+#include "../theme/TraceColors.h"
 #include <functional>
+#include <array>
 
 //==============================================================================
 /**
@@ -30,6 +32,9 @@ public:
 
     void setControlBinder (AnalyzerPro::ControlBinder& binder);
     void setResetPeaksCallback (std::function<void()> cb);
+
+    /** Attach the user trace-colour store; enables the Traces-module colour swatches. */
+    void setTraceColorStore (AnalyzerPro::TraceColorStore* store);
     /** 0 = Compact, 1 = Normal, 2 = Wide. All sections always visible; viewport handles overflow. */
     void setLayoutMode (int mode) { layoutMode_ = juce::jlimit (0, 2, mode); }
 
@@ -51,8 +56,9 @@ public:
     std::function<void(int)> onModeChanged;
 
     // Scope Callbacks
-    std::function<void(int)> onScopeModeChanged;  // 1=Peak, 2=RMS
-    std::function<void(int)> onScopeShapeChanged; // 1=Lissajous, 2=Scatter
+    std::function<void(int)> onScopeModeChanged;   // 1=Peak, 2=RMS (phase fan)
+    std::function<void(int)> onScopeShapeChanged;  // 1=Lissajous, 2=Scatter (legacy)
+    std::function<void(float)> onScopeReleaseChanged; // phase-fan release/decay (ms)
 
     void paint (juce::Graphics& g) override;
     void resized() override;
@@ -85,6 +91,8 @@ private:
     juce::ComboBox scopeModeCombo;
     juce::ComboBox scopeShapeCombo;
     juce::ComboBox scopeInputCombo; // New
+    juce::Label scopeReleaseLabel_;                            // Phase-fan release/decay
+    AnalyzerPro::DraggableParamValueLabel scopeReleaseValue_;  // draggable ms value (manual mode)
     juce::ToggleButton scopePeakHoldButton;
     
     // Meter Controls
@@ -143,6 +151,16 @@ private:
     // Weighting
     juce::ComboBox weightingCombo;
     mdsp_ui::ChoiceRow weightingRow;
-    
+
+    // Trace colour customisation (Traces module). Index follows TraceId order.
+    AnalyzerPro::TraceColorStore* traceColors_ = nullptr; // not owned
+    std::array<AnalyzerPro::ColorSwatch, AnalyzerPro::kNumTraceColors> traceSwatches_;
+    juce::Label      peakColorLabel_;                 // label for the Peak colour row (no toggle)
+    juce::TextButton resetColorsButton_ { "Reset" };
+    juce::TextButton saveColorsDefaultButton_ { "Save Default" };
+    void openTraceColourPicker (AnalyzerPro::TraceId id);
+    void refreshTraceSwatches();
+    void setTraceColorUiVisible (bool visible);
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ControlRail)
 };

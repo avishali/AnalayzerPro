@@ -4,6 +4,11 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <mdsp_ui/UiContext.h>
 
+namespace AnalyzerPro
+{
+class TraceColorStore;
+}
+
 class PhaseFanScopeComponent : public juce::Component
 {
 public:
@@ -11,6 +16,7 @@ public:
     ~PhaseFanScopeComponent() override = default;
 
     void setRenderState (const mdsp_ui::scopes::PhaseFanRenderState& state);
+    void setTraceColorStore (AnalyzerPro::TraceColorStore* store) noexcept { traceColors_ = store; }
 
     void paint (juce::Graphics& g) override;
     void resized() override;
@@ -20,6 +26,7 @@ private:
 
     mdsp_ui::UiContext& ui_;
     mdsp_ui::scopes::PhaseFanRenderState state_ {};
+    AnalyzerPro::TraceColorStore* traceColors_ = nullptr;
 
     juce::Path fanFillPath_;
     juce::Path contourPath_;

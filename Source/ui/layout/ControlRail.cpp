@@ -5,6 +5,7 @@
 ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     : ui_ (ui),
       releaseTimeValue_ (ui),
+      scopeReleaseValue_ (ui),
       spectrumHeader (ui, "Spectrum"),
       scopesHeader (ui, "Scopes"),
       metersHeader (ui, "Meters"),
@@ -91,7 +92,22 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     scopeShapeRow.attachToParent (*this);
     scopeInputRow.attachToParent (*this);
     scopePeakHoldRow.attachToParent (*this);
-    scopePeakHoldButton.setTooltip ("Hold stereo scope peak.");
+    scopePeakHoldButton.setTooltip ("Hold phase-fan peak outline.");
+
+    // Phase-fan release/decay: draggable ms value (like the spectrum Release Time).
+    scopeReleaseLabel_.setText ("Release", juce::dontSendNotification);
+    scopeReleaseLabel_.setFont (type.labelSmallFont());
+    scopeReleaseLabel_.setJustificationType (juce::Justification::centredLeft);
+    scopeReleaseLabel_.setColour (juce::Label::textColourId, theme.grey);
+    scopeReleaseLabel_.setTooltip ("Phase-fan release / decay time. Drag value or use mouse wheel.");
+    addChildComponent (scopeReleaseLabel_);
+    scopeReleaseValue_.setManualValue (400.0, 50.0, 5000.0);
+    scopeReleaseValue_.onManualChanged = [this] (double ms)
+    {
+        if (onScopeReleaseChanged)
+            onScopeReleaseChanged (static_cast<float> (ms));
+    };
+    addChildComponent (scopeReleaseValue_);
     
     meterInputRow.attachToParent (*this);
     meterPeakHoldRow.attachToParent (*this);
@@ -111,6 +127,32 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     showMidButton.setTooltip ("Show mid (L+R) trace.");
     showSideButton.setTooltip ("Show side (L-R) trace.");
     showRmsButton.setTooltip ("Show RMS trace.");
+
+    // Trace colour swatches (Traces module). Hidden until a store is attached + module active.
+    for (size_t i = 0; i < traceSwatches_.size(); ++i)
+    {
+        const auto id = static_cast<AnalyzerPro::TraceId> (i);
+        traceSwatches_[i].setTooltip ("Click to choose this trace's colour");
+        traceSwatches_[i].onClick = [this, id] { openTraceColourPicker (id); };
+        addChildComponent (traceSwatches_[i]);
+    }
+    peakColorLabel_.setText ("Peak", juce::dontSendNotification);
+    peakColorLabel_.setJustificationType (juce::Justification::centredLeft);
+    peakColorLabel_.setColour (juce::Label::textColourId, ui_.theme().text);
+    addChildComponent (peakColorLabel_);
+
+    resetColorsButton_.setTooltip ("Reset all trace colours to defaults");
+    resetColorsButton_.onClick = [this]
+    {
+        if (traceColors_ != nullptr) { traceColors_->resetToDefaults(); refreshTraceSwatches(); }
+    };
+    saveColorsDefaultButton_.setTooltip ("Save current trace colours as the default for new instances");
+    saveColorsDefaultButton_.onClick = [this]
+    {
+        if (traceColors_ != nullptr) traceColors_->saveAsUserDefault();
+    };
+    addChildComponent (resetColorsButton_);
+    addChildComponent (saveColorsDefaultButton_);
 
     smoothingRow.attachToParent (*this);
     weightingRow.attachToParent (*this);
@@ -146,7 +188,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     // Scope Combos
     scopeModeCombo.addItem ("Peak", 1);
     scopeModeCombo.addItem ("RMS", 2);
-    scopeModeCombo.setSelectedId (1, juce::dontSendNotification);
+    scopeModeCombo.setSelectedId (2, juce::dontSendNotification); // default RMS (matches provider default)
     scopeModeCombo.setTooltip ("Stereo scope display: Peak or RMS.");
     scopeModeCombo.onChange = [this] { if (onScopeModeChanged) onScopeModeChanged (scopeModeCombo.getSelectedId()); };
 
@@ -225,6 +267,53 @@ void ControlRail::triggerResetPeaks()
         onResetPeaks_();
 }
 
+void ControlRail::setTraceColorStore (AnalyzerPro::TraceColorStore* store)
+{
+    traceColors_ = store;
+    refreshTraceSwatches();
+    resized();
+}
+
+void ControlRail::refreshTraceSwatches()
+{
+    if (traceColors_ == nullptr)
+        return;
+    for (size_t i = 0; i < traceSwatches_.size(); ++i)
+        traceSwatches_[i].setSwatchColour (traceColors_->get (static_cast<AnalyzerPro::TraceId> (i)));
+}
+
+void ControlRail::setTraceColorUiVisible (bool visible)
+{
+    for (auto& sw : traceSwatches_)
+        sw.setVisible (visible);
+    peakColorLabel_.setVisible (visible);
+    resetColorsButton_.setVisible (visible);
+    saveColorsDefaultButton_.setVisible (visible);
+}
+
+void ControlRail::openTraceColourPicker (AnalyzerPro::TraceId id)
+{
+    if (traceColors_ == nullptr)
+        return;
+
+    auto selector = std::make_unique<AnalyzerPro::LiveColourSelector> (
+        juce::ColourSelector::showColourAtTop
+        | juce::ColourSelector::showColourspace
+        | juce::ColourSelector::showSliders);
+    selector->setCurrentColour (traceColors_->get (id), juce::dontSendNotification);
+    selector->setSize (240, 300);
+    selector->onColour = [this, id] (juce::Colour c)
+    {
+        if (traceColors_ != nullptr)
+            traceColors_->set (id, c);
+        refreshTraceSwatches();
+    };
+
+    juce::CallOutBox::launchAsynchronously (std::move (selector),
+                                            traceSwatches_[static_cast<size_t> (id)].getScreenBounds(),
+                                            this);
+}
+
 void ControlRail::expandAnalysisModeSection()
 {
     setActiveModule (ActiveModule::Spectrum);
@@ -275,13 +364,15 @@ int ControlRail::getPreferredHeight() const noexcept
             y += secondaryHeight + valueLabelH + gapSmall;
             break;
         case ActiveModule::Scopes:
-            y += choiceRowH * 3 + toggleRowH;
+            y += choiceRowH + (secondaryHeight + valueLabelH + gapSmall) + toggleRowH;
             break;
         case ActiveModule::Meters:
             y += choiceRowH + toggleRowH;
             break;
         case ActiveModule::Traces:
             y += toggleRowH * 7;
+            if (traceColors_ != nullptr)
+                y += toggleRowH * 2; // Peak colour row + reset/save buttons
             break;
     }
 
@@ -364,6 +455,8 @@ void ControlRail::resized()
     setChoiceVisible (scopeModeRow, false);
     setChoiceVisible (scopeShapeRow, false);
     setChoiceVisible (scopeInputRow, false);
+    scopeReleaseLabel_.setVisible (false);
+    scopeReleaseValue_.setVisible (false);
     setChoiceVisible (meterInputRow, false);
 
     setToggleVisible (holdRow, false);
@@ -376,6 +469,7 @@ void ControlRail::resized()
     setToggleVisible (showMidRow, false);
     setToggleVisible (showSideRow, false);
     setToggleVisible (showRmsRow, false);
+    setTraceColorUiVisible (false);
 
     auto addSectionHeader = [&](mdsp_ui::SectionHeader& header)
     {
@@ -444,10 +538,17 @@ void ControlRail::resized()
         case ActiveModule::Scopes:
         {
             addSectionHeader (scopesHeader);
-            placeChoiceRow (scopeModeRow);
-            placeChoiceRow (scopeShapeRow);
-            placeChoiceRow (scopeInputRow);
-            placeToggleRow (scopePeakHoldRow);
+            placeChoiceRow (scopeModeRow);    // Peak / RMS
+
+            // Release / decay — draggable ms value (label above value, like the spectrum).
+            scopeReleaseLabel_.setVisible (true);
+            scopeReleaseLabel_.setBounds (x, y, w, secondaryHeight);
+            y += secondaryHeight;
+            scopeReleaseValue_.setVisible (true);
+            scopeReleaseValue_.setBounds (x, y, w, valueLabelH);
+            y += valueLabelH + gapSmall;
+
+            placeToggleRow (scopePeakHoldRow); // Peak hold
             break;
         }
         case ActiveModule::Meters:
@@ -460,13 +561,55 @@ void ControlRail::resized()
         case ActiveModule::Traces:
         {
             addSectionHeader (tracesHeader);
-            placeToggleRow (showLrRow);
-            placeToggleRow (showMonoRow);
-            placeToggleRow (showLRow);
-            placeToggleRow (showRRow);
-            placeToggleRow (showMidRow);
-            placeToggleRow (showSideRow);
-            placeToggleRow (showRmsRow);
+
+            const bool hasColors = (traceColors_ != nullptr);
+            const int swatchSize = juce::jmin (18, buttonSmallH);
+            const int swatchRight = bounds.getRight() - swatchSize;
+            const int rowTrim = hasColors ? (swatchSize + gapSmall) : 0;
+
+            // A trace toggle row, with its colour swatch on the right edge.
+            auto placeTraceRow = [&] (mdsp_ui::ToggleRow& row, AnalyzerPro::TraceId id)
+            {
+                setToggleVisible (row, true);
+                const int y0 = y;
+                row.layout (bounds.withTrimmedRight (rowTrim), y);
+                if (hasColors)
+                {
+                    auto& sw = traceSwatches_[static_cast<size_t> (id)];
+                    sw.setVisible (true);
+                    sw.setBounds (swatchRight, y0 + (toggleRowH - swatchSize) / 2, swatchSize, swatchSize);
+                }
+                y = y0 + toggleRowH;
+            };
+
+            placeTraceRow (showLrRow,   AnalyzerPro::TraceId::LR);
+            placeTraceRow (showMonoRow, AnalyzerPro::TraceId::Mono);
+            placeTraceRow (showLRow,    AnalyzerPro::TraceId::L);
+            placeTraceRow (showRRow,    AnalyzerPro::TraceId::R);
+            placeTraceRow (showMidRow,  AnalyzerPro::TraceId::Mid);
+            placeTraceRow (showSideRow, AnalyzerPro::TraceId::Side);
+            placeTraceRow (showRmsRow,  AnalyzerPro::TraceId::Rms);
+
+            if (hasColors)
+            {
+                // Peak colour row (Peak trace has no visibility toggle — colour only).
+                const int yPeak = y;
+                peakColorLabel_.setVisible (true);
+                peakColorLabel_.setBounds (x, yPeak, w - rowTrim, toggleRowH);
+                auto& peakSw = traceSwatches_[static_cast<size_t> (AnalyzerPro::TraceId::Peak)];
+                peakSw.setVisible (true);
+                peakSw.setBounds (swatchRight, yPeak + (toggleRowH - swatchSize) / 2, swatchSize, swatchSize);
+                y = yPeak + toggleRowH;
+
+                // Reset / Save-default actions.
+                y += gapSmall;
+                const int halfW = (w - gapSmall) / 2;
+                resetColorsButton_.setVisible (true);
+                resetColorsButton_.setBounds (x, y, halfW, buttonSmallH);
+                saveColorsDefaultButton_.setVisible (true);
+                saveColorsDefaultButton_.setBounds (x + halfW + gapSmall, y, w - halfW - gapSmall, buttonSmallH);
+                y += buttonSmallH + gapSmall;
+            }
             break;
         }
     }
