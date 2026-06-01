@@ -33,6 +33,12 @@ Each runbook is a STOP-gated Cursor prompt (IMPLEMENTER + VERIFIER). Apply one p
   - Build (universal Release) → PACE-sign AAX → delete duplicates → install one canonical copy per format → verify version + build date.
   - Version is already wired to CMake via `scripts/plugin_version.sh` (do not hardcode).
 
+### Pin the melechdsp-hq submodule WIP (before beta)
+- `RUNBOOKS/SUBMODULE_PIN_MELECHDSP_HQ_V1.md`
+  - Branch the detached-HEAD submodule, commit the glassy-motion + triangular-smoothing WIP, push to origin, bump the parent pointer.
+  - CONFIRMED: shared/mdsp_dsp/{include,src}/dynamics MUST be committed (the build's CMakeLists compiles them); exclude cmake/cmake and dsp_bench.
+  - Do this BEFORE RESTORE_SHIPPING_STATE so the beta build is reproducible.
+
 ### Restore shippable state after dev iteration
 - `RUNBOOKS/RESTORE_SHIPPING_STATE_V1_1_1.md`
   - Run after the smoothness/Phase-2 work, before any beta hand-off.
