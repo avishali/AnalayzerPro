@@ -18,6 +18,11 @@ Each runbook is a STOP-gated Cursor prompt (IMPLEMENTER + VERIFIER). Apply one p
   - STEP 2.0 prerequisite: gate COPY_PLUGIN_AFTER_BUILD so dev builds stop clobbering installs.
   - CPU-first: render-rate cap, idle-skip, kill-switch. Render-only; no DSP changes.
 
+### Squared/flat-topped peaks when fractional-octave smoothing is on
+- `RUNBOOKS/SPECTRUM_SMOOTHING_SQUARED_PEAKS_V1.md`  [open, PRE-EXISTING, not Phase 2]
+  - Confirmed (A/B + code read): squaring is the UI convertFFTToLog resampling (flat box-average per log bin + coarse numLogBins grid + straight-segment render), active only when smoothing>0. Engine does not smooth (Option A).
+  - Fix candidates: more log bins / Gaussian-weighted gather / smooth-curve render. Energy-conserving + RT-safe. Diagnose (STEP A) before fixing.
+
 ---
 
 ## Build / Release / Install
