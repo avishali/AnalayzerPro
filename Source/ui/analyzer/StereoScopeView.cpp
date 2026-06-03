@@ -1,4 +1,5 @@
 #include "StereoScopeView.h"
+#include "../../config/UiRates.h"
 #include <cmath>
 
 namespace
@@ -13,7 +14,7 @@ StereoScopeView::StereoScopeView (mdsp_ui::UiContext& ui, StereoScopeAnalyzer& a
     lBuffer_.resize (512, 0.0f);
     rBuffer_.resize (512, 0.0f);
     
-    startTimerHz (30); // 30 FPS update
+    startTimerHz (AnalyzerPro::UiRates::kScopeHz);
 }
 
 StereoScopeView::~StereoScopeView()

@@ -1,5 +1,6 @@
 #include "MeterGroupComponent.h"
 
+#include "../../config/UiRates.h"
 #include <mdsp_ui/UiContext.h>
 
 #include <cmath>
@@ -92,7 +93,7 @@ MeterGroupComponent::MeterGroupComponent (mdsp_ui::UiContext& ui,
 
     pushRenderStates();
 
-    startTimerHz (30);
+    startTimerHz (AnalyzerPro::UiRates::kMeterHz);
 }
 
 MeterGroupComponent::~MeterGroupComponent()

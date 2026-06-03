@@ -106,10 +106,23 @@ public:
     int pullStereoScopeSamples (float* left, float* right, int maxSamples) noexcept;
     double getStereoScopeSampleRate() const noexcept { return meterSampleRate_; }
 
-    void setEditorSize (int width, int height) noexcept { parameters.setEditorSize (width, height); }
+    void setEditorSize (int width, int height) noexcept
+    {
+        editorWidth_.store (juce::jlimit (1100, 4096, width), std::memory_order_relaxed);
+        editorHeight_.store (juce::jlimit (720, 4096, height), std::memory_order_relaxed);
+        parameters.setEditorSize (width, height);
+    }
 
-    int getEditorWidth() const noexcept { return parameters.getEditorWidth(); }
-    int getEditorHeight() const noexcept { return parameters.getEditorHeight(); }
+    int getEditorWidth() const noexcept { return editorWidth_.load (std::memory_order_relaxed); }
+    int getEditorHeight() const noexcept { return editorHeight_.load (std::memory_order_relaxed); }
+
+    void setEditorSizePreset (int percent) noexcept
+    {
+        const int snapped = (percent >= 150 ? 150 : (percent >= 125 ? 125 : 100));
+        editorSizePreset_.store (snapped, std::memory_order_relaxed);
+    }
+
+    int getEditorSizePreset() const noexcept { return editorSizePreset_.load (std::memory_order_relaxed); }
     
     //==============================================================================
     AnalyzerPro::presets::PresetManager& getPresetManager() { return *presetManager; }
@@ -160,6 +173,10 @@ private:
     // Scratch buffer for analysis (avoids modifying output buffer for visualization)
     juce::AudioBuffer<float> analysisBuffer;
     juce::AudioBuffer<float> outputAnalysisBuffer; // Added for V2 Output Metering
+
+    std::atomic<int> editorWidth_ { 0 };
+    std::atomic<int> editorHeight_ { 0 };
+    std::atomic<int> editorSizePreset_ { 100 };
 
     // Queue for spectrum: audio thread pushes mono, message thread pulls and runs FFT
     static constexpr int kSpectrumQueueCapacity = 8192;

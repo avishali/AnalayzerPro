@@ -9,6 +9,7 @@
 */
 
 #include "LoudnessNumericPanel.h"
+#include "../../config/UiRates.h"
 
 LoudnessNumericPanel::LoudnessNumericPanel (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p)
     : ui_ (ui), processor (p)
@@ -37,7 +38,7 @@ LoudnessNumericPanel::LoudnessNumericPanel (mdsp_ui::UiContext& ui, AnalayzerPro
     iLabel.setText ("Integrated", juce::dontSendNotification);
     pLabel.setText ("Loudness Peak", juce::dontSendNotification);
 
-    startTimerHz (15); // ~15-20 FPS is smooth enough for numbers
+    startTimerHz (AnalyzerPro::UiRates::kNumericLabelHz);
 }
 
 LoudnessNumericPanel::~LoudnessNumericPanel()

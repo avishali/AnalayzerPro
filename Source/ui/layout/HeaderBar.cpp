@@ -56,6 +56,28 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     initTinyButton (freqResetButton_,    "F", "Reset frequency range to 10 Hz-Nyquist", &onFreqReset);
     initTinyButton (peakResetButton_,    "reset", "Reset analyzer peaks and holds", &onResetPeaks);
 
+    sizePresetButton_.setButtonText ("100%");
+    sizePresetButton_.setTooltip ("Editor size preset");
+    sizePresetButton_.setColour (juce::TextButton::buttonColourId, theme.panel);
+    sizePresetButton_.setColour (juce::TextButton::textColourOffId, theme.text);
+    sizePresetButton_.setColour (juce::TextButton::textColourOnId, theme.text);
+    sizePresetButton_.onClick = [this]
+    {
+        const auto current = sizePresetButton_.getButtonText();
+        juce::PopupMenu m;
+        m.addItem (1, "100%", true, current == "100%");
+        m.addItem (2, "125%", true, current == "125%");
+        m.addItem (3, "150%", true, current == "150%");
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&sizePresetButton_),
+                         [this] (int r)
+                         {
+                             if (r == 1 && onSizePresetChanged) onSizePresetChanged (100);
+                             else if (r == 2 && onSizePresetChanged) onSizePresetChanged (125);
+                             else if (r == 3 && onSizePresetChanged) onSizePresetChanged (150);
+                         });
+    };
+    addAndMakeVisible (sizePresetButton_);
+
     // Preset & State Buttons
     presetButton.setButtonText ("Preset");
     presetButton.setTooltip ("Load Preset");
@@ -245,6 +267,7 @@ void HeaderBar::resized()
     const int zoomResetW = smallBtnW;
     const int overflowW = 28;
     const int railW = smallBtnW;    // small chevron glyph now
+    const int sizePresetW = 52;
     const int presetW = juce::jlimit (1, 999, m.headerButtonW);
     const int bypassW = juce::jlimit (1, 999, m.headerButtonW);
     constexpr int kTitleFixedW = 110;
@@ -285,8 +308,8 @@ void HeaderBar::resized()
     const int groupAEnd = xa - gapX; // right edge of last Group-A control
 
     // ── Group C: presets + bypass + rail (right-anchored, with overflow) ─
-    const int groupCFullW      = presetW + gapX + presetW + gapX + smallBtnW + gapX + smallBtnW + gapX + bypassW + gapX + railW;
-    const int groupCCollapsedW = overflowW + gapX + bypassW + gapX + railW;
+    const int groupCFullW      = sizePresetW + gapX + presetW + gapX + presetW + gapX + smallBtnW + gapX + smallBtnW + gapX + bypassW + gapX + railW;
+    const int groupCCollapsedW = sizePresetW + gapX + overflowW + gapX + bypassW + gapX + railW;
 
     const int moduleSpaceIfFull = row.getRight() - (groupAEnd + groupGap) - (groupGap + groupCFullW);
     const bool collapse = moduleSpaceIfFull < kMinModulePort;
@@ -300,6 +323,8 @@ void HeaderBar::resized()
     saveButton.setVisible (! collapse);
     slotAButton.setVisible (! collapse);
     slotBButton.setVisible (! collapse);
+
+    placeLtr (xc, sizePresetButton_, sizePresetW);
 
     if (collapse)
     {
@@ -385,6 +410,12 @@ void HeaderBar::updateActiveSlot()
 void HeaderBar::setPeakRangeSelectedId (int id)
 {
     peakRangeBox_.setSelectedId (id, juce::dontSendNotification);
+}
+
+void HeaderBar::setSizePresetPercent (int percent)
+{
+    const int clamped = (percent >= 150 ? 150 : (percent >= 125 ? 125 : 100));
+    sizePresetButton_.setButtonText (juce::String (clamped) + "%");
 }
 
 void HeaderBar::setRailOpen (bool isOpen)

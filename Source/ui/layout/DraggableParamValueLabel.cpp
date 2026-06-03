@@ -1,4 +1,5 @@
 #include "DraggableParamValueLabel.h"
+#include "../../config/UiRates.h"
 
 namespace AnalyzerPro
 {
@@ -20,7 +21,7 @@ void DraggableParamValueLabel::setParameter (juce::RangedAudioParameter* param)
     if (param_ != nullptr)
     {
         repaint();
-        startTimerHz (15);
+        startTimerHz (AnalyzerPro::UiRates::kNumericLabelHz);
     }
     else
     {

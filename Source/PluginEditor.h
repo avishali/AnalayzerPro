@@ -35,6 +35,15 @@ public:
 #endif
 
 private:
+    static constexpr int kBaseEditorWidth = 1100;
+    static constexpr int kBaseEditorHeight = 720;
+    static constexpr int kMaxEditorSize = 4096;
+
+    static int clampEditorSizePreset (int percent) noexcept;
+    static int deriveEditorSizePreset (int width, int height) noexcept;
+    juce::Rectangle<int> getPresetBoundsForPercent (int percent) const;
+    void applyEditorSizePreset (int percent);
+
     AnalayzerProAudioProcessor& audioProcessor;
     AnalyzerEngine& analyzerModule;  // Reference to analyzer module for direct access
     mdsp_ui::UiContext ui_;  // Single shared UiContext instance for all UI
@@ -43,6 +52,8 @@ private:
     std::unique_ptr<mdsp_ui::TooltipManager> tooltipManager_;
     std::unique_ptr<juce::TooltipWindow> tooltipWindow_;
     MainView mainView;
+    juce::Label buildInfoLabel_;  // version + build date/time, bottom-left
+    int currentEditorSizePreset_ = 100;
 #if JUCE_DEBUG
     DebugGridOverlay debugGrid;
 #endif

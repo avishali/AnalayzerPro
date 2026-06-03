@@ -1,4 +1,5 @@
 #include "AnalyzerDisplayView.h"
+#include "../../config/UiRates.h"
 #include <mdsp_ui/Theme.h>
 #include <algorithm>
 #include <cmath>
@@ -12,13 +13,12 @@
 #define ANALYZERPRO_FFT_DEBUG_LINE 1
 #endif
 
-#if !defined(ANALYZERPRO_USE_VBLANK_INTERPOLATION)
-#define ANALYZERPRO_USE_VBLANK_INTERPOLATION 1
-#endif
-
-#if !defined(ANALYZERPRO_MAX_RENDER_HZ)
-#define ANALYZERPRO_MAX_RENDER_HZ 60
-#endif
+// Tick source is selected at RUNTIME by wrapperType (see setup below), not by a
+// compile-time JucePlugin_Build_AAX guard: this is a single shared-code build
+// where Build_AAX/VST3/Standalone are all 1, so the macro cannot distinguish
+// formats. AAX uses a plain juce::Timer (Pro Tools starves the hosted-window
+// VBlank/async path); VST3/AU/Standalone use VBlankAttachment for smooth
+// display-rate interpolation. Both code paths are always compiled.
 
 //==============================================================================
 static float dbRangeToMinDb (AnalyzerDisplayView::DbRange r) noexcept
@@ -40,8 +40,8 @@ static constexpr float kUiPeakInvalidSentinelDb = -90.0f;
 static constexpr float kSpectrumTopDb = 6.0f;
 
 // Snapshot pump remains the 30 Hz data source; VBlank drives visual render ticks.
-static constexpr int kAnalyzerDisplayTimerHz = 30;
-static constexpr int kMaxRenderHz = ANALYZERPRO_MAX_RENDER_HZ;
+static constexpr int kAnalyzerDisplayTimerHz = AnalyzerPro::UiRates::kAnalyzerDataHz;
+static constexpr int kMaxRenderHz = AnalyzerPro::UiRates::kAnalyzerMaxRenderHz;
 static constexpr double kAnalyzerDataIntervalMs = 1000.0 / static_cast<double> (kAnalyzerDisplayTimerHz);
 static constexpr double kMaxRenderIntervalMs = 1000.0 / static_cast<double> (kMaxRenderHz > 0 ? kMaxRenderHz : 60);
 static constexpr double kDbRangeAnimationMs = 200.0;
@@ -311,39 +311,46 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
     });
     analyzerBridgeWidget_.start (kAnalyzerDisplayTimerHz);
 
-#if ANALYZERPRO_USE_VBLANK_INTERPOLATION
-    vBlankAttachment_ = juce::VBlankAttachment (
-        this,
-        [this] (double)
-        {
-            if (isShutdown)
-                return;
-
-            const double nowMs = juce::Time::getMillisecondCounterHiRes();
-            if (vBlankAsyncPending_
-                || isRenderDispatchCapped (nowMs))
-                return;
-
-            if (shouldSkipRenderFrame (nowMs))
+    // Per-format tick source, chosen at runtime (see note at top of file).
+    const bool useTimerTick = (audioProcessor.wrapperType == juce::AudioProcessor::wrapperType_AAX);
+    if (useTimerTick)
+    {
+        // AAX (Pro Tools): VBlank/async path is starved during playback; a plain
+        // juce::Timer is scheduled reliably. Identical render work either way.
+        startTimerHz (kAnalyzerDisplayTimerHz);
+    }
+    else
+    {
+        // VST3/AU/Standalone: VBlankAttachment drives smooth display-rate interpolation.
+        vBlankAttachment_ = juce::VBlankAttachment (
+            this,
+            [this] (double)
             {
-#if ANALYZERPRO_DEV_DIAGNOSTICS
-                // Let the dev HUD age from ~60 to ~0/1 paint/s while idle without
-                // keeping the render path alive at display rate.
-                if (uiDiagHudWallMs_ > 0.0 && (nowMs - uiDiagHudWallMs_) < 1000.0)
+                if (isShutdown)
                     return;
-#else
-                return;
-#endif
-            }
 
-            lastRenderDispatchMs_ = nowMs;
-            vBlankAsyncPending_ = true;
-            vBlankRenderMarshaler_.triggerAsyncUpdate();
-        });
+                const double nowMs = juce::Time::getMillisecondCounterHiRes();
+                if (vBlankAsyncPending_
+                    || isRenderDispatchCapped (nowMs))
+                    return;
+
+                if (shouldSkipRenderFrame (nowMs))
+                {
+#if ANALYZERPRO_DEV_DIAGNOSTICS
+                    // Let the dev HUD age from ~60 to ~0/1 paint/s while idle without
+                    // keeping the render path alive at display rate.
+                    if (uiDiagHudWallMs_ > 0.0 && (nowMs - uiDiagHudWallMs_) < 1000.0)
+                        return;
 #else
-    // Kill-switch fallback: keep the 30 Hz snapshot pump and feed/paint from juce::Timer.
-    startTimerHz (kAnalyzerDisplayTimerHz);
+                    return;
 #endif
+                }
+
+                lastRenderDispatchMs_ = nowMs;
+                vBlankAsyncPending_ = true;
+                vBlankRenderMarshaler_.triggerAsyncUpdate();
+            });
+    }
 
 #if ANALYZERPRO_DEV_DIAGNOSTICS
     analyzerBridgeWidget_.getRTADisplay().setPaintTimingCallback (
@@ -365,6 +372,14 @@ void AnalyzerDisplayView::setDbRange (DbRange r)
     setDbBottomContinuous (nextBottomDb);
 }
 
+void AnalyzerDisplayView::requestAnalyzerRepaint()
+{
+#if ANALYZERPRO_DEV_DIAGNOSTICS
+    ++uiDiagRepaintRequestsAccum_;
+#endif
+    repaint();
+}
+
 void AnalyzerDisplayView::setDbBottomContinuous (float bottomDb)
 {
     bottomDb = juce::jlimit (kMinDbBottom, kMaxDbBottom, bottomDb);
@@ -378,7 +393,7 @@ void AnalyzerDisplayView::setDbBottomContinuous (float bottomDb)
     minDbAnimActive_ = true;
     forceNextRenderFrame_ = true;
     kickSnapshotPumpImmediate();
-    repaint();
+    requestAnalyzerRepaint();
 }
 
 void AnalyzerDisplayView::setDbRangeFromChoiceIndex (int idx)
@@ -413,7 +428,7 @@ void AnalyzerDisplayView::setPeakDbRange (DbRange r)
     analyzerBridgeWidget_.setPeakDbRange (dbRangeToMinDb (peakDbRange_));
     forceNextRenderFrame_ = true;
     kickSnapshotPumpImmediate();
-    repaint();
+    requestAnalyzerRepaint();
 }
 
 void AnalyzerDisplayView::resetSessionMarker()
@@ -452,7 +467,7 @@ void AnalyzerDisplayView::resetViewPeaks()
     // Force remap/repaint
     peakScaleDirty_ = true;
     forceNextRenderFrame_ = true;
-    repaint();
+    requestAnalyzerRepaint();
 }
 
 void AnalyzerDisplayView::triggerPeakFlash()
@@ -461,7 +476,7 @@ void AnalyzerDisplayView::triggerPeakFlash()
     peakFlashUntilMs_ = juce::Time::getMillisecondCounterHiRes() + 150.0;
     peakScaleDirty_ = true;
     forceNextRenderFrame_ = true;
-    repaint();
+    requestAnalyzerRepaint();
 }
 
 AnalyzerDisplayView::~AnalyzerDisplayView()
@@ -845,7 +860,7 @@ void AnalyzerDisplayView::setMode (Mode mode)
     forceNextRenderFrame_ = true;
     kickSnapshotPumpImmediate();
     // Force repaint
-    repaint();
+    requestAnalyzerRepaint();
 }
 
 void AnalyzerDisplayView::setSpectrumFftOrder (int order)
@@ -967,6 +982,9 @@ void AnalyzerDisplayView::accumulateDiagnosticsAndMaybeHud (bool tickFromVBlank)
         const int paintsPerSec = static_cast<int> (uiDiagPaintEventsAccum_);
         uiDiagPaintEventsAccum_ = 0;
 
+        const int repaintRequestsPerSec = static_cast<int> (uiDiagRepaintRequestsAccum_);
+        uiDiagRepaintRequestsAccum_ = 0;
+
         const int specResizesPerSec = static_cast<int> (uiDiagSpectrumResizesAccum_);
         uiDiagSpectrumResizesAccum_ = 0;
 
@@ -980,6 +998,8 @@ void AnalyzerDisplayView::accumulateDiagnosticsAndMaybeHud (bool tickFromVBlank)
             + "  render_jitter_avg_ms=" + juce::String (jitterAvg, 3)
             + "  data_fps=" + juce::String (kAnalyzerDisplayTimerHz)
             + "  render_fps=" + juce::String (actualFps, 1)
+            + "  size_preset=" + juce::String (audioProcessor.getEditorSizePreset()) + "%"
+            + "  repaint_req/s=" + juce::String (repaintRequestsPerSec)
             + "  actual_render_ms_avg=" + juce::String (actualTimerMsAvg, 2)
             + "  expect_render_ms=" + juce::String (expectedMsF, 2)
             + "  render_late_cnt/s=" + juce::String (latePerSec)
@@ -1275,7 +1295,7 @@ void AnalyzerDisplayView::feedInterpolatedRenderFrame (double nowMs)
 
 void AnalyzerDisplayView::timerCallback()
 {
-    // Fallback-only path used when ANALYZERPRO_USE_VBLANK_INTERPOLATION=0.
+    // Timer-tick render path (used for AAX; VST3/AU/Standalone render via the VBlank marshaler).
     if (isShutdown)
         return;
 

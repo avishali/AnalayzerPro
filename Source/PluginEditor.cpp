@@ -40,14 +40,34 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
     debugGrid.toFront (false);
 #endif
 
-    setResizable (true, true);
-    setResizeLimits (1100, 720, 4096, 4096);
+    // NOTE: per-format behavior MUST be a runtime wrapperType check, not
+    // #if JucePlugin_Build_AAX. This is a single shared-code compilation where
+    // JucePlugin_Build_AAX/VST3/Standalone are ALL 1, so the macro is true in
+    // every format. wrapperType is the only correct discriminator at runtime.
+    const bool isAAX = (audioProcessor.wrapperType == juce::AudioProcessor::wrapperType_AAX);
+
+    if (isAAX)
+    {
+        // Pro Tools: no free corner-drag resize; use the discrete size presets.
+        setResizable (false, false);
+    }
+    else
+    {
+        setResizable (true, true);
+        setResizeLimits (1100, 720, 4096, 4096);
+    }
+
+    mainView.onSizePresetChanged = [this] (int percent)
+    {
+        applyEditorSizePreset (percent);
+    };
 
     // Restore State Size or Default to Screen 70% (never below minimum)
-    const int minW = 1100;
-    const int minH = 720;
+    const int minW = kBaseEditorWidth;
+    const int minH = kBaseEditorHeight;
     const int storedW = p.getEditorWidth();
     const int storedH = p.getEditorHeight();
+    currentEditorSizePreset_ = clampEditorSizePreset (p.getEditorSizePreset());
 
     if (storedW >= minW && storedH >= minH)
     {
@@ -68,6 +88,22 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
             setSize (juce::jmax (minW, 1300), juce::jmax (minH, 700));
         }
     }
+
+    audioProcessor.setEditorSizePreset (currentEditorSizePreset_);
+    mainView.setSizePresetPercent (currentEditorSizePreset_);
+
+    // Build stamp (version + compile date/time) so the loaded build is always
+    // identifiable on screen. __DATE__/__TIME__ reflect when PluginEditor.cpp was
+    // compiled, which updates on every rebuild that touches it.
+    const juce::String buildInfoText = "AnalyzerPro v" + juce::String (JucePlugin_VersionString)
+                                           + "  \xe2\x80\xa2  build " __DATE__ " " __TIME__;
+    buildInfoLabel_.setText (buildInfoText, juce::dontSendNotification);
+    buildInfoLabel_.setJustificationType (juce::Justification::centredLeft);
+    buildInfoLabel_.setInterceptsMouseClicks (false, false);
+    buildInfoLabel_.setColour (juce::Label::textColourId, juce::Colours::white.withAlpha (0.45f));
+    buildInfoLabel_.setFont (juce::Font (juce::FontOptions (11.0f)));
+    addAndMakeVisible (buildInfoLabel_);
+    buildInfoLabel_.toFront (false);
 }
 
 
@@ -102,6 +138,56 @@ void AnalayzerProAudioProcessorEditor::resized()
     debugGrid.toFront (false);
 #endif
     audioProcessor.setEditorSize (getWidth(), getHeight());
+    audioProcessor.setEditorSizePreset (currentEditorSizePreset_);
+
+    // Build stamp, bottom-left near the host's status footer.
+    buildInfoLabel_.setBounds (8, getHeight() - 16, 460, 14);
+    buildInfoLabel_.toFront (false);
+}
+
+int AnalayzerProAudioProcessorEditor::clampEditorSizePreset (int percent) noexcept
+{
+    if (percent >= 150)
+        return 150;
+    if (percent >= 125)
+        return 125;
+    return 100;
+}
+
+int AnalayzerProAudioProcessorEditor::deriveEditorSizePreset (int width, int height) noexcept
+{
+    const int fromWidth = juce::roundToInt (100.0 * static_cast<double> (width) / static_cast<double> (kBaseEditorWidth));
+    const int fromHeight = juce::roundToInt (100.0 * static_cast<double> (height) / static_cast<double> (kBaseEditorHeight));
+    return clampEditorSizePreset (juce::jmax (fromWidth, fromHeight));
+}
+
+juce::Rectangle<int> AnalayzerProAudioProcessorEditor::getPresetBoundsForPercent (int percent) const
+{
+    percent = clampEditorSizePreset (percent);
+
+    const int desiredW = kBaseEditorWidth * percent / 100;
+    const int desiredH = kBaseEditorHeight * percent / 100;
+    int maxW = kMaxEditorSize;
+    int maxH = kMaxEditorSize;
+
+    if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+    {
+        maxW = juce::jmax (kBaseEditorWidth, display->userArea.getWidth());
+        maxH = juce::jmax (kBaseEditorHeight, display->userArea.getHeight());
+    }
+
+    return { 0, 0,
+             juce::jlimit (kBaseEditorWidth, maxW, desiredW),
+             juce::jlimit (kBaseEditorHeight, maxH, desiredH) };
+}
+
+void AnalayzerProAudioProcessorEditor::applyEditorSizePreset (int percent)
+{
+    currentEditorSizePreset_ = clampEditorSizePreset (percent);
+    const auto bounds = getPresetBoundsForPercent (currentEditorSizePreset_);
+    mainView.setSizePresetPercent (currentEditorSizePreset_);
+    audioProcessor.setEditorSizePreset (currentEditorSizePreset_);
+    setSize (bounds.getWidth(), bounds.getHeight());
 }
 
 #if JUCE_DEBUG

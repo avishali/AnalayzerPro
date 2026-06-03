@@ -48,6 +48,8 @@ public:
     void resized() override;
     
     void setTooltipManager (mdsp_ui::TooltipManager* manager);
+    void setSizePresetPercent (int percent);
+    std::function<void (int)> onSizePresetChanged;
 
     enum class LayoutMode { Compact, Normal, Wide };
     static LayoutMode getLayoutMode (int width) noexcept;

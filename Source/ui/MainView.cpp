@@ -1,5 +1,6 @@
 #include "MainView.h"
 #include "layout/LayoutConstants.h"
+#include "../config/UiRates.h"
 #include "../PluginProcessor.h"
 #include <mdsp_ui/UiContext.h>
 #include <span>
@@ -46,6 +47,11 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     footer_.setControlBinder (controls_.getBinder());
     header_.setManagers (&p.getPresetManager(), &p.getABStateManager());
     header_.onRailToggleClicked = [this] { toggleRail(); };
+    header_.onSizePresetChanged = [this] (int percent)
+    {
+        if (onSizePresetChanged)
+            onSizePresetChanged (percent);
+    };
     header_.setRailOpen (railIsOpen_);
 
     // Module settings tabs select the single editable rail source of truth.
@@ -264,7 +270,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         }
     }
 
-    startTimerHz (30);
+    startTimerHz (AnalyzerPro::UiRates::kScopeHz);
 
     //setSize (900, 650);  // Slightly bigger to fit all controls
 
@@ -574,6 +580,11 @@ void MainView::selectRailModule (HeaderBar::ActiveModule headerModule, ControlRa
         toggleRail();
 }
 
+void MainView::setSizePresetPercent (int percent)
+{
+    header_.setSizePresetPercent (percent);
+}
+
 void MainView::triggerResetPeaks()
 {
     audioProcessor.getAnalyzerEngine().resetPeaks();
@@ -593,7 +604,7 @@ void MainView::timerCallback()
                                                               static_cast<int> (scopeLeftScratch_.size()));
     if (pulled <= 0)
     {
-        phaseFanProvider_.advanceNoSignal (1.0 / 30.0);
+        phaseFanProvider_.advanceNoSignal (1.0 / static_cast<double> (AnalyzerPro::UiRates::kScopeHz));
         phaseFanScopeComponent_.setRenderState (phaseFanProvider_.state());
         return;
     }

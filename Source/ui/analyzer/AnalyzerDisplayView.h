@@ -130,6 +130,7 @@ private:
     void updateFromSnapshot (const AnalyzerSnapshot& snapshot);
     void handlePumpedSnapshot (const AnalyzerSnapshot& snapshot);
     void kickSnapshotPumpImmediate();
+    void requestAnalyzerRepaint();
     void syncRenderProviderConfig();
     float getEffectiveAbsFreqMax() const noexcept;
     void resetViewToDefault();
@@ -353,6 +354,7 @@ private:
     int uiDiagTimerTickCount_ = 0;
     uint32_t uiDiagTimerLateCountAccum_ = 0;
     double uiDiagHudWallMs_ = 0.0;
+    uint32_t uiDiagRepaintRequestsAccum_ = 0;
     uint32_t uiDiagPumpThrottleAccum_ = 0;
     uint32_t uiDiagPumpRejectAccum_ = 0;
 #endif

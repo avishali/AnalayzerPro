@@ -631,6 +631,10 @@ void AnalayzerProAudioProcessor::getStateInformation (juce::MemoryBlock& destDat
         // TODO (Step 4): Implement save for ABStateManager
         abStateManager->saveToState (state);
     }
+
+    state.setProperty ("editorWidth", getEditorWidth(), nullptr);
+    state.setProperty ("editorHeight", getEditorHeight(), nullptr);
+    state.setProperty ("editorSizePreset", getEditorSizePreset(), nullptr);
         
     std::unique_ptr<juce::XmlElement> xml (state.createXml());
     copyXmlToBinary (*xml, destData);
@@ -648,6 +652,13 @@ void AnalayzerProAudioProcessor::setStateInformation (const void* data, int size
             
             // Migrate legacy parameters
             migrateLegacyParameters (state);
+
+            if (state.hasProperty ("editorWidth") && state.hasProperty ("editorHeight"))
+                setEditorSize (static_cast<int> (state["editorWidth"]),
+                               static_cast<int> (state["editorHeight"]));
+
+            if (state.hasProperty ("editorSizePreset"))
+                setEditorSizePreset (static_cast<int> (state["editorSizePreset"]));
             
             // Restore A/B and apply active state
             // Restore A/B and apply active state

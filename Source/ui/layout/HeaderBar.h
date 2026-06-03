@@ -55,6 +55,10 @@ public:
     std::function<void()> onMetersClicked;
     std::function<void()> onTracesClicked;
 
+    // Editor size presets
+    std::function<void (int)> onSizePresetChanged;
+    void setSizePresetPercent (int percent);
+
     // State Management
     void setManagers (AnalyzerPro::presets::PresetManager* pm, AnalyzerPro::presets::ABStateManager* sm);
     
@@ -80,6 +84,7 @@ private:
     juce::TextButton peakResetButton_;
     
     // Presets & State
+    juce::TextButton sizePresetButton_;
     juce::TextButton presetButton; // Opens menu
     juce::TextButton saveButton;
     juce::TextButton overflowButton_; // "⋯" — collapses Preset/Save/A/B when header is narrow
