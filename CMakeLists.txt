@@ -67,6 +67,7 @@ else()
 endif()
 
 option(ANALYZERPRO_COPY_AFTER_BUILD "Copy built plugins to system folders after build" ON)
+option(ANALYZERPRO_METAL_EDITOR "Full-editor Metal UI" OFF)
 
 # ==============================================================================
 # SDK PATHS
@@ -150,6 +151,14 @@ project(${PLUGIN_NAME}
     VERSION ${PLUGIN_VERSION_MAJOR}.${PLUGIN_VERSION_MINOR}.${PLUGIN_VERSION_PATCH}
     LANGUAGES C CXX
 )
+
+if(ANALYZERPRO_METAL_EDITOR)
+    if(APPLE)
+        enable_language(OBJCXX)
+    else()
+        message(FATAL_ERROR "ANALYZERPRO_METAL_EDITOR requires macOS / Apple platforms")
+    endif()
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -365,6 +374,19 @@ target_sources(${PLUGIN_NAME}
         Source/ui/loudness/LoudnessNumericPanel.cpp
 )
 
+if(APPLE AND ANALYZERPRO_METAL_EDITOR)
+    target_sources(${PLUGIN_NAME}
+        PRIVATE
+            Source/ui/analyzer/metal/MetalHost.h
+            Source/ui/analyzer/metal/MetalHost.mm
+            Source/ui/analyzer/metal/MetalHostShared.h
+            Source/ui/analyzer/metal/IEditorSurface.h
+            Source/ui/analyzer/metal/MetalEditorRenderer.h
+            Source/ui/analyzer/metal/MetalEditorRenderer.mm
+            Source/ui/analyzer/metal/MetalEditorShaders.metal
+    )
+endif()
+
 # ------------------------------------------------------------------
 # Ensure mdsp SDK include dirs/defs propagate to the actual JUCE build targets
 # ------------------------------------------------------------------
@@ -391,6 +413,21 @@ foreach(t IN LISTS _mdsp_consumer_targets)
         target_compile_definitions(${t} PRIVATE MDSP_SDK_VERSION_STRING="${MDSP_SDK_VERSION}")
     endif()
 endforeach()
+
+if(APPLE AND ANALYZERPRO_METAL_EDITOR)
+    foreach(t IN LISTS _mdsp_consumer_targets)
+        if (TARGET ${t})
+            target_compile_definitions(${t} PRIVATE ANALYZERPRO_METAL_EDITOR=1)
+            target_link_libraries(${t} PRIVATE
+                "-framework Metal"
+                "-framework QuartzCore"
+                "-framework CoreVideo"
+                "-framework Foundation"
+                "-framework AppKit"
+            )
+        endif()
+    endforeach()
+endif()
 
 if (COMMAND mdsp_report_bridge_consumer_summary)
     mdsp_report_bridge_consumer_summary()

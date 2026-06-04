@@ -1,5 +1,8 @@
 #include "AnalyzerDisplayView.h"
 #include "../../config/UiRates.h"
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+#include "metal/MetalHostShared.h"
+#endif
 #include <mdsp_ui/Theme.h>
 #include <algorithm>
 #include <cmath>
@@ -503,6 +506,63 @@ void AnalyzerDisplayView::shutdown()
     // Shutdown complete
 }
 
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+void AnalyzerDisplayView::setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept
+{
+    analyzerBridgeWidget_.getRTADisplay().setSuppressDynamicTraces (shouldSuppress);
+}
+
+bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& frame,
+                                                  const juce::Component& editor,
+                                                  float backingScale)
+{
+    if (isShutdown
+        || currentMode_ != Mode::FFT)
+    {
+        return false;
+    }
+
+    static constexpr float kPlotLeft = 50.0f;
+    static constexpr float kPlotTop = 10.0f;
+    static constexpr float kPlotRight = 10.0f;
+    static constexpr float kPlotBottom = 30.0f;
+
+    const auto widgetBounds = analyzerBridgeWidget_.getBounds().toFloat();
+    const juce::Rectangle<float> plotInAnalyzer (widgetBounds.getX() + kPlotLeft,
+                                                 widgetBounds.getY() + kPlotTop,
+                                                 widgetBounds.getWidth() - kPlotLeft - kPlotRight,
+                                                 widgetBounds.getHeight() - kPlotTop - kPlotBottom);
+    if (plotInAnalyzer.isEmpty())
+        return false;
+
+    const auto plotInEditor = editor.getLocalArea (this, plotInAnalyzer);
+    backingScale = juce::jmax (1.0f, backingScale);
+
+    frame.plotRectPx.x = plotInEditor.getX() * backingScale;
+    frame.plotRectPx.y = plotInEditor.getY() * backingScale;
+    frame.plotRectPx.w = plotInEditor.getWidth() * backingScale;
+    frame.plotRectPx.h = plotInEditor.getHeight() * backingScale;
+    frame.minHz = viewFreqMin_;
+    frame.maxHz = juce::jmin (viewFreqMax_, getEffectiveAbsFreqMax());
+    frame.topDb = kSpectrumTopDb;
+    frame.bottomDb = lastAppliedMinDb_;
+    frame.sampleRate = lastMetaSampleRate_;
+    frame.fftSize = lastMetaFftSize_;
+    frame.rmsReleaseMs = releaseMs_;
+    frame.weightingMode = currentWeightingMode_;
+    frame.tiltMode = static_cast<int> (currentTiltMode_);
+    frame.sequence = metalAnalyzerSequence_++;
+    frame.valid = ! frame.plotRectPx.isEmpty();
+
+    const juce::Colour rms = traceColors_ != nullptr
+        ? traceColors_->get (AnalyzerPro::TraceId::Rms)
+        : theme_.seriesRms;
+    frame.rmsColour = { rms.getFloatRed(), rms.getFloatGreen(), rms.getFloatBlue(), rms.getFloatAlpha() };
+
+    return frame.valid;
+}
+#endif
+
 //==============================================================================
 // dB sanitization helper: clamps to [-120, 24] dB and replaces non-finite with floor
 static inline float sanitizeDb (float db) noexcept
@@ -885,6 +945,7 @@ void AnalyzerDisplayView::setDisplayGainDb (float db)
 
 void AnalyzerDisplayView::setTiltMode (TiltMode mode)
 {
+    currentTiltMode_ = mode;
     analyzerBridgeWidget_.setTiltMode (static_cast<int> (mode));
     forceNextRenderFrame_ = true;
 }
@@ -1007,6 +1068,18 @@ void AnalyzerDisplayView::accumulateDiagnosticsAndMaybeHud (bool tickFromVBlank)
             + "  pump_throttle/s=" + juce::String (static_cast<int> (uiDiagPumpThrottleAccum_))
             + "  pump_reject/s=" + juce::String (static_cast<int> (uiDiagPumpRejectAccum_))
             + "  scale=" + juce::String (scale, 2);
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+        devModeDebugLine_ += "  metalhost_fps="
+            + juce::String (AnalyzerPro::metal::gMetalHostFps.load (std::memory_order_relaxed), 1)
+            + "  gpu_encode_ms="
+            + juce::String (AnalyzerPro::metal::gMetalHostEncodeMs.load (std::memory_order_relaxed), 3)
+            + "  chrome_capture_ms="
+            + juce::String (AnalyzerPro::metal::gMetalChromeCaptureMs.load (std::memory_order_relaxed), 2)
+            + "  chrome_interval_ms="
+            + juce::String (AnalyzerPro::metal::gMetalChromeCaptureIntervalMs.load (std::memory_order_relaxed), 1)
+            + "  mech=" + juce::String (AnalyzerPro::metal::getCurrentMetalHostMechanismName())
+            + "  inputhits=" + juce::String (AnalyzerPro::metal::gMetalHostInputHits.load (std::memory_order_relaxed));
+#endif
         uiDiagPumpThrottleAccum_ = 0;
         uiDiagPumpRejectAccum_ = 0;
     }

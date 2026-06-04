@@ -1,5 +1,8 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+#include "ui/analyzer/metal/MetalEditorRenderer.h"
+#endif
 
 //==============================================================================
 AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerProAudioProcessor& p)
@@ -104,11 +107,20 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
     buildInfoLabel_.setFont (juce::Font (juce::FontOptions (11.0f)));
     addAndMakeVisible (buildInfoLabel_);
     buildInfoLabel_.toFront (false);
+
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    if (isAAX)
+        startMetalSurfaceIfNeeded();
+#endif
 }
 
 
 AnalayzerProAudioProcessorEditor::~AnalayzerProAudioProcessorEditor()
 {
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    editorSurface_.reset();
+#endif
+
     // Shutdown MainView BEFORE destruction to stop timers and clear callbacks
     mainView.shutdown();
     
@@ -143,7 +155,46 @@ void AnalayzerProAudioProcessorEditor::resized()
     // Build stamp, bottom-left near the host's status footer.
     buildInfoLabel_.setBounds (8, getHeight() - 16, 460, 14);
     buildInfoLabel_.toFront (false);
+
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    if (editorSurface_ != nullptr)
+        editorSurface_->resized();
+#endif
 }
+
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+void AnalayzerProAudioProcessorEditor::setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept
+{
+    mainView.setMetalTraceSuppressedForChromeCapture (shouldSuppress);
+}
+
+bool AnalayzerProAudioProcessorEditor::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& frame,
+                                                               float backingScale)
+{
+    return mainView.fillMetalAnalyzerFrame (frame, *this, backingScale);
+}
+
+AnalyzerPro::metal::MetalHostMechanism AnalayzerProAudioProcessorEditor::getConfiguredMetalHostMechanism()
+{
+    // Phase 1A is locked to BackingLayer: native JUCE input worked in PT, so no
+    // cover-view input forwarding is built on the active path.
+    return AnalyzerPro::metal::MetalHostMechanism::BackingLayer;
+}
+
+void AnalayzerProAudioProcessorEditor::startMetalSurfaceIfNeeded()
+{
+    if (audioProcessor.wrapperType != juce::AudioProcessor::wrapperType_AAX)
+        return;
+
+    juce::ignoreUnused (getConfiguredMetalHostMechanism());
+
+    if (editorSurface_ == nullptr)
+        editorSurface_ = std::make_unique<AnalyzerPro::metal::MetalEditorRenderer>();
+
+    if (! editorSurface_->start (*this))
+        editorSurface_.reset();
+}
+#endif
 
 int AnalayzerProAudioProcessorEditor::clampEditorSizePreset (int percent) noexcept
 {

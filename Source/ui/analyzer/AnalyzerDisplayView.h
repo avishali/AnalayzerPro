@@ -12,6 +12,9 @@
 #include <vector>
 #include "../../PluginProcessor.h"
 #include "../theme/TraceColors.h"
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+#include "metal/MetalHostShared.h"
+#endif
 
 #if !defined(ANALYZERPRO_MODE_DEBUG_OVERLAY)
 #define ANALYZERPRO_MODE_DEBUG_OVERLAY 0
@@ -115,6 +118,13 @@ public:
 
     /** Shutdown: stop timer and clear references. Safe to call multiple times. */
     void shutdown();
+
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    void setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept;
+    bool fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& frame,
+                                 const juce::Component& editor,
+                                 float backingScale);
+#endif
 
     /** Used by VBlank marshaler; avoids exposing internal shutdown flag to nested types. */
     bool isAnalyzerViewShutdown() const noexcept { return isShutdown; }
@@ -258,6 +268,7 @@ private:
     std::vector<float> cachedWeightingTable_;
     int lastWeightingMode_ = -1; // 0=None, 1=A, 2=BS.468
     int currentWeightingMode_ = 0; // Tracks parameter state
+    TiltMode currentTiltMode_ = TiltMode::Flat;
     int lastWeightingFftSize_ = 0; // Check for rebuild
     double lastWeightingSampleRate_ = 0.0; 
     
@@ -341,6 +352,9 @@ private:
     // Generation counters for render stability (SMOOTHING_RENDERING_STABILITY_V2)
     uint32_t traceDataGen_ = 0;   // Increments when trace buffer content changes
     uint32_t smoothingGen_ = 0;   // Increments when smoothing param changes
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    uint64_t metalAnalyzerSequence_ = 1;
+#endif
 
 #if ANALYZERPRO_DEV_DIAGNOSTICS
     /** Visual diagnostics (message thread only; HUD refreshed from timerCallback or VBlank marshaler). */

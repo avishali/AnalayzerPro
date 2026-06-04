@@ -585,6 +585,20 @@ void MainView::setSizePresetPercent (int percent)
     header_.setSizePresetPercent (percent);
 }
 
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+void MainView::setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept
+{
+    analyzerView_.setMetalTraceSuppressedForChromeCapture (shouldSuppress);
+}
+
+bool MainView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& frame,
+                                       const juce::Component& editor,
+                                       float backingScale)
+{
+    return analyzerView_.fillMetalAnalyzerFrame (frame, editor, backingScale);
+}
+#endif
+
 void MainView::triggerResetPeaks()
 {
     audioProcessor.getAnalyzerEngine().resetPeaks();

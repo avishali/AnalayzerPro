@@ -12,6 +12,9 @@
 #include "analyzer/AnalyzerEngine.h"
 #include "ui/MainView.h"
 #include "ui/tooltips/TooltipManager.h"
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+#include "ui/analyzer/metal/IEditorSurface.h"
+#endif
 #if JUCE_DEBUG
 #include "ui/DebugGridOverlay.h"
 #endif
@@ -33,6 +36,11 @@ public:
 #if JUCE_DEBUG
     bool keyPressed (const juce::KeyPress&) override;
 #endif
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    void setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept;
+    bool fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& frame, float backingScale);
+    AnalyzerEngine& getMetalAnalyzerEngine() noexcept { return analyzerModule; }
+#endif
 
 private:
     static constexpr int kBaseEditorWidth = 1100;
@@ -43,6 +51,10 @@ private:
     static int deriveEditorSizePreset (int width, int height) noexcept;
     juce::Rectangle<int> getPresetBoundsForPercent (int percent) const;
     void applyEditorSizePreset (int percent);
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    static AnalyzerPro::metal::MetalHostMechanism getConfiguredMetalHostMechanism();
+    void startMetalSurfaceIfNeeded();
+#endif
 
     AnalayzerProAudioProcessor& audioProcessor;
     AnalyzerEngine& analyzerModule;  // Reference to analyzer module for direct access
@@ -53,6 +65,9 @@ private:
     std::unique_ptr<juce::TooltipWindow> tooltipWindow_;
     MainView mainView;
     juce::Label buildInfoLabel_;  // version + build date/time, bottom-left
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    std::unique_ptr<AnalyzerPro::metal::IEditorSurface> editorSurface_;
+#endif
     int currentEditorSizePreset_ = 100;
 #if JUCE_DEBUG
     DebugGridOverlay debugGrid;

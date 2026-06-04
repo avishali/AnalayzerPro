@@ -18,6 +18,9 @@
 #include "meters/PhaseFanScopeComponent.h"
 #include "loudness/LoudnessNumericPanel.h"
 #include <array>
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+#include "analyzer/metal/MetalHostShared.h"
+#endif
 
 //==============================================================================
 /**
@@ -50,6 +53,12 @@ public:
     void setTooltipManager (mdsp_ui::TooltipManager* manager);
     void setSizePresetPercent (int percent);
     std::function<void (int)> onSizePresetChanged;
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    void setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept;
+    bool fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& frame,
+                                 const juce::Component& editor,
+                                 float backingScale);
+#endif
 
     enum class LayoutMode { Compact, Normal, Wide };
     static LayoutMode getLayoutMode (int width) noexcept;
