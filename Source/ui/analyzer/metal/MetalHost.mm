@@ -75,6 +75,7 @@ constexpr size_t kMaxAnalyzerFillVertices = kMaxAnalyzerBins * 2;
 constexpr size_t kChromeTextureRingSize = 3;
 constexpr int kNoChromeTextureIndex = -1;
 constexpr auto kDisplayLinkThreadStartTimeout = std::chrono::milliseconds (1000);
+constexpr auto kDisplayLinkThreadStopTimeout = std::chrono::milliseconds (250);
 
 const char* getRuntimeShaderSource() noexcept
 {
@@ -196,7 +197,7 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
 
     ~MetalHostImpl() override
     {
-        stop();
+        (void) stop();
     }
 
     bool start()
@@ -266,10 +267,14 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
         return true;
     }
 
-    void stop()
+    bool stop()
     {
+        if (teardownAbandoned)
+            return false;
+
         stopping.store (true, std::memory_order_release);
-        stopDisplayLinkAndDrain ("stop");
+        if (! stopDisplayLinkAndDrain ("stop"))
+            return false;
 
         detachFromPeerView();
 
@@ -346,6 +351,7 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
         lastRenderFrameTime = 0.0;
         gMetalHostFps.store (0.0f, std::memory_order_relaxed);
         gMetalHostEncodeMs.store (0.0f, std::memory_order_relaxed);
+        return true;
     }
 
     bool isRunning() const noexcept
@@ -387,8 +393,8 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
     {
         if (editor.getPeer() == nullptr)
         {
-            stopDisplayLinkAndDrain ("peer lost");
-            detachFromPeerView();
+            if (stopDisplayLinkAndDrain ("peer lost"))
+                detachFromPeerView();
             gMetalHostFps.store (0.0f, std::memory_order_relaxed);
             return;
         }
@@ -396,13 +402,16 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
         if (! running)
         {
             detachFromPeerView();
-            (void) tryAttachAndStartLink();
+            if (! teardownAbandoned)
+                (void) tryAttachAndStartLink();
             return;
         }
 
-        stopDisplayLinkAndDrain ("peer changed");
-        detachFromPeerView();
-        (void) tryAttachAndStartLink();
+        if (stopDisplayLinkAndDrain ("peer changed"))
+        {
+            detachFromPeerView();
+            (void) tryAttachAndStartLink();
+        }
     }
 
     void componentVisibilityChanged() override
@@ -421,7 +430,7 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
             return;
         }
 
-        if (! running)
+        if (! running && ! teardownAbandoned)
             (void) tryAttachAndStartLink();
     }
 
@@ -544,7 +553,7 @@ private:
         if (! ready || ! renderThreadReady)
         {
             lock.unlock();
-            stopDisplayLinkAndDrain ("thread start failed");
+            (void) stopDisplayLinkAndDrain ("thread start failed");
             return false;
         }
 
@@ -590,15 +599,14 @@ private:
         }
     }
 
-    void stopDisplayLinkAndDrain (const char* reason)
+    bool stopDisplayLinkAndDrain (const char* reason)
     {
         stopping.store (true, std::memory_order_release);
         renderThreadShouldExit.store (true, std::memory_order_release);
         running = false;
 
-        id link = displayLink;
-        if (link != nil)
-            [link invalidate];
+        if (displayLinkTarget != nil)
+            displayLinkTarget->owner = nullptr;
 
         CFRunLoopRef runLoopToStop = nullptr;
         {
@@ -608,18 +616,61 @@ private:
                 CFRetain (runLoopToStop);
         }
 
+        id linkToInvalidate = displayLink;
+        if (linkToInvalidate != nil)
+            [linkToInvalidate retain];
+
         if (runLoopToStop != nullptr)
         {
-            CFRunLoopStop (runLoopToStop);
+            CFRunLoopWakeUp (runLoopToStop);
+            CFRunLoopPerformBlock (runLoopToStop, kCFRunLoopCommonModes, ^{
+                if (linkToInvalidate != nil)
+                {
+                    [linkToInvalidate invalidate];
+                    [linkToInvalidate release];
+                }
+
+                CFRunLoopStop (CFRunLoopGetCurrent());
+            });
+            CFRunLoopWakeUp (runLoopToStop);
             CFRelease (runLoopToStop);
+        }
+        else if (linkToInvalidate != nil)
+        {
+            [linkToInvalidate invalidate];
+            [linkToInvalidate release];
         }
 
         if (renderThread.joinable())
         {
             if (renderThread.get_id() == std::this_thread::get_id())
+            {
+                teardownAbandoned = true;
                 renderThread.detach();
+                NSLog (@"[MetalHost #%d] abandoned teardown from render thread (%s)", instanceId, reason);
+                return false;
+            }
             else
+            {
+                std::unique_lock<std::mutex> lock (displayLinkMutex);
+                const bool exited = displayLinkCv.wait_for (lock,
+                                                            kDisplayLinkThreadStopTimeout,
+                                                            [this]
+                                                            {
+                                                                return renderThreadExited;
+                                                            });
+                lock.unlock();
+
+                if (! exited)
+                {
+                    teardownAbandoned = true;
+                    renderThread.detach();
+                    NSLog (@"[MetalHost #%d] abandoned teardown after timeout (%s)", instanceId, reason);
+                    return false;
+                }
+
                 renderThread.join();
+            }
         }
 
         if (displayLink != nil)
@@ -644,6 +695,7 @@ private:
 
         (void) reason;
         lastRenderFrameTime = 0.0;
+        return true;
     }
 
     bool attachIfPossible()
@@ -916,6 +968,12 @@ private:
         @autoreleasepool
         {
             id<CAMetalDrawable> drawable = [metalLayer nextDrawable];
+            if (stopping.load (std::memory_order_acquire))
+            {
+                inFlightFrames.fetch_sub (1, std::memory_order_acq_rel);
+                return;
+            }
+
             if (drawable != nil)
             {
                 [drawable retain];
@@ -1407,6 +1465,7 @@ private:
     bool layerAttached = false;
     bool initialised = false;
     bool running = false;
+    bool teardownAbandoned = false;
     std::atomic<bool> stopping { false };
     std::atomic<int> inFlightFrames { 0 };
     std::atomic<float> backingScale { 1.0f };
@@ -1488,6 +1547,18 @@ bool MetalHost::start (juce::Component& editor, MetalHostMechanism mechanism, co
 
 void MetalHost::stop()
 {
+    if (impl_ == nullptr)
+        return;
+
+    if (! impl_->stop())
+    {
+        // Pro Tools can close the editor while CoreAnimation is completing a Metal present.
+        // If the render thread does not exit promptly, keep the context alive rather than
+        // blocking the host close path or freeing memory still reachable by the callback.
+        juce::ignoreUnused (impl_.release());
+        return;
+    }
+
     impl_.reset();
 }
 
