@@ -22,6 +22,10 @@
 #include <thread>
 #include <vector>
 
+#if !defined(ANALYZERPRO_METAL_DIAGNOSTICS)
+#define ANALYZERPRO_METAL_DIAGNOSTICS 0
+#endif
+
 namespace AnalyzerPro::metal
 {
 struct MetalHostImpl;
@@ -32,15 +36,6 @@ struct MetalHostImpl;
 @public
     AnalyzerPro::metal::MetalHostImpl* owner;
 }
-@end
-
-@interface AnalyzerProMetalMainThreadKickProxy : NSObject
-{
-@public
-    AnalyzerPro::metal::MetalHostImpl* owner;
-}
-- (void)displayLinkTick:(id)sender;
-- (void)timerTick:(NSTimer*)timer;
 @end
 
 namespace AnalyzerPro::metal
@@ -57,12 +52,6 @@ int nextMetalHostInstanceId() noexcept
 {
     static std::atomic<int> nextId { 1 };
     return nextId.fetch_add (1, std::memory_order_relaxed);
-}
-
-bool isEnvFlagEnabled (const char* name) noexcept
-{
-    const auto* value = std::getenv (name);
-    return value != nullptr && value[0] == '1';
 }
 
 // Process-wide count of live render threads. Incremented when a render thread starts and
@@ -91,7 +80,9 @@ constexpr size_t kChromeTextureRingSize = 3;
 constexpr int kNoChromeTextureIndex = -1;
 constexpr auto kRenderThreadStopTimeout = std::chrono::milliseconds (2000);
 constexpr auto kDrawableUnavailableSleep = std::chrono::milliseconds (2);
+#if ANALYZERPRO_METAL_DIAGNOSTICS
 constexpr const char* kMetalHostStatsPath = "/tmp/metalhost_stats.txt";
+#endif
 constexpr size_t kRmsInterpolationIntervalHistorySize = 4;
 constexpr double kRmsInterpolationMinIntervalSeconds = 0.001;
 constexpr double kRmsInterpolationMaxIntervalSeconds = 0.100;
@@ -238,32 +229,17 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
         if (metalLayer == nil)
             return false;
 
-        maxDrawable3Enabled = isEnvFlagEnabled ("ANALYZERPRO_METAL_MAXDRAWABLE3");
-        mainThreadKickEnabled = isEnvFlagEnabled ("ANALYZERPRO_METAL_MAINTHREAD_KICK");
-
         metalLayer.device = device;
         metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         metalLayer.framebufferOnly = YES;
         metalLayer.opaque = YES;
         metalLayer.allowsNextDrawableTimeout = YES;
         metalLayer.presentsWithTransaction = NO;
-        if (@available (macOS 10.13.2, *))
-        {
-            if (maxDrawable3Enabled)
-                metalLayer.maximumDrawableCount = 3;
-            effectiveMaximumDrawableCount = static_cast<int> (metalLayer.maximumDrawableCount);
-        }
 
         if (renderPassDescriptor == nil)
             renderPassDescriptor = [[MTLRenderPassDescriptor renderPassDescriptor] retain];
         if (renderPassDescriptor == nil)
             return false;
-
-        NSLog (@"[MetalHost #%d] toggles maxdrawable3=%d maximumDrawableCount=%d mainthread_kick=%d",
-               instanceId,
-               maxDrawable3Enabled ? 1 : 0,
-               effectiveMaximumDrawableCount,
-               mainThreadKickEnabled ? 1 : 0);
 
         initialiseRenderPipelines();
         initialised = true;
@@ -490,7 +466,6 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
 
         if (! editor.isShowing())
         {
-            stopMainThreadKick();
             stopRenderThreadAndDrain ("hidden");
             gMetalHostFps.store (0.0f, std::memory_order_relaxed);
             return;
@@ -555,15 +530,6 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
     {
         if (auto* peer = editor.getPeer())
             peer->handleKeyUpOrDown (false);
-    }
-
-    void handleMainThreadKick()
-    {
-        if (! mainThreadKickEnabled || ! layerAttached || mainThreadKickHostView == nil)
-            return;
-
-        [mainThreadKickHostView setNeedsDisplay: YES];
-        [CATransaction flush];
     }
 
 private:
@@ -690,7 +656,6 @@ private:
             if (layerAttached && peerView == targetPeerView)
             {
                 updateLayerGeometry();
-                startMainThreadKickIfNeeded();
                 return true;
             }
 
@@ -705,7 +670,6 @@ private:
             [peerView setWantsLayer: YES];
             layerAttached = true;
             updateLayerGeometry();
-            startMainThreadKickIfNeeded();
             return true;
         }
 
@@ -724,7 +688,6 @@ private:
         [peerView addSubview: coverView positioned: NSWindowAbove relativeTo: nil];
         layerAttached = true;
         updateLayerGeometry();
-        startMainThreadKickIfNeeded();
         return true;
     }
 
@@ -732,8 +695,6 @@ private:
     // skip touching the view, just drop our own references.
     void detachFromPeerView (bool restoreLayer = true)
     {
-        stopMainThreadKick();
-
         if (coverView != nil)
         {
             coverView->owner = nullptr;
@@ -762,105 +723,6 @@ private:
     NSView* getHostView() const noexcept
     {
         return (coverView != nil) ? coverView : peerView;
-    }
-
-    void startMainThreadKickIfNeeded()
-    {
-        if (! mainThreadKickEnabled || mainThreadKickProxy != nil)
-            return;
-
-        if (! [NSThread isMainThread])
-        {
-            NSLog (@"[MetalHost #%d] main-thread kick skipped: attach was off-main", instanceId);
-            return;
-        }
-
-        NSView* hostView = getHostView();
-        if (hostView == nil)
-            return;
-
-        mainThreadKickHostView = hostView;
-        mainThreadKickProxy = [[AnalyzerProMetalMainThreadKickProxy alloc] init];
-        if (mainThreadKickProxy == nil)
-        {
-            mainThreadKickHostView = nil;
-            return;
-        }
-
-        mainThreadKickProxy->owner = this;
-
-        if (@available (macOS 14.0, *))
-        {
-            mainThreadDisplayLink = [[hostView displayLinkWithTarget: mainThreadKickProxy
-                                                            selector: @selector (displayLinkTick:)] retain];
-            if (mainThreadDisplayLink != nil)
-            {
-                [mainThreadDisplayLink addToRunLoop: [NSRunLoop mainRunLoop] forMode: NSRunLoopCommonModes];
-                mainThreadKickDriver = "displaylink";
-            }
-        }
-
-        if (mainThreadDisplayLink == nil)
-        {
-            mainThreadKickTimer = [[NSTimer timerWithTimeInterval: (1.0 / 120.0)
-                                                           target: mainThreadKickProxy
-                                                         selector: @selector (timerTick:)
-                                                         userInfo: nil
-                                                          repeats: YES] retain];
-            if (mainThreadKickTimer != nil)
-            {
-                [[NSRunLoop mainRunLoop] addTimer: mainThreadKickTimer forMode: NSRunLoopCommonModes];
-                mainThreadKickDriver = "timer";
-            }
-        }
-
-        if (mainThreadDisplayLink == nil && mainThreadKickTimer == nil)
-        {
-            [mainThreadKickProxy release];
-            mainThreadKickProxy = nil;
-            mainThreadKickHostView = nil;
-            mainThreadKickDriver = "off";
-        }
-        else
-        {
-            NSLog (@"[MetalHost #%d] main-thread kick enabled driver=%s", instanceId, mainThreadKickDriver);
-        }
-    }
-
-    void stopMainThreadKick()
-    {
-        if (mainThreadKickProxy == nil && mainThreadDisplayLink == nil && mainThreadKickTimer == nil)
-            return;
-
-        if (! [NSThread isMainThread])
-        {
-            NSLog (@"[MetalHost #%d] main-thread kick stop skipped: detach was off-main", instanceId);
-            return;
-        }
-
-        if (mainThreadDisplayLink != nil)
-        {
-            [mainThreadDisplayLink invalidate];
-            [mainThreadDisplayLink release];
-            mainThreadDisplayLink = nil;
-        }
-
-        if (mainThreadKickTimer != nil)
-        {
-            [mainThreadKickTimer invalidate];
-            [mainThreadKickTimer release];
-            mainThreadKickTimer = nil;
-        }
-
-        if (mainThreadKickProxy != nil)
-        {
-            mainThreadKickProxy->owner = nullptr;
-            [mainThreadKickProxy release];
-            mainThreadKickProxy = nil;
-        }
-
-        mainThreadKickHostView = nil;
-        mainThreadKickDriver = "off";
     }
 
     void updateLayerGeometry()
@@ -1748,6 +1610,7 @@ private:
         lastPeakHoldBuildOk = peakHoldBuildOk;
     }
 
+#if ANALYZERPRO_METAL_DIAGNOSTICS
     void appendRenderFrameDiagnostic (const MetalAnalyzerFrame& frame, bool rmsDidDraw, const char* peakPath, bool peakDidDraw)
     {
         if (wroteRenderFrameDiagnostic || ! frame.rmsTrace.visible)
@@ -1766,6 +1629,7 @@ private:
             (void) std::fclose (file);
         }
     }
+#endif
 
     void drawAnalyzerFrame (id<MTLRenderCommandEncoder> encoder,
                             id<MTLTexture> drawableTexture,
@@ -1960,7 +1824,9 @@ private:
                 didDrawAnyTrace |= peakHoldBuildOk;
             }
             updatePeakTelemetry (peakPath, peakHoldPath, peakBuildOk, peakHoldBuildOk);
+#if ANALYZERPRO_METAL_DIAGNOSTICS
             appendRenderFrameDiagnostic (*frame, rmsBuildOk, peakPath, peakBuildOk);
+#endif
 
             if (! didDrawAnyTrace)
             {
@@ -2112,7 +1978,9 @@ private:
             const float dataFps = static_cast<float> (static_cast<double> (analyzerDataChanges) / elapsed);
             gMetalHostFps.store (computedFps, std::memory_order_relaxed);
             gMetalHostEncodeMs.store (averageEncodeMs, std::memory_order_relaxed);
+#if ANALYZERPRO_METAL_DIAGNOSTICS
             writeStatsFile (computedFps, nextDrawableBlockPct, averageEncodeMs, pipelineFps, dataFps);
+#endif
             NSLog (@"[MetalHost #%d] driver=self_paced_nextDrawable thread=%s mech=%s fps=%.1f nextDrawable_block_pct=%.3f encode_ms=%.3f pipeline_fps=%.1f data_fps=%.1f",
                    instanceId,
                    [NSThread isMainThread] ? "main" : "off-main",
@@ -2141,6 +2009,7 @@ private:
         analyzerDataChanges = 0;
     }
 
+#if ANALYZERPRO_METAL_DIAGNOSTICS
     void writeStatsFile (float presentFps, double nextDrawableBlockPct, float encodeMs, float pipelineFps, float dataFps) const
     {
         char tempPath[128] {};
@@ -2183,11 +2052,6 @@ private:
                                              "maxHz=%.2f\n"
                                              "plotW=%.1f\n"
                                              "plotH=%.1f\n"
-                                             "maxdrawable3=%d\n"
-                                             "maximumDrawableCount=%d\n"
-                                             "mainthread_kick=%d\n"
-                                             "mainthread_kick_active=%d\n"
-                                             "mainthread_kick_driver=%s\n"
                                              "instance_id=%d\n"
                                              "mechanism=%s\n"
                                              "live_render_threads=%d\n",
@@ -2223,11 +2087,6 @@ private:
                                              static_cast<double> (lastRmsMaxHz),
                                              static_cast<double> (lastRmsPlotW),
                                              static_cast<double> (lastRmsPlotH),
-                                             maxDrawable3Enabled ? 1 : 0,
-                                             effectiveMaximumDrawableCount,
-                                             mainThreadKickEnabled ? 1 : 0,
-                                             (mainThreadDisplayLink != nil || mainThreadKickTimer != nil) ? 1 : 0,
-                                             mainThreadKickDriver,
                                              instanceId,
                                              getMetalHostMechanismName (mechanism),
                                              liveRenderThreadCount().load (std::memory_order_relaxed));
@@ -2243,6 +2102,7 @@ private:
                 (void) std::remove (tempPath);
         }
     }
+#endif
 
     juce::Component& editor;
     const AnalyzerEngine* analyzerEngine = nullptr;
@@ -2270,19 +2130,11 @@ private:
     NSView* peerView = nil;
     CALayer* originalLayer = nil;
     AnalyzerProMetalCoverView* coverView = nil;
-    AnalyzerProMetalMainThreadKickProxy* mainThreadKickProxy = nil;
-    id mainThreadDisplayLink = nil;
-    NSTimer* mainThreadKickTimer = nil;
-    NSView* mainThreadKickHostView = nil;
-    const char* mainThreadKickDriver = "off";
     BOOL originalWantsLayer = NO;
     bool layerAttached = false;
     bool initialised = false;
     bool running = false;
     bool teardownAbandoned = false;
-    bool maxDrawable3Enabled = false;
-    bool mainThreadKickEnabled = false;
-    int effectiveMaximumDrawableCount = 0;
     std::atomic<bool> stopping { false };
     std::atomic<int> inFlightFrames { 0 };
     std::atomic<float> backingScale { 1.0f };
@@ -2310,7 +2162,9 @@ private:
     int instanceId = 0;
     bool renderPipelinesReady = false;
     bool rmsDiagnosticLogged = false;
+#if ANALYZERPRO_METAL_DIAGNOSTICS
     bool wroteRenderFrameDiagnostic = false;
+#endif
     const char* lastRmsPath = "none";
     size_t lastRmsPipelineBins = 0;
     bool lastRmsBuildOk = false;
@@ -2375,24 +2229,6 @@ private:
 - (void)scrollWheel:(NSEvent*)event      { if (owner != nullptr) owner->forwardWheelEvent (self, event); }
 - (void)keyDown:(NSEvent*)event          { if (owner != nullptr) owner->forwardKeyDown (event); }
 - (void)keyUp:(NSEvent*)event            { if (owner != nullptr) owner->forwardKeyUp (event); }
-
-@end
-
-@implementation AnalyzerProMetalMainThreadKickProxy
-
-- (void)displayLinkTick:(id)sender
-{
-    (void) sender;
-    if (owner != nullptr)
-        owner->handleMainThreadKick();
-}
-
-- (void)timerTick:(NSTimer*)timer
-{
-    (void) timer;
-    if (owner != nullptr)
-        owner->handleMainThreadKick();
-}
 
 @end
 

@@ -6,7 +6,9 @@
 #include <mdsp_ui/Theme.h>
 #include <algorithm>
 #include <cmath>
+#if defined(ANALYZERPRO_METAL_DIAGNOSTICS) && ANALYZERPRO_METAL_DIAGNOSTICS
 #include <cstdio>
+#endif
 #include <limits>
 
 #if !defined(ANALYZERPRO_MODE_DEBUG_OVERLAY)
@@ -636,6 +638,7 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
         setTrace (frame.monoTrace, multiTraceMonoFrame_.display_, colourFor (AnalyzerPro::TraceId::Mono, theme_.seriesMono), traceConfig_.showMono);
     }
 
+#if defined(ANALYZERPRO_METAL_DIAGNOSTICS) && ANALYZERPRO_METAL_DIAGNOSTICS
     static bool wroteMetalRmsFrameDiagnostic = false;
     if (! wroteMetalRmsFrameDiagnostic && fftFrame_.hasCurrent_)
     {
@@ -676,6 +679,7 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
             (void) std::fclose (file);
         }
     }
+#endif
 
     return frame.valid;
 }

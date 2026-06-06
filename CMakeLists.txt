@@ -31,8 +31,8 @@ endif()
 
 set(PLUGIN_NAME "AnalyzerPro" CACHE STRING "Plugin name")
 set(PLUGIN_VERSION_MAJOR 1 CACHE STRING "Plugin version major" FORCE)
-set(PLUGIN_VERSION_MINOR 1 CACHE STRING "Plugin version minor" FORCE)
-set(PLUGIN_VERSION_PATCH 1 CACHE STRING "Plugin version patch" FORCE)
+set(PLUGIN_VERSION_MINOR 2 CACHE STRING "Plugin version minor" FORCE)
+set(PLUGIN_VERSION_PATCH 0 CACHE STRING "Plugin version patch" FORCE)
 set(COMPANY_NAME "MelechDSP" CACHE STRING "Company name")
 set(PLUGIN_CODE "AnPr" CACHE STRING "4-character plugin code (e.g., Tmpl)")
 set(MANUFACTURER_CODE "Melc" CACHE STRING "4-character manufacturer code (e.g., Tmpl) - must have at least one uppercase letter")
@@ -69,7 +69,14 @@ endif()
 option(ANALYZERPRO_COPY_AFTER_BUILD "Copy built plugins to system folders after build" ON)
 option(ANALYZERPRO_METAL_EDITOR "Full-editor Metal UI" OFF)
 option(ANALYZERPRO_METAL_REPRO "Headless Metal repro harness" OFF)
+option(ANALYZERPRO_METAL_DIAGNOSTICS "Enable Metal /tmp diagnostics in plugin builds" OFF)
 option(ANALYZERPRO_ASAN "AddressSanitizer for MetalReproHarness only" OFF)
+
+if(ANALYZERPRO_METAL_DIAGNOSTICS)
+    set(ANALYZERPRO_METAL_DIAGNOSTICS_VALUE 1)
+else()
+    set(ANALYZERPRO_METAL_DIAGNOSTICS_VALUE 0)
+endif()
 
 # ==============================================================================
 # SDK PATHS
@@ -153,6 +160,22 @@ project(${PLUGIN_NAME}
     VERSION ${PLUGIN_VERSION_MAJOR}.${PLUGIN_VERSION_MINOR}.${PLUGIN_VERSION_PATCH}
     LANGUAGES C CXX
 )
+
+set(ANALYZERPRO_GIT_SHORT_HASH "unknown")
+find_package(Git QUIET)
+if(Git_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse --short=12 HEAD
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE _analyzerpro_git_short_hash
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(_analyzerpro_git_short_hash)
+        set(ANALYZERPRO_GIT_SHORT_HASH "${_analyzerpro_git_short_hash}")
+    endif()
+endif()
+message(STATUS "AnalyzerPro git hash: ${ANALYZERPRO_GIT_SHORT_HASH}")
 
 if(ANALYZERPRO_METAL_EDITOR OR ANALYZERPRO_METAL_REPRO)
     if(APPLE)
@@ -412,7 +435,12 @@ foreach(t IN LISTS _mdsp_consumer_targets)
         if (COMMAND mdsp_enforce_bridge_consumer)
             mdsp_enforce_bridge_consumer(${t})
         endif()
-        target_compile_definitions(${t} PRIVATE MDSP_SDK_VERSION_STRING="${MDSP_SDK_VERSION}")
+        target_compile_definitions(${t}
+            PRIVATE
+                MDSP_SDK_VERSION_STRING="${MDSP_SDK_VERSION}"
+                ANALYZERPRO_GIT_SHORT_HASH="${ANALYZERPRO_GIT_SHORT_HASH}"
+                ANALYZERPRO_METAL_DIAGNOSTICS=${ANALYZERPRO_METAL_DIAGNOSTICS_VALUE}
+        )
     endif()
 endforeach()
 
@@ -449,6 +477,8 @@ if(APPLE AND ANALYZERPRO_METAL_REPRO)
             JUCE_WEB_BROWSER=0
             JUCE_USE_CURL=0
             MDSP_SDK_VERSION_STRING="${MDSP_SDK_VERSION}"
+            ANALYZERPRO_GIT_SHORT_HASH="${ANALYZERPRO_GIT_SHORT_HASH}"
+            ANALYZERPRO_METAL_DIAGNOSTICS=1
     )
 
     target_link_libraries(MetalReproHarness

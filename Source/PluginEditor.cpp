@@ -2,17 +2,23 @@
 #include "PluginEditor.h"
 #if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
 #include "ui/analyzer/metal/MetalEditorRenderer.h"
-#endif
 #include <cstdlib>
+#endif
 
+#if !defined(ANALYZERPRO_GIT_SHORT_HASH)
+#define ANALYZERPRO_GIT_SHORT_HASH "unknown"
+#endif
+
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
 namespace
 {
-bool isAaxMetalEditorEnabled() noexcept
+bool isAaxMetalEditorDisabled() noexcept
 {
-    const auto* value = std::getenv ("ANALYZERPRO_ENABLE_AAX_METAL");
+    const auto* value = std::getenv ("ANALYZERPRO_DISABLE_AAX_METAL");
     return value != nullptr && value[0] == '1';
 }
 }
+#endif
 
 //==============================================================================
 AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerProAudioProcessor& p)
@@ -109,7 +115,8 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
     // identifiable on screen. __DATE__/__TIME__ reflect when PluginEditor.cpp was
     // compiled, which updates on every rebuild that touches it.
     const juce::String buildInfoText = "AnalyzerPro v" + juce::String (JucePlugin_VersionString)
-                                           + "  \xe2\x80\xa2  build " __DATE__ " " __TIME__;
+                                           + "  \xe2\x80\xa2  build " __DATE__ " " __TIME__
+                                           + "  \xe2\x80\xa2  " + juce::String (ANALYZERPRO_GIT_SHORT_HASH);
     buildInfoLabel_.setText (buildInfoText, juce::dontSendNotification);
     buildInfoLabel_.setJustificationType (juce::Justification::centredLeft);
     buildInfoLabel_.setInterceptsMouseClicks (false, false);
@@ -119,7 +126,7 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
     buildInfoLabel_.toFront (false);
 
 #if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
-    if (isAAX && isAaxMetalEditorEnabled())
+    if (isAAX && ! isAaxMetalEditorDisabled())
         startMetalSurfaceIfNeeded();
 #endif
 }
@@ -163,7 +170,7 @@ void AnalayzerProAudioProcessorEditor::resized()
     audioProcessor.setEditorSizePreset (currentEditorSizePreset_);
 
     // Build stamp, bottom-left near the host's status footer.
-    buildInfoLabel_.setBounds (8, getHeight() - 16, 460, 14);
+    buildInfoLabel_.setBounds (8, getHeight() - 16, 560, 14);
     buildInfoLabel_.toFront (false);
 
 #if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
