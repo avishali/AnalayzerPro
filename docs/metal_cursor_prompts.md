@@ -84,6 +84,92 @@ responsiveness — as long as events reach JUCE's component tree (see hosting me
 
 End of CONTEXT.
 
+### Local Metal render-path repro harness — name the objc_release over-release outside Pro Tools
+
+**Why:** the AAX Metal render thread crashes with `EXC_BAD_ACCESS` in `objc_release` at the
+per-iteration `@autoreleasepool` pop (`MetalHost.mm:543`; stack
+`objc_autoreleasePoolPop → AutoreleasePoolPage::releaseUntil → objc_release`, in the
+`MetalHostImpl::startRenderThread` lambda). It's an ObjC over-release of an autoreleased object
+(likely the `CAMetalDrawable`) on the render thread, only exposed now that `renderFrame()` runs for
+the first time. Stop tuning drawable retain/release timing in PT. Build a headless harness that
+drives the real render path under NSZombie/ASan so the failing object is named.
+
+**Hard rules:** Keep the `ANALYZERPRO_ENABLE_AAX_METAL` gate untouched (do **NOT** re-enable AAX
+Metal by default). Drive the real `MetalHostImpl` — no reimplementation. ARC stays OFF in
+`MetalHost.mm`. Don't change drawable timing, DSP, or `third_party/`. Do not attempt the fix in this
+pass — reproduce, name the object, STOP.
+
+1. **Build targets (CMake)**
+   - `option(ANALYZERPRO_METAL_REPRO "Headless Metal repro harness" OFF)` builds executable
+     `MetalReproHarness` linking `MetalHost.mm` + deps + `AnalyzerEngine`, with
+     `ANALYZERPRO_METAL_EDITOR=1` and Metal/QuartzCore/AppKit/Foundation frameworks.
+   - `option(ANALYZERPRO_ASAN "AddressSanitizer" OFF)` adds `-fsanitize=address`
+     `-fno-omit-frame-pointer` to the harness target only.
+   - New file `Source/ui/analyzer/metal/repro/MetalReproMain.mm` is added to that target's sources.
+
+2. **Harness (`MetalReproMain.mm`) — 3-thread layout mirroring PT**
+   - Main thread: `NSApplication` + a small on-screen `NSWindow` with a content `NSView` (must be on
+     a real display — offscreen `nextDrawable` returns nil and hides the bug). Construct
+     `MetalHostImpl(view, MetalHostMechanism::BackingLayer, &engine)` exactly as
+     `MetalEditorRenderer` does; size the layer (`updateLayerGeometry`). A ~15 Hz main-thread timer
+     publishes the chrome payload + analyzer config (stubs below).
+   - Render thread: the real self-paced loop inside `MetalHostImpl` (untouched).
+   - Audio thread: synthetic feeder calling `engine.processBlock(...)` at ~realtime.
+   - Lifecycle stress: outer loop of `M = 50` cycles: construct → run `N = 200k` render frames →
+     `stop()` → assert `live_render_threads == 0`. Feeder + publishers run during each cycle,
+     stopped before teardown.
+   - Bisect toggles (`argv`): `--empty` (force `drawEmptyClear`, drawable-only, ignore stubs B/C) ·
+     `--chrome` (stub A only) · `--analyzer` (A+B+C, RMS) · `--analyzer --multitrace` (also
+     published-db traces). Seed all generators (block size, frame count, RNG) for reproducibility.
+
+3. **Stub A — chrome payload (`FrameTexturePayload`, `MetalHostShared.h:23`)**
+   - `makeSyntheticChromePayload(widthPx, heightPx, scale, seq)`: `bytesPerRow = widthPx * 4`;
+     `bgraPixels.resize(heightPx * bytesPerRow)` (BGRA8); fill with a moving pattern (gradient + box
+     at `x = seq % widthPx`); `widthPx/heightPx = editorSize × backingScale`; `sequence = seq`
+     (increment each publish).
+   - Publish via the real `setChromeFrame(...)`. Allocate fresh per tick (stresses payload
+     alloc/free).
+
+4. **Stub B — analyzer config (`MetalAnalyzerFrame`, `MetalHostShared.h:62`)**
+   - `makeSyntheticAnalyzerFrame(plotRectPx, fftSize, sampleRate, seq)`: `valid=true`;
+     `sequence=seq`; `plotRectPx = drawable rect inset 8%` (drawable px, must pass `!isEmpty()`);
+     `minHz=20`, `maxHz=20000`, `topDb=6`, `bottomDb=-90`, `displayGainDb=0`,
+     `rmsAttackMs=60`, `rmsReleaseMs=300`; `sampleRate/fftSize` kept in sync with the engine
+     (re-publish when the feeder changes `fftSize` — render thread rebuilds its pipeline on change
+     at `MetalHost.mm:1070`); RMS colour opaque; `rmsTrace{visible=true, strokeVisible=true,
+     fillToBottom=true, fillTopAlpha=0.25, fillBottomAlpha=0.0}`, `rmsTrace.db` empty (RMS is
+     engine-driven). Other traces `visible=false`.
+   - Publish via the real `setAnalyzerFrame(...)`.
+   - `--multitrace`: populate peak/stereo/mid/side `.db` (length `fftSize / 2 + 1`, a moving
+     pink-ish curve) + `visible=true`, to exercise the distinct `drawTracePayloadFromDb` path.
+
+5. **Stub C — audio feeder (real `AnalyzerEngine`, `Source/analyzer/AnalyzerEngine.h`)**
+   - Once: `engine.prepare(48000, 512); engine.setFftSize(2048);`.
+   - Dedicated audio thread at ~realtime (`512 / 48000 ≈ 10.6 ms/block`): fill a
+     `juce::AudioBuffer<float>` (`2 × 512`) with seeded pink-ish noise + a looping log sine sweep
+     20 Hz→20 kHz over ~4 s (moving spectrum so ballistics animate); call `engine.processBlock(buffer)`.
+   - Every ~3 s toggle `engine.setFftSize(2048 ↔ 4096)` and re-publish stub B with the new `fftSize`
+     (exercises the `processingMutex_` resize path + render-thread pipeline rebuild concurrently).
+   - Start ~100 ms before the render loop so `getLatestSnapshot` has valid data.
+
+6. **Run recipe (document in a README next to the harness)**
+
+```sh
+# cheapest first — no rebuild, names the zombie:
+NSZombieEnabled=YES MallocScribble=YES MallocStackLogging=YES ./MetalReproHarness --empty
+#   expect: "*** -[CAMetalDrawable release]: message sent to deallocated instance 0x…"
+#   then: malloc_history <pid> <addr>   → alloc + over-releasing free stacks
+
+# precise double-free/UAF report:
+cmake -B build-asan -DANALYZERPRO_METAL_REPRO=ON -DANALYZERPRO_ASAN=ON … && cmake --build build-asan --target MetalReproHarness
+./build-asan/MetalReproHarness --analyzer
+```
+
+**Deliverable:** the harness + 3 stubs; report which toggle reproduces (`--empty` ⇒ drawable
+lifetime; only `--multitrace` ⇒ trace-vector path) and the named over-released object + free stack
+from NSZombie/ASan. Build clean (Standalone + AAX still build; flag off ⇒ unchanged). Then STOP —
+the fix is a separate, surgical pass once the object is named.
+
 ---
 
 ## Phase 0 — Full-editor Metal hosting de-risk (DO THIS FIRST)
@@ -572,6 +658,79 @@ PT. **Do not start Phase 3 until confirmed.**
 
 ---
 
+### Phase 1B — follow-up 6: fix render-thread teardown (zombie leak) via presentsWithTransaction
+
+**Status / root cause (PROVEN by `sample` of a live Pro Tools):** after a few close/reopen cycles
+there are **9+ leaked "zombie" render threads** — each `MetalHostImpl::startDisplayLinkOnRenderThread
+→ renderThreadMain → displayLinkStep → renderFrame` stuck at the `@autoreleasepool` pop
+(`objc_release` of the presented `CAMetalDrawable`). Every close abandons a `MetalHostImpl` because
+its in-flight `renderFrame` never returns, so `MetalHost::stop()` hits the `impl_.release()` escape
+hatch and leaks the whole context (render thread + `CAMetalLayer` + display link). The zombies
+accumulate and gum up the display → reopen shows only the background, no trace/chrome/HUD.
+
+**Why the present blocks (the real bug):** `renderFrame()` presents with the **async**
+`[commandBuffer presentDrawable: drawable]` (CAMetalLayer default `presentsWithTransaction == NO`)
+**but also wraps it in an explicit `[CATransaction begin]…[CATransaction commit]`** — a contradictory
+hybrid. Because our layer is the editor view's **backing layer** (BackingLayer mechanism), that async
+present's completion is tied to the window's **main-thread** CoreAnimation transaction, so the
+drawable release blocks until the main thread services it — which at teardown it can't. The render
+thread therefore can never finish its in-flight frame.
+
+**Documented correct pattern (Apple — `CAMetalLayer.presentsWithTransaction`):** *"Setting this value
+to true makes the layer draw its contents synchronously, using whichever Core Animation transaction is
+current… First commit the command buffer. Then call `waitUntilScheduled()`… Finally, call the
+drawable's `present()` method."* This completes the present **on the render thread**, with no
+main-thread dependency — so the in-flight frame at close finishes, the render thread exits cleanly, and
+nothing is abandoned/leaked. (Verify exact semantics via the apple-docs MCP if available.)
+
+**Working-tree note:** the editor was already edited this session with a **detach-first** teardown
+(`MetalHostImpl::stop()` now restores the peer's backing layer BEFORE draining; `detachFromPeerView`
+takes a `restoreLayer` flag; `clearPublishedFrames()` added). Keep those — they're complementary. This
+follow-up adds the present-path fix that actually lets the render thread exit.
+
+**Do (scope = `MetalHost.mm` render-driver / present only; do NOT touch the analyzer pipeline, chrome
+capture, or BackingLayer hosting):**
+1. **Set `metalLayer.presentsWithTransaction = YES`** once, where the layer is configured (next to
+   `framebufferOnly` / `allowsNextDrawableTimeout` in `start()`).
+2. **Replace the present block in `renderFrame()`** — remove the async `presentDrawable:` and the
+   contradictory `[CATransaction begin/commit]` wrap — with Apple's synchronous pattern:
+   ```objc
+   // ... finish encoding into commandBuffer ...
+   [commandBuffer commit];
+   [commandBuffer waitUntilScheduled];   // bounded GPU-schedule wait, on the render thread
+   [CATransaction begin];
+   [drawable present];                   // synchronous present, no main-thread CA dependency
+   [CATransaction commit];
+   ```
+   Keep the `stopping` early-bails (don't acquire `nextDrawable` / present once `stopping`). The manual
+   `[drawable retain]` + completion-handler release can be dropped (the synchronous `present` no longer
+   needs the drawable to outlive the autoreleasepool) — verify no over-release.
+3. **Remove the `impl_.release()` abandon/leak escape hatch** in `MetalHost::stop()`. With the render
+   thread now exiting reliably, `stopDisplayLinkAndDrain` should succeed and `impl_.reset()` always
+   runs. Keep a bounded drain timeout as a safety LOG, but **never leak the impl** — if the drain ever
+   still times out, surface it (NSLog), don't paper over it. (Detach-first already restores the peer
+   layer regardless.)
+4. **Prove single render thread / no accumulation:** ensure `stop()` joins the render thread before
+   `MetalHostImpl` is destroyed; add a process-wide live-render-thread counter (`++` on create, `--`
+   on exit) and NSLog it, so the test can confirm it returns to 0 after each close.
+
+**Don't:** reintroduce a main-thread block (`waitUntilScheduled` is on the render thread and bounded —
+fine; do NOT add a main-thread `join`/`invalidate`/`wait` that blocks on an in-flight present); change
+the analyzer render-thread pipeline; touch DSP / `third_party/`; use `#if JucePlugin_Build_AAX`.
+
+**Acceptance (compile-time):** Standalone + AAX build clean; flag off ⇒ unchanged.
+
+**⛔ STOP — checkpoint (human in PT) — the gates that keep failing:**
+- **No zombie accumulation:** open/close/reopen **8–10 times**, then `sample` PT — there must be
+  **exactly one** `renderThreadMain` (the live editor), not N. The live-thread counter returns to 0
+  after each close.
+- **Reopen is clean:** after every close→reopen the trace + meters + chrome refresh (not just the
+  background).
+- **No close hang:** PT close returns immediately (original bug must not regress).
+- **Off-main render holds** during playback (driver=CADisplayLink, thread=off-main, display-rate fps).
+
+---
+
 ## Phase 3 — Lifecycle & robustness
 
 **Objective:** Make the Metal editor production-safe.
@@ -637,3 +796,56 @@ reviewed with awareness of other consumers. Then flip on per the chosen policy a
 - No DSP/audio-thread edits; render thread is read-only on the lock-free snapshot.
 - No `third_party/` edits before the upstream phase. ARC is OFF in `.mm`.
 - End every phase by reporting what changed + what the human must test, then STOP.
+
+---
+
+## AAX Metal re-enable checkpoint (standing gate)
+
+Run this gate before flipping AAX Metal back on by default. It exists because the historical
+failures were exactly three: an `objc_release` over-release crash, zombie render-thread
+accumulation across close/reopen, and stale/background-only reopen. The gate proves all three are
+gone. Keep `ANALYZERPRO_ENABLE_AAX_METAL` **opt-in** until every criterion passes.
+
+**1. Medium local soak first (MetalReproHarness):**
+- NSZombie: all toggles (`--empty`, `--chrome`, `--analyzer`, `--analyzer --multitrace`) with
+  `--cycles 50 --frames 8000`.
+- ASan: same toggles, `--cycles 50 --frames 8000`.
+- Required: no zombies, no ASan reports, `live_render_threads` returns to 0 after every cycle.
+- (Weighted toward cycles+resize churn, not raw frames — that's where lifetime bugs live. A short
+  300-frame run is enough to confirm a *specific* already-named over-release; the soak is for
+  catching *other* latent teardown/resize lifetime issues.)
+
+**2. Build/sign/install AAX with the build stamp visible:**
+- Keep `ANALYZERPRO_ENABLE_AAX_METAL` opt-in only.
+- Build-stamp gate (see `project_version_and_build_paths` memory): the installed binary's
+  `strings … | grep "build <Mon>"` stamp must postdate the source edit; installed SHA == signed
+  artifact SHA. Launch PT with `ANALYZERPRO_ENABLE_AAX_METAL=1`.
+
+**3. In Pro Tools (behavioral + Console only — no NSZombie/ASan inside PT):**
+- Insert AnalyzerPro AAX; confirm the build stamp matches step 2.
+- Open/close editor 8–10×; after each close, reopen → chrome + analyzer **refresh** (not
+  stale/background-only).
+- Start playback with editor open: no crash, no freeze, smooth render.
+- Close editor during playback: no hang/crash.
+- Stop/start playback with editor open.
+- Remove plugin, reinsert, reopen editor.
+- Repeat with 2–4 instances if the first pass is clean.
+- **Observe `live_render_threads` in Console.app** filtered on `MetalHost`: expect
+  `render thread exited (live_render_threads=0)` on each close, and NO
+  `abandoned teardown after timeout`. The counter is **process-wide** — with N editors open it
+  sits at N and returns to 0 only when all are closed (N-open ≠ leak).
+- **If it crashes:** PT uses Crashpad (nothing in Console/DiagnosticReports). Get the stack from
+  the minidump without relaunching:
+  `lldb -b -o 'target create -c ~/Library/Application\ Support/Avid/Pro\ Tools/Crashpad/completed/<newest>.dmp' -o 'thread backtrace' -o quit`
+
+**4. Pass criteria:**
+- No `objc_release` crash.
+- No zombie render-thread accumulation.
+- `live_render_threads` returns to 0 after editor close.
+- Reinsert/reopen is clean.
+- AAX Metal remains opt-in until ALL of the above pass.
+
+**5. After pass:**
+- A **separate commit** only for flipping the AAX Metal default gate (remove the
+  `ANALYZERPRO_ENABLE_AAX_METAL` requirement in `PluginEditor.cpp`).
+- Keep that commit isolated for a one-line revert.

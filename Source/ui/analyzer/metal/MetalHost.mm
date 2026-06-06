@@ -13,12 +13,12 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cstddef>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -34,12 +34,13 @@ struct MetalHostImpl;
 }
 @end
 
-@interface AnalyzerProMetalDisplayLinkTarget : NSObject
+@interface AnalyzerProMetalMainThreadKickProxy : NSObject
 {
 @public
     AnalyzerPro::metal::MetalHostImpl* owner;
 }
-- (void)step:(id)sender;
+- (void)displayLinkTick:(id)sender;
+- (void)timerTick:(NSTimer*)timer;
 @end
 
 namespace AnalyzerPro::metal
@@ -58,6 +59,20 @@ int nextMetalHostInstanceId() noexcept
     return nextId.fetch_add (1, std::memory_order_relaxed);
 }
 
+bool isEnvFlagEnabled (const char* name) noexcept
+{
+    const auto* value = std::getenv (name);
+    return value != nullptr && value[0] == '1';
+}
+
+// Process-wide count of live render threads. Incremented when a render thread starts and
+// decremented when it exits, so the close/reopen zombie-accumulation gate can confirm the
+// count returns to 0 after each editor close (no abandoned render threads).
+std::atomic<int>& liveRenderThreadCount() noexcept
+{
+    return gMetalHostLiveRenderThreads;
+}
+
 struct ChromeVertex
 {
     float position[2];
@@ -74,8 +89,12 @@ constexpr size_t kMaxAnalyzerBins = static_cast<size_t> (AnalyzerSnapshot::kMaxF
 constexpr size_t kMaxAnalyzerFillVertices = kMaxAnalyzerBins * 2;
 constexpr size_t kChromeTextureRingSize = 3;
 constexpr int kNoChromeTextureIndex = -1;
-constexpr auto kDisplayLinkThreadStartTimeout = std::chrono::milliseconds (1000);
-constexpr auto kDisplayLinkThreadStopTimeout = std::chrono::milliseconds (250);
+constexpr auto kRenderThreadStopTimeout = std::chrono::milliseconds (2000);
+constexpr auto kDrawableUnavailableSleep = std::chrono::milliseconds (2);
+constexpr const char* kMetalHostStatsPath = "/tmp/metalhost_stats.txt";
+constexpr size_t kRmsInterpolationIntervalHistorySize = 4;
+constexpr double kRmsInterpolationMinIntervalSeconds = 0.001;
+constexpr double kRmsInterpolationMaxIntervalSeconds = 0.100;
 
 const char* getRuntimeShaderSource() noexcept
 {
@@ -219,21 +238,37 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
         if (metalLayer == nil)
             return false;
 
+        maxDrawable3Enabled = isEnvFlagEnabled ("ANALYZERPRO_METAL_MAXDRAWABLE3");
+        mainThreadKickEnabled = isEnvFlagEnabled ("ANALYZERPRO_METAL_MAINTHREAD_KICK");
+
         metalLayer.device = device;
         metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         metalLayer.framebufferOnly = YES;
         metalLayer.opaque = YES;
         metalLayer.allowsNextDrawableTimeout = YES;
+        metalLayer.presentsWithTransaction = NO;
+        if (@available (macOS 10.13.2, *))
+        {
+            if (maxDrawable3Enabled)
+                metalLayer.maximumDrawableCount = 3;
+            effectiveMaximumDrawableCount = static_cast<int> (metalLayer.maximumDrawableCount);
+        }
 
         if (renderPassDescriptor == nil)
             renderPassDescriptor = [[MTLRenderPassDescriptor renderPassDescriptor] retain];
         if (renderPassDescriptor == nil)
             return false;
 
+        NSLog (@"[MetalHost #%d] toggles maxdrawable3=%d maximumDrawableCount=%d mainthread_kick=%d",
+               instanceId,
+               maxDrawable3Enabled ? 1 : 0,
+               effectiveMaximumDrawableCount,
+               mainThreadKickEnabled ? 1 : 0);
+
         initialiseRenderPipelines();
         initialised = true;
 
-        // Attach + start the display link now IF the editor already has a native peer. At
+        // Attach + start the render thread now IF the editor already has a native peer. At
         // editor-construction time it usually does NOT — JUCE assigns the peer AFTER the
         // constructor returns — so this attach legitimately defers and completes later in
         // componentPeerChanged(). Metal being *available* (device/queue/layer created) is what
@@ -241,14 +276,14 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
         // Metal-resource failure (preserving the CPU fallback). This restores the Phase-0
         // behaviour that 1A regressed by treating "peer not ready" as fatal and tearing the
         // host down before the peer-attach retry could fire.
-        (void) tryAttachAndStartLink();
+        (void) tryAttachAndStartRenderThread();
         return true;
     }
 
-    // Attaches the Metal layer to the editor's native peer view and starts the display link.
+    // Attaches the Metal layer to the editor's native peer view and starts the render thread.
     // Safe to call repeatedly: a no-op once running, and a no-op (returns false) while the peer
     // is not yet available. Called from start() and re-tried from componentPeerChanged().
-    bool tryAttachAndStartLink()
+    bool tryAttachAndStartRenderThread()
     {
         if (running)
             return true;
@@ -259,11 +294,11 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
             return false; // peer not ready yet — componentPeerChanged() will retry
 
         stopping.store (false, std::memory_order_release);
-        if (! startDisplayLinkOnRenderThread())
+        if (! startRenderThread())
             return false;
 
         running = true;
-        NSLog (@"[MetalHost #%d] driver=CADisplayLink render_thread=dedicated", instanceId);
+        NSLog (@"[MetalHost #%d] driver=self_paced_nextDrawable render_thread=dedicated", instanceId);
         return true;
     }
 
@@ -273,10 +308,21 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
             return false;
 
         stopping.store (true, std::memory_order_release);
-        if (! stopDisplayLinkAndDrain ("stop"))
+
+        // Phase 1 (synchronous, fast, MUST NOT block): restore the peer's original backing layer
+        // FIRST. This runs from ~MetalEditorRenderer, before the base Component destructor's
+        // removeFromDesktop, so the editor + peer are still alive. Detaching first (a) guarantees a
+        // clean peer on reopen even if the drain below times out, and (b) orphans metalLayer so the
+        // render thread's in-flight present no longer needs the view's main-thread CoreAnimation
+        // transaction -> it completes and the render thread exits promptly (drain won't abandon).
+        NSLog (@"[MetalHost #%d] stop(): phase1 detach peer layer", instanceId);
+        detachFromPeerView (true);
+        clearPublishedFrames();
+
+        if (! stopRenderThreadAndDrain ("stop"))
             return false;
 
-        detachFromPeerView();
+        NSLog (@"[MetalHost #%d] stop(): teardown clean", instanceId);
 
         if (renderPassDescriptor != nil)
         {
@@ -348,6 +394,12 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
         analyzerPipelineBins = 0;
         analyzerPipelineSampleRate = 0.0;
         analyzerPipelineFftSize = 0;
+        analyzerRmsInterpolationStartTime = 0.0;
+        analyzerRmsLastSnapshotTime = 0.0;
+        analyzerRmsMeasuredIntervalSeconds = 0.0;
+        analyzerRmsIntervalHistory.fill (0.0);
+        analyzerRmsIntervalHistoryCount = 0;
+        analyzerRmsIntervalHistoryIndex = 0;
         lastRenderFrameTime = 0.0;
         gMetalHostFps.store (0.0f, std::memory_order_relaxed);
         gMetalHostEncodeMs.store (0.0f, std::memory_order_relaxed);
@@ -367,6 +419,16 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
     void resized()
     {
         updateLayerGeometry();
+    }
+
+    void clearPublishedFrames()
+    {
+        std::atomic_store_explicit (&latestChromeFrame,
+                                    std::shared_ptr<const FrameTexturePayload>(),
+                                    std::memory_order_release);
+        std::atomic_store_explicit (&latestAnalyzerFrame,
+                                    std::shared_ptr<const MetalAnalyzerFrame>(),
+                                    std::memory_order_release);
     }
 
     void setChromeFrame (std::shared_ptr<const FrameTexturePayload> frame)
@@ -393,8 +455,11 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
     {
         if (editor.getPeer() == nullptr)
         {
-            if (stopDisplayLinkAndDrain ("peer lost"))
-                detachFromPeerView();
+            // Peer gone: peerView may already be freed -> don't touch it (restoreLayer=false),
+            // and detach unconditionally so our own references are always cleared.
+            (void) stopRenderThreadAndDrain ("peer lost");
+            detachFromPeerView (false);
+            clearPublishedFrames();
             gMetalHostFps.store (0.0f, std::memory_order_relaxed);
             return;
         }
@@ -403,14 +468,14 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
         {
             detachFromPeerView();
             if (! teardownAbandoned)
-                (void) tryAttachAndStartLink();
+                (void) tryAttachAndStartRenderThread();
             return;
         }
 
-        if (stopDisplayLinkAndDrain ("peer changed"))
+        if (stopRenderThreadAndDrain ("peer changed"))
         {
             detachFromPeerView();
-            (void) tryAttachAndStartLink();
+            (void) tryAttachAndStartRenderThread();
         }
     }
 
@@ -418,20 +483,21 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
     {
         if (editor.getPeer() == nullptr)
         {
-            stopDisplayLinkAndDrain ("visibility peer lost");
+            stopRenderThreadAndDrain ("visibility peer lost");
             gMetalHostFps.store (0.0f, std::memory_order_relaxed);
             return;
         }
 
         if (! editor.isShowing())
         {
-            stopDisplayLinkAndDrain ("hidden");
+            stopMainThreadKick();
+            stopRenderThreadAndDrain ("hidden");
             gMetalHostFps.store (0.0f, std::memory_order_relaxed);
             return;
         }
 
         if (! running && ! teardownAbandoned)
-            (void) tryAttachAndStartLink();
+            (void) tryAttachAndStartRenderThread();
     }
 
     void forwardMouseEvent (AnalyzerProMetalCoverView* view, NSEvent* event)
@@ -461,8 +527,8 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
             const juce::MouseWheelDetails wheel {
                 static_cast<float> ([event scrollingDeltaX] / 120.0),
                 static_cast<float> ([event scrollingDeltaY] / 120.0),
-                [event isDirectionInvertedFromDevice],
-                [event hasPreciseScrollingDeltas],
+                [event isDirectionInvertedFromDevice] != NO,
+                [event hasPreciseScrollingDeltas] != NO,
                 [event momentumPhase] != NSEventPhaseNone
             };
 
@@ -491,155 +557,89 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
             peer->handleKeyUpOrDown (false);
     }
 
-    void displayLinkStep (id)
+    void handleMainThreadKick()
     {
-        if (renderThreadShouldExit.load (std::memory_order_acquire)
-            || stopping.load (std::memory_order_acquire))
-        {
+        if (! mainThreadKickEnabled || ! layerAttached || mainThreadKickHostView == nil)
             return;
-        }
 
-        renderFrame();
+        [mainThreadKickHostView setNeedsDisplay: YES];
+        [CATransaction flush];
     }
 
 private:
-    bool startDisplayLinkOnRenderThread()
+    bool startRenderThread()
     {
         if (peerView == nil)
             return false;
 
-        if (displayLinkTarget == nil)
-            displayLinkTarget = [[AnalyzerProMetalDisplayLinkTarget alloc] init];
-        if (displayLinkTarget == nil)
-            return false;
-        displayLinkTarget->owner = this;
-
-        id newDisplayLink = [peerView displayLinkWithTarget: displayLinkTarget
-                                                    selector: @selector (step:)];
-        if (newDisplayLink == nil)
-        {
-            NSScreen* screen = [[peerView window] screen];
-            if (screen == nil)
-                screen = [NSScreen mainScreen];
-            newDisplayLink = [screen displayLinkWithTarget: displayLinkTarget
-                                                   selector: @selector (step:)];
-        }
-        if (newDisplayLink == nil)
-            return false;
-
-        displayLink = [newDisplayLink retain];
-        [displayLink setPaused: NO];
-
-        {
-            std::lock_guard<std::mutex> lock (displayLinkMutex);
-            renderRunLoop = nullptr;
-            renderThreadReady = false;
-            renderThreadExited = false;
-        }
+        resetStatsCounters();
         renderThreadShouldExit.store (false, std::memory_order_release);
+        renderThreadExited.store (false, std::memory_order_release);
 
         renderThread = std::thread ([this]
         {
             renderThreadMain();
         });
 
-        std::unique_lock<std::mutex> lock (displayLinkMutex);
-        const bool ready = displayLinkCv.wait_for (lock,
-                                                   kDisplayLinkThreadStartTimeout,
-                                                   [this]
-                                                   {
-                                                       return renderThreadReady || renderThreadExited;
-                                                   });
-        if (! ready || ! renderThreadReady)
-        {
-            lock.unlock();
-            (void) stopDisplayLinkAndDrain ("thread start failed");
-            return false;
-        }
-
         return true;
     }
 
     void renderThreadMain()
     {
-        @autoreleasepool
+        const int liveOnEntry = liveRenderThreadCount().fetch_add (1, std::memory_order_acq_rel) + 1;
+        NSLog (@"[MetalHost #%d] render thread started (live_render_threads=%d)", instanceId, liveOnEntry);
+
+        while (! renderThreadShouldExit.load (std::memory_order_acquire)
+               && ! stopping.load (std::memory_order_acquire))
         {
-            CFRunLoopRef currentRunLoop = CFRunLoopGetCurrent();
-            CFRetain (currentRunLoop);
-
+            if (metalLayer == nil || commandQueue == nil)
             {
-                std::lock_guard<std::mutex> lock (displayLinkMutex);
-                renderRunLoop = currentRunLoop;
+                std::this_thread::sleep_for (kDrawableUnavailableSleep);
+                continue;
             }
 
+            inFlightFrames.fetch_add (1, std::memory_order_acq_rel);
+
+            id<CAMetalDrawable> drawable = nil;
+            const double nextDrawableStart = CACurrentMediaTime();
+            @autoreleasepool
             {
-                id link = displayLink;
-                if (link != nil)
-                    [link addToRunLoop: [NSRunLoop currentRunLoop] forMode: NSRunLoopCommonModes];
+                drawable = [[metalLayer nextDrawable] retain];
+            }
+            nextDrawableBlockedSeconds += CACurrentMediaTime() - nextDrawableStart;
+
+            if (renderThreadShouldExit.load (std::memory_order_acquire)
+                || stopping.load (std::memory_order_acquire))
+            {
+                [drawable release];
+                inFlightFrames.fetch_sub (1, std::memory_order_acq_rel);
+                break;
             }
 
+            if (drawable == nil)
             {
-                std::lock_guard<std::mutex> lock (displayLinkMutex);
-                renderThreadReady = true;
+                inFlightFrames.fetch_sub (1, std::memory_order_acq_rel);
+                std::this_thread::sleep_for (kDrawableUnavailableSleep);
+                continue;
             }
-            displayLinkCv.notify_all();
 
-            CFRunLoopRun();
-
+            @autoreleasepool
             {
-                std::lock_guard<std::mutex> lock (displayLinkMutex);
-                if (renderRunLoop != nullptr)
-                {
-                    CFRelease (renderRunLoop);
-                    renderRunLoop = nullptr;
-                }
-                renderThreadExited = true;
+                renderFrame (drawable);
             }
-            displayLinkCv.notify_all();
+            inFlightFrames.fetch_sub (1, std::memory_order_acq_rel);
         }
+
+        renderThreadExited.store (true, std::memory_order_release);
+        const int liveOnExit = liveRenderThreadCount().fetch_sub (1, std::memory_order_acq_rel) - 1;
+        NSLog (@"[MetalHost #%d] render thread exited (live_render_threads=%d)", instanceId, liveOnExit);
     }
 
-    bool stopDisplayLinkAndDrain (const char* reason)
+    bool stopRenderThreadAndDrain (const char* reason)
     {
         stopping.store (true, std::memory_order_release);
         renderThreadShouldExit.store (true, std::memory_order_release);
         running = false;
-
-        if (displayLinkTarget != nil)
-            displayLinkTarget->owner = nullptr;
-
-        CFRunLoopRef runLoopToStop = nullptr;
-        {
-            std::lock_guard<std::mutex> lock (displayLinkMutex);
-            runLoopToStop = renderRunLoop;
-            if (runLoopToStop != nullptr)
-                CFRetain (runLoopToStop);
-        }
-
-        id linkToInvalidate = displayLink;
-        if (linkToInvalidate != nil)
-            [linkToInvalidate retain];
-
-        if (runLoopToStop != nullptr)
-        {
-            CFRunLoopWakeUp (runLoopToStop);
-            CFRunLoopPerformBlock (runLoopToStop, kCFRunLoopCommonModes, ^{
-                if (linkToInvalidate != nil)
-                {
-                    [linkToInvalidate invalidate];
-                    [linkToInvalidate release];
-                }
-
-                CFRunLoopStop (CFRunLoopGetCurrent());
-            });
-            CFRunLoopWakeUp (runLoopToStop);
-            CFRelease (runLoopToStop);
-        }
-        else if (linkToInvalidate != nil)
-        {
-            [linkToInvalidate invalidate];
-            [linkToInvalidate release];
-        }
 
         if (renderThread.joinable())
         {
@@ -652,16 +652,14 @@ private:
             }
             else
             {
-                std::unique_lock<std::mutex> lock (displayLinkMutex);
-                const bool exited = displayLinkCv.wait_for (lock,
-                                                            kDisplayLinkThreadStopTimeout,
-                                                            [this]
-                                                            {
-                                                                return renderThreadExited;
-                                                            });
-                lock.unlock();
+                const auto deadline = std::chrono::steady_clock::now() + kRenderThreadStopTimeout;
+                while (! renderThreadExited.load (std::memory_order_acquire)
+                       && std::chrono::steady_clock::now() < deadline)
+                {
+                    std::this_thread::sleep_for (kDrawableUnavailableSleep);
+                }
 
-                if (! exited)
+                if (! renderThreadExited.load (std::memory_order_acquire))
                 {
                     teardownAbandoned = true;
                     renderThread.detach();
@@ -671,26 +669,6 @@ private:
 
                 renderThread.join();
             }
-        }
-
-        if (displayLink != nil)
-        {
-            [displayLink release];
-            displayLink = nil;
-        }
-
-        if (displayLinkTarget != nil)
-        {
-            displayLinkTarget->owner = nullptr;
-            [displayLinkTarget release];
-            displayLinkTarget = nil;
-        }
-
-        {
-            std::lock_guard<std::mutex> lock (displayLinkMutex);
-            renderThreadReady = false;
-            renderThreadExited = true;
-            renderRunLoop = nullptr;
         }
 
         (void) reason;
@@ -712,6 +690,7 @@ private:
             if (layerAttached && peerView == targetPeerView)
             {
                 updateLayerGeometry();
+                startMainThreadKickIfNeeded();
                 return true;
             }
 
@@ -726,6 +705,7 @@ private:
             [peerView setWantsLayer: YES];
             layerAttached = true;
             updateLayerGeometry();
+            startMainThreadKickIfNeeded();
             return true;
         }
 
@@ -744,20 +724,26 @@ private:
         [peerView addSubview: coverView positioned: NSWindowAbove relativeTo: nil];
         layerAttached = true;
         updateLayerGeometry();
+        startMainThreadKickIfNeeded();
         return true;
     }
 
-    void detachFromPeerView()
+    // restoreLayer=false when the peer / native view is already gone (peerView may be dangling):
+    // skip touching the view, just drop our own references.
+    void detachFromPeerView (bool restoreLayer = true)
     {
+        stopMainThreadKick();
+
         if (coverView != nil)
         {
             coverView->owner = nullptr;
-            [coverView removeFromSuperview];
+            if (restoreLayer)
+                [coverView removeFromSuperview];
             [coverView release];
             coverView = nil;
         }
 
-        if (peerView != nil && mechanism == MetalHostMechanism::BackingLayer)
+        if (restoreLayer && peerView != nil && mechanism == MetalHostMechanism::BackingLayer)
         {
             [peerView setLayer: originalLayer];
             [peerView setWantsLayer: originalWantsLayer];
@@ -773,12 +759,116 @@ private:
         layerAttached = false;
     }
 
+    NSView* getHostView() const noexcept
+    {
+        return (coverView != nil) ? coverView : peerView;
+    }
+
+    void startMainThreadKickIfNeeded()
+    {
+        if (! mainThreadKickEnabled || mainThreadKickProxy != nil)
+            return;
+
+        if (! [NSThread isMainThread])
+        {
+            NSLog (@"[MetalHost #%d] main-thread kick skipped: attach was off-main", instanceId);
+            return;
+        }
+
+        NSView* hostView = getHostView();
+        if (hostView == nil)
+            return;
+
+        mainThreadKickHostView = hostView;
+        mainThreadKickProxy = [[AnalyzerProMetalMainThreadKickProxy alloc] init];
+        if (mainThreadKickProxy == nil)
+        {
+            mainThreadKickHostView = nil;
+            return;
+        }
+
+        mainThreadKickProxy->owner = this;
+
+        if (@available (macOS 14.0, *))
+        {
+            mainThreadDisplayLink = [[hostView displayLinkWithTarget: mainThreadKickProxy
+                                                            selector: @selector (displayLinkTick:)] retain];
+            if (mainThreadDisplayLink != nil)
+            {
+                [mainThreadDisplayLink addToRunLoop: [NSRunLoop mainRunLoop] forMode: NSRunLoopCommonModes];
+                mainThreadKickDriver = "displaylink";
+            }
+        }
+
+        if (mainThreadDisplayLink == nil)
+        {
+            mainThreadKickTimer = [[NSTimer timerWithTimeInterval: (1.0 / 120.0)
+                                                           target: mainThreadKickProxy
+                                                         selector: @selector (timerTick:)
+                                                         userInfo: nil
+                                                          repeats: YES] retain];
+            if (mainThreadKickTimer != nil)
+            {
+                [[NSRunLoop mainRunLoop] addTimer: mainThreadKickTimer forMode: NSRunLoopCommonModes];
+                mainThreadKickDriver = "timer";
+            }
+        }
+
+        if (mainThreadDisplayLink == nil && mainThreadKickTimer == nil)
+        {
+            [mainThreadKickProxy release];
+            mainThreadKickProxy = nil;
+            mainThreadKickHostView = nil;
+            mainThreadKickDriver = "off";
+        }
+        else
+        {
+            NSLog (@"[MetalHost #%d] main-thread kick enabled driver=%s", instanceId, mainThreadKickDriver);
+        }
+    }
+
+    void stopMainThreadKick()
+    {
+        if (mainThreadKickProxy == nil && mainThreadDisplayLink == nil && mainThreadKickTimer == nil)
+            return;
+
+        if (! [NSThread isMainThread])
+        {
+            NSLog (@"[MetalHost #%d] main-thread kick stop skipped: detach was off-main", instanceId);
+            return;
+        }
+
+        if (mainThreadDisplayLink != nil)
+        {
+            [mainThreadDisplayLink invalidate];
+            [mainThreadDisplayLink release];
+            mainThreadDisplayLink = nil;
+        }
+
+        if (mainThreadKickTimer != nil)
+        {
+            [mainThreadKickTimer invalidate];
+            [mainThreadKickTimer release];
+            mainThreadKickTimer = nil;
+        }
+
+        if (mainThreadKickProxy != nil)
+        {
+            mainThreadKickProxy->owner = nullptr;
+            [mainThreadKickProxy release];
+            mainThreadKickProxy = nil;
+        }
+
+        mainThreadKickHostView = nil;
+        mainThreadKickDriver = "off";
+    }
+
     void updateLayerGeometry()
     {
         if (metalLayer == nil)
             return;
 
-        NSView* hostView = (coverView != nil) ? coverView : peerView;
+        NSView* hostView = getHostView();
         if (hostView == nil)
             return;
 
@@ -932,6 +1022,11 @@ private:
         analyzerFillVertices.resize (kMaxAnalyzerFillVertices);
         analyzerLineVertices.resize (kMaxAnalyzerBins);
         analyzerSmoothedDb.fill (-200.0f);
+        analyzerRmsPreviousDb.fill (-200.0f);
+        analyzerRmsTargetDb.fill (-200.0f);
+        analyzerRmsIntervalHistory.fill (0.0);
+        analyzerPeakDb.fill (-200.0f);
+        analyzerPeakHoldDb.fill (-200.0f);
 
         renderPipelinesReady = chromeSampler != nil
             && chromeQuadBuffer != nil
@@ -953,69 +1048,61 @@ private:
         return juce::jlimit (1.0 / 240.0, 0.100, elapsed);
     }
 
-    void renderFrame()
+    void renderFrame (id<CAMetalDrawable> drawable)
     {
-        if (stopping.load (std::memory_order_acquire) || metalLayer == nil || commandQueue == nil)
-            return;
-
-        inFlightFrames.fetch_add (1, std::memory_order_acq_rel);
-        if (stopping.load (std::memory_order_acquire))
+        if (stopping.load (std::memory_order_acquire) || drawable == nil || commandQueue == nil)
         {
-            inFlightFrames.fetch_sub (1, std::memory_order_acq_rel);
+            [drawable release];
             return;
         }
 
-        @autoreleasepool
+        id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
+        if (commandBuffer == nil)
         {
-            id<CAMetalDrawable> drawable = [metalLayer nextDrawable];
-            if (stopping.load (std::memory_order_acquire))
-            {
-                inFlightFrames.fetch_sub (1, std::memory_order_acq_rel);
-                return;
-            }
-
-            if (drawable != nil)
-            {
-                [drawable retain];
-                id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
-                if (commandBuffer == nil)
-                {
-                    [drawable release];
-                    inFlightFrames.fetch_sub (1, std::memory_order_acq_rel);
-                    return;
-                }
-
-                auto frame = std::atomic_load_explicit (&latestChromeFrame, std::memory_order_acquire);
-                updateChromeTextureIfNeeded (frame);
-                id<MTLTexture> currentChromeTexture = getCurrentChromeTexture();
-
-                const double renderDtSeconds = consumeRenderDeltaSeconds();
-                const double encodeStart = CACurrentMediaTime();
-                if (currentChromeTexture != nil && renderPipelinesReady)
-                    drawRenderPass (commandBuffer, drawable.texture, currentChromeTexture, renderDtSeconds);
-                else if (currentChromeTexture != nil)
-                    drawChromeFallbackBlit (commandBuffer, drawable.texture, currentChromeTexture);
-                else
-                    drawEmptyClear (commandBuffer, drawable.texture);
-                gMetalHostEncodeMs.store (static_cast<float> ((CACurrentMediaTime() - encodeStart) * 1000.0),
-                                          std::memory_order_relaxed);
-
-                [CATransaction begin];
-                [CATransaction setDisableActions: YES];
-                [commandBuffer presentDrawable: drawable];
-                id<CAMetalDrawable> retainedDrawable = drawable;
-                [commandBuffer addCompletedHandler: ^(id<MTLCommandBuffer>)
-                {
-                    [retainedDrawable release];
-                }];
-                [commandBuffer commit];
-                [CATransaction commit];
-
-                updateFps();
-            }
+            [drawable release];
+            return;
         }
 
-        inFlightFrames.fetch_sub (1, std::memory_order_acq_rel);
+        auto frame = std::atomic_load_explicit (&latestChromeFrame, std::memory_order_acquire);
+        updateChromeTextureIfNeeded (frame);
+        id<MTLTexture> currentChromeTexture = getCurrentChromeTexture();
+
+        const double renderDtSeconds = consumeRenderDeltaSeconds();
+        const double encodeStart = CACurrentMediaTime();
+        if (currentChromeTexture != nil && renderPipelinesReady)
+            drawRenderPass (commandBuffer, drawable.texture, currentChromeTexture, renderDtSeconds);
+        else if (currentChromeTexture != nil)
+            drawChromeFallbackBlit (commandBuffer, drawable.texture, currentChromeTexture);
+        else
+            drawEmptyClear (commandBuffer, drawable.texture);
+        const double encodeSeconds = CACurrentMediaTime() - encodeStart;
+        encodeAccumulatedSeconds += encodeSeconds;
+        gMetalHostEncodeMs.store (static_cast<float> (encodeSeconds * 1000.0), std::memory_order_relaxed);
+
+        if (metalLayer.presentsWithTransaction)
+        {
+            // With presentsWithTransaction enabled, drawable present latches onto
+            // the current CA transaction. Create and commit that transaction on the
+            // render thread after the command buffer is scheduled, instead of using
+            // commandBuffer presentDrawable: inside an outer transaction.
+            [commandBuffer commit];
+            [commandBuffer waitUntilScheduled];
+            [CATransaction begin];
+            [CATransaction setDisableActions: YES];
+            [drawable present];
+            [CATransaction commit];
+            [drawable release];
+        }
+        else
+        {
+            [commandBuffer presentDrawable: drawable];
+            [commandBuffer commit];
+            [commandBuffer waitUntilScheduled];
+            [drawable release];
+        }
+
+        gMetalHostRenderedFrames.fetch_add (1, std::memory_order_acq_rel);
+        updateFps();
     }
 
     void drawRenderPass (id<MTLCommandBuffer> commandBuffer,
@@ -1089,6 +1176,26 @@ private:
         return static_cast<float> (juce::jlimit (0.0, 1.0, 1.0 - std::exp (-dtSeconds / tauSeconds)));
     }
 
+    static float computeTiltDb (float freqHz, int tiltMode) noexcept
+    {
+        if (freqHz <= 0.0f)
+            return 0.0f;
+
+        const float octaves = std::log2 (juce::jmax (1.0f, freqHz) / 1000.0f);
+        switch (tiltMode)
+        {
+            case 1:  return  3.0f * octaves; // Pink compensation
+            case 2:  return -3.0f * octaves; // White compensation
+            default: return  0.0f;
+        }
+    }
+
+    static MetalColour withAlpha (MetalColour colour, float alpha) noexcept
+    {
+        colour.a = juce::jlimit (0.0f, 1.0f, alpha);
+        return colour;
+    }
+
     static float pixelXToNdc (float x, float width) noexcept
     {
         return (x / juce::jmax (1.0f, width)) * 2.0f - 1.0f;
@@ -1101,16 +1208,16 @@ private:
 
     size_t updateAnalyzerPipelineFromSnapshot (const MetalAnalyzerFrame& frame, double renderDtSeconds)
     {
+        ++analyzerPipelineCalls;
+
         if (analyzerEngine == nullptr || ! frame.valid)
             return 0;
 
-        if (! analyzerEngine->getLatestSnapshot (renderSnapshot))
-            return analyzerPipelinePrimed ? analyzerPipelineBins : 0;
-
-        const auto holdLastGood = [this]() noexcept -> size_t
-        {
-            return analyzerPipelinePrimed ? analyzerPipelineBins : 0;
-        };
+        const bool gotNewSnapshot = analyzerEngine->getLatestSnapshot (renderSnapshot);
+        if (gotNewSnapshot)
+            ++analyzerDataChanges;
+        else if (! analyzerPipelinePrimed)
+            return 0;
 
         const int snapshotBins = (renderSnapshot.fftBinCount > 0) ? renderSnapshot.fftBinCount : renderSnapshot.numBins;
         const int expectedBins = renderSnapshot.fftSize / 2 + 1;
@@ -1121,12 +1228,12 @@ private:
             || renderSnapshot.sampleRate <= 0.0
             || renderSnapshot.fftSize <= 0)
         {
-            return holdLastGood();
+            return 0;
         }
 
         const size_t validBins = std::min (static_cast<size_t> (snapshotBins), kMaxAnalyzerBins);
         if (validBins <= 1)
-            return holdLastGood();
+            return 0;
 
         const bool resetState = ! analyzerPipelinePrimed
             || analyzerPipelineBins != validBins
@@ -1137,26 +1244,114 @@ private:
         analyzerPipelineFftSize = renderSnapshot.fftSize;
         analyzerPipelineSampleRate = renderSnapshot.sampleRate;
 
-        const float attackAlpha = timeConstantAlpha (frame.rmsAttackMs, renderDtSeconds);
-        const float releaseAlpha = timeConstantAlpha (frame.rmsReleaseMs, renderDtSeconds);
+        const float peakDecayDbPerSecond = 60.0f / juce::jmax (0.01f, frame.rmsReleaseMs / 1000.0f);
+        const float peakDecayThisFrame = peakDecayDbPerSecond * static_cast<float> (juce::jmax (0.0, renderDtSeconds));
+        int rmsAbovePeakViolations = 0;
+
+        lastRenderDtSeconds = renderDtSeconds;
+        lastRenderAttackMs = 0.0f;
+        lastRenderReleaseMs = 0.0f;
+        lastRenderAttackAlpha = 0.0f;
+        lastRenderReleaseAlpha = 0.0f;
+
+        const double now = CACurrentMediaTime();
+        if (resetState)
+        {
+            analyzerRmsLastSnapshotTime = gotNewSnapshot ? now : 0.0;
+            analyzerRmsMeasuredIntervalSeconds = 0.0;
+            analyzerRmsInterpolationStartTime = now;
+            analyzerRmsIntervalHistory.fill (0.0);
+            analyzerRmsIntervalHistoryCount = 0;
+            analyzerRmsIntervalHistoryIndex = 0;
+        }
+        else if (gotNewSnapshot)
+        {
+            if (analyzerRmsLastSnapshotTime > 0.0)
+            {
+                const double measuredInterval = now - analyzerRmsLastSnapshotTime;
+                if (std::isfinite (measuredInterval) && measuredInterval > 0.0)
+                {
+                    analyzerRmsIntervalHistory[analyzerRmsIntervalHistoryIndex] =
+                        juce::jlimit (kRmsInterpolationMinIntervalSeconds,
+                                      kRmsInterpolationMaxIntervalSeconds,
+                                      measuredInterval);
+                    analyzerRmsIntervalHistoryIndex =
+                        (analyzerRmsIntervalHistoryIndex + 1) % kRmsInterpolationIntervalHistorySize;
+                    if (analyzerRmsIntervalHistoryCount < kRmsInterpolationIntervalHistorySize)
+                        ++analyzerRmsIntervalHistoryCount;
+
+                    double intervalSum = 0.0;
+                    for (size_t i = 0; i < analyzerRmsIntervalHistoryCount; ++i)
+                        intervalSum += analyzerRmsIntervalHistory[i];
+
+                    analyzerRmsMeasuredIntervalSeconds =
+                        juce::jlimit (kRmsInterpolationMinIntervalSeconds,
+                                      kRmsInterpolationMaxIntervalSeconds,
+                                      intervalSum / static_cast<double> (analyzerRmsIntervalHistoryCount));
+                }
+            }
+
+            analyzerRmsLastSnapshotTime = now;
+            analyzerRmsInterpolationStartTime = now;
+        }
+
+        const float rmsInterpolationAlpha = resetState
+            ? 1.0f
+            : (analyzerRmsMeasuredIntervalSeconds > 0.0
+                ? static_cast<float> (juce::jlimit (0.0,
+                                                    1.0,
+                                                    (now - analyzerRmsInterpolationStartTime) / analyzerRmsMeasuredIntervalSeconds))
+                : 1.0f);
+        lastRmsInterpolationAlpha = rmsInterpolationAlpha;
+        lastRmsInterpolationIntervalMs = static_cast<float> (analyzerRmsMeasuredIntervalSeconds * 1000.0);
 
         for (size_t i = 0; i < validBins; ++i)
         {
             // The snapshot already contains the shared engine's dB conversion, weighting, and
-            // spectral smoothing. This render-owned layer advances the display ballistics at
-            // display-link cadence so repeated snapshots still move smoothly between updates.
+            // spectral smoothing. Match the CPU UI here: no second ballistics stage, only
+            // linear interpolation between published snapshots to bridge data-rate gaps.
             const float targetDb = sanitizeAnalyzerDb (renderSnapshot.fftDb[i]);
+            const float peakSourceDb = sanitizeAnalyzerDb (renderSnapshot.fftPeakDb[i]);
             if (resetState)
             {
+                analyzerRmsPreviousDb[i] = targetDb;
+                analyzerRmsTargetDb[i] = targetDb;
                 analyzerSmoothedDb[i] = targetDb;
+                analyzerPeakDb[i] = sanitizeAnalyzerDb (juce::jmax (peakSourceDb, targetDb));
+                analyzerPeakHoldDb[i] = targetDb;
                 continue;
             }
 
-            const float currentDb = analyzerSmoothedDb[i];
-            const float alpha = (targetDb > currentDb) ? attackAlpha : releaseAlpha;
-            analyzerSmoothedDb[i] = sanitizeAnalyzerDb (currentDb + (targetDb - currentDb) * alpha);
+            if (gotNewSnapshot)
+            {
+                analyzerRmsPreviousDb[i] = analyzerRmsTargetDb[i];
+                analyzerRmsTargetDb[i] = targetDb;
+            }
+
+            analyzerSmoothedDb[i] = sanitizeAnalyzerDb (analyzerRmsPreviousDb[i]
+                + (analyzerRmsTargetDb[i] - analyzerRmsPreviousDb[i]) * rmsInterpolationAlpha);
+
+            analyzerPeakDb[i] = sanitizeAnalyzerDb (juce::jmax (peakSourceDb, targetDb));
+
+            const float currentPeakHoldDb = analyzerPeakHoldDb[i];
+            const float decayedPeakHoldDb = renderSnapshot.isHoldOn
+                ? currentPeakHoldDb
+                : currentPeakHoldDb - peakDecayThisFrame;
+            analyzerPeakHoldDb[i] = sanitizeAnalyzerDb (juce::jmax (targetDb, decayedPeakHoldDb));
+
+            const float rmsFloorDb = analyzerSmoothedDb[i];
+            analyzerPeakDb[i] = sanitizeAnalyzerDb (juce::jmax (analyzerPeakDb[i], rmsFloorDb));
+            analyzerPeakHoldDb[i] = sanitizeAnalyzerDb (juce::jmax (analyzerPeakHoldDb[i], rmsFloorDb));
+
+            if (std::isfinite (rmsFloorDb)
+                && std::isfinite (analyzerPeakHoldDb[i])
+                && rmsFloorDb > analyzerPeakHoldDb[i])
+            {
+                ++rmsAbovePeakViolations;
+            }
         }
 
+        lastRmsAbovePeakViolations = rmsAbovePeakViolations;
         analyzerPipelinePrimed = true;
         return validBins;
     }
@@ -1202,7 +1397,8 @@ private:
                 continue;
 
             const float xNorm = (std::log10 (freqHz) - logMin) / logRange;
-            const float x = frame.plotRectPx.x + xNorm * frame.plotRectPx.w;
+            const float mappedX = frame.plotRectPx.x + xNorm * frame.plotRectPx.w;
+            const float x = (lineVertexCount == 0) ? frame.plotRectPx.x : mappedX;
             if (! std::isfinite (x) || x <= lastX)
                 continue;
 
@@ -1233,6 +1429,344 @@ private:
         return lineVertexCount >= 2 && fillVertexCount >= 4;
     }
 
+    bool buildTraceVertices (const MetalAnalyzerFrame& frame,
+                             const MetalTracePayload& trace,
+                             float drawableWidth,
+                             float drawableHeight,
+                             size_t& fillVertexCount,
+                             size_t& lineVertexCount)
+    {
+        fillVertexCount = 0;
+        lineVertexCount = 0;
+
+        if (! frame.valid
+            || ! trace.visible
+            || trace.db.size() <= 1
+            || frame.plotRectPx.isEmpty()
+            || frame.sampleRate <= 0.0
+            || frame.fftSize <= 0
+            || frame.maxHz <= frame.minHz
+            || frame.minHz <= 0.0f
+            || frame.topDb <= frame.bottomDb)
+        {
+            return false;
+        }
+
+        const float logMin = std::log10 (frame.minHz);
+        const float logMax = std::log10 (frame.maxHz);
+        const float logRange = logMax - logMin;
+        if (logRange <= 0.0f)
+            return false;
+
+        const size_t maxBins = std::min (trace.db.size(), kMaxAnalyzerBins);
+        const float binHz = static_cast<float> (frame.sampleRate) / static_cast<float> (frame.fftSize);
+        const float bottomY = frame.plotRectPx.y + frame.plotRectPx.h;
+        const float dbRange = frame.topDb - frame.bottomDb;
+
+        float lastX = -std::numeric_limits<float>::max();
+        for (size_t i = 1; i < maxBins; ++i)
+        {
+            const float freqHz = static_cast<float> (i) * binHz;
+            if (freqHz < frame.minHz || freqHz > frame.maxHz)
+                continue;
+
+            const float xNorm = (std::log10 (freqHz) - logMin) / logRange;
+            const float mappedX = frame.plotRectPx.x + xNorm * frame.plotRectPx.w;
+            const float x = (lineVertexCount == 0) ? frame.plotRectPx.x : mappedX;
+            if (! std::isfinite (x) || x <= lastX)
+                continue;
+
+            const float compensatedDb = trace.db[i] + frame.displayGainDb + computeTiltDb (freqHz, frame.tiltMode);
+            const float db = juce::jlimit (frame.bottomDb - 24.0f, frame.topDb + 18.0f, sanitizeAnalyzerDb (compensatedDb));
+            const float yNorm = (frame.topDb - db) / dbRange;
+            const float y = frame.plotRectPx.y + yNorm * frame.plotRectPx.h;
+            if (! std::isfinite (y))
+                continue;
+
+            const ColourVertex top {
+                { pixelXToNdc (x, drawableWidth), pixelYToNdc (y, drawableHeight) },
+                { trace.colour.r, trace.colour.g, trace.colour.b, trace.colour.a }
+            };
+            analyzerLineVertices[lineVertexCount++] = top;
+
+            if (trace.fillToBottom)
+            {
+                const auto fillTop = withAlpha (trace.colour, trace.fillTopAlpha);
+                const auto fillBottom = withAlpha (trace.colour, trace.fillBottomAlpha);
+                analyzerFillVertices[fillVertexCount++] = {
+                    { pixelXToNdc (x, drawableWidth), pixelYToNdc (y, drawableHeight) },
+                    { fillTop.r, fillTop.g, fillTop.b, fillTop.a }
+                };
+                analyzerFillVertices[fillVertexCount++] = {
+                    { pixelXToNdc (x, drawableWidth), pixelYToNdc (bottomY, drawableHeight) },
+                    { fillBottom.r, fillBottom.g, fillBottom.b, fillBottom.a }
+                };
+            }
+
+            lastX = x;
+            if (lineVertexCount >= kMaxAnalyzerBins || fillVertexCount + 2 > kMaxAnalyzerFillVertices)
+                break;
+        }
+
+        return lineVertexCount >= 2 || fillVertexCount >= 4;
+    }
+
+    template <typename DbContainer>
+    bool buildTraceVerticesFromDb (const MetalAnalyzerFrame& frame,
+                                   const MetalTracePayload& trace,
+                                   const DbContainer& db,
+                                   size_t validBins,
+                                   float drawableWidth,
+                                   float drawableHeight,
+                                   size_t& fillVertexCount,
+                                   size_t& lineVertexCount)
+    {
+        fillVertexCount = 0;
+        lineVertexCount = 0;
+
+        if (! frame.valid
+            || ! trace.visible
+            || validBins <= 1
+            || frame.plotRectPx.isEmpty()
+            || frame.sampleRate <= 0.0
+            || frame.fftSize <= 0
+            || frame.maxHz <= frame.minHz
+            || frame.minHz <= 0.0f
+            || frame.topDb <= frame.bottomDb)
+        {
+            return false;
+        }
+
+        const float logMin = std::log10 (frame.minHz);
+        const float logMax = std::log10 (frame.maxHz);
+        const float logRange = logMax - logMin;
+        if (logRange <= 0.0f)
+            return false;
+
+        const size_t maxBins = std::min (validBins, kMaxAnalyzerBins);
+        const float binHz = static_cast<float> (frame.sampleRate) / static_cast<float> (frame.fftSize);
+        const float bottomY = frame.plotRectPx.y + frame.plotRectPx.h;
+        const float dbRange = frame.topDb - frame.bottomDb;
+
+        float lastX = -std::numeric_limits<float>::max();
+        for (size_t i = 1; i < maxBins; ++i)
+        {
+            const float freqHz = static_cast<float> (i) * binHz;
+            if (freqHz < frame.minHz || freqHz > frame.maxHz)
+                continue;
+
+            const float xNorm = (std::log10 (freqHz) - logMin) / logRange;
+            const float mappedX = frame.plotRectPx.x + xNorm * frame.plotRectPx.w;
+            const float x = (lineVertexCount == 0) ? frame.plotRectPx.x : mappedX;
+            if (! std::isfinite (x) || x <= lastX)
+                continue;
+
+            const float compensatedDb = db[i] + frame.displayGainDb + computeTiltDb (freqHz, frame.tiltMode);
+            const float clampedDb = juce::jlimit (frame.bottomDb - 24.0f,
+                                                  frame.topDb + 18.0f,
+                                                  sanitizeAnalyzerDb (compensatedDb));
+            const float yNorm = (frame.topDb - clampedDb) / dbRange;
+            const float y = frame.plotRectPx.y + yNorm * frame.plotRectPx.h;
+            if (! std::isfinite (y))
+                continue;
+
+            const ColourVertex top {
+                { pixelXToNdc (x, drawableWidth), pixelYToNdc (y, drawableHeight) },
+                { trace.colour.r, trace.colour.g, trace.colour.b, trace.colour.a }
+            };
+            analyzerLineVertices[lineVertexCount++] = top;
+
+            if (trace.fillToBottom)
+            {
+                const auto fillTop = withAlpha (trace.colour, trace.fillTopAlpha);
+                const auto fillBottom = withAlpha (trace.colour, trace.fillBottomAlpha);
+                analyzerFillVertices[fillVertexCount++] = {
+                    { pixelXToNdc (x, drawableWidth), pixelYToNdc (y, drawableHeight) },
+                    { fillTop.r, fillTop.g, fillTop.b, fillTop.a }
+                };
+                analyzerFillVertices[fillVertexCount++] = {
+                    { pixelXToNdc (x, drawableWidth), pixelYToNdc (bottomY, drawableHeight) },
+                    { fillBottom.r, fillBottom.g, fillBottom.b, fillBottom.a }
+                };
+            }
+
+            lastX = x;
+            if (lineVertexCount >= kMaxAnalyzerBins || fillVertexCount + 2 > kMaxAnalyzerFillVertices)
+                break;
+        }
+
+        return lineVertexCount >= 2 || fillVertexCount >= 4;
+    }
+
+    bool drawTracePayload (id<MTLRenderCommandEncoder> encoder,
+                           const MetalAnalyzerFrame& frame,
+                           const MetalTracePayload& trace,
+                           float drawableWidth,
+                           float drawableHeight)
+    {
+        size_t fillVertexCount = 0;
+        size_t lineVertexCount = 0;
+        if (! buildTraceVertices (frame, trace, drawableWidth, drawableHeight, fillVertexCount, lineVertexCount))
+            return false;
+
+        bool didDraw = false;
+        if (trace.fillToBottom && fillVertexCount >= 4)
+        {
+            std::memcpy ([analyzerFillBuffer contents],
+                         analyzerFillVertices.data(),
+                         sizeof (ColourVertex) * fillVertexCount);
+            [encoder setVertexBuffer: analyzerFillBuffer offset: 0 atIndex: 0];
+            [encoder drawPrimitives: MTLPrimitiveTypeTriangleStrip
+                         vertexStart: 0
+                         vertexCount: static_cast<NSUInteger> (fillVertexCount)];
+            didDraw = true;
+        }
+
+        if (trace.strokeVisible && lineVertexCount >= 2)
+        {
+            std::memcpy ([analyzerLineBuffer contents],
+                         analyzerLineVertices.data(),
+                         sizeof (ColourVertex) * lineVertexCount);
+            [encoder setVertexBuffer: analyzerLineBuffer offset: 0 atIndex: 0];
+            [encoder drawPrimitives: MTLPrimitiveTypeLineStrip
+                         vertexStart: 0
+                         vertexCount: static_cast<NSUInteger> (lineVertexCount)];
+            didDraw = true;
+        }
+
+        return didDraw;
+    }
+
+    template <typename DbContainer>
+    bool drawTracePayloadFromDb (id<MTLRenderCommandEncoder> encoder,
+                                 const MetalAnalyzerFrame& frame,
+                                 const MetalTracePayload& trace,
+                                 const DbContainer& db,
+                                 size_t validBins,
+                                 float drawableWidth,
+                                 float drawableHeight)
+    {
+        size_t fillVertexCount = 0;
+        size_t lineVertexCount = 0;
+        if (! buildTraceVerticesFromDb (frame,
+                                        trace,
+                                        db,
+                                        validBins,
+                                        drawableWidth,
+                                        drawableHeight,
+                                        fillVertexCount,
+                                        lineVertexCount))
+        {
+            return false;
+        }
+
+        bool didDraw = false;
+        if (trace.fillToBottom && fillVertexCount >= 4)
+        {
+            std::memcpy ([analyzerFillBuffer contents],
+                         analyzerFillVertices.data(),
+                         sizeof (ColourVertex) * fillVertexCount);
+            [encoder setVertexBuffer: analyzerFillBuffer offset: 0 atIndex: 0];
+            [encoder drawPrimitives: MTLPrimitiveTypeTriangleStrip
+                         vertexStart: 0
+                         vertexCount: static_cast<NSUInteger> (fillVertexCount)];
+            didDraw = true;
+        }
+
+        if (trace.strokeVisible && lineVertexCount >= 2)
+        {
+            std::memcpy ([analyzerLineBuffer contents],
+                         analyzerLineVertices.data(),
+                         sizeof (ColourVertex) * lineVertexCount);
+            [encoder setVertexBuffer: analyzerLineBuffer offset: 0 atIndex: 0];
+            [encoder drawPrimitives: MTLPrimitiveTypeLineStrip
+                         vertexStart: 0
+                         vertexCount: static_cast<NSUInteger> (lineVertexCount)];
+            didDraw = true;
+        }
+
+        return didDraw;
+    }
+
+    static bool hasSuppliedTrace (const MetalAnalyzerFrame& frame) noexcept
+    {
+        return frame.rmsTrace.visible
+            || frame.peakTrace.visible
+            || frame.peakHoldTrace.visible
+            || frame.stereoTrace.visible
+            || frame.monoTrace.visible
+            || frame.leftTrace.visible
+            || frame.rightTrace.visible
+            || frame.midTrace.visible
+            || frame.sideTrace.visible;
+    }
+
+    void updateRmsTelemetry (const MetalAnalyzerFrame& frame,
+                             const char* path,
+                             size_t pipelineBins,
+                             bool buildOk) noexcept
+    {
+        lastRmsPath = path;
+        lastRmsPipelineBins = pipelineBins;
+        lastRmsBuildOk = buildOk;
+        lastRmsPipelineSampleRate = analyzerPipelineSampleRate;
+        lastRmsPipelineFftSize = analyzerPipelineFftSize;
+        lastRmsFrameSampleRate = frame.sampleRate;
+        lastRmsFrameFftSize = frame.fftSize;
+        lastRmsTopDb = frame.topDb;
+        lastRmsBottomDb = frame.bottomDb;
+        lastRmsMinHz = frame.minHz;
+        lastRmsMaxHz = frame.maxHz;
+        lastRmsPlotW = frame.plotRectPx.w;
+        lastRmsPlotH = frame.plotRectPx.h;
+
+        float minDb = std::numeric_limits<float>::infinity();
+        float maxDb = -std::numeric_limits<float>::infinity();
+        const size_t binsToScan = std::min (pipelineBins, kMaxAnalyzerBins);
+        for (size_t i = 0; i < binsToScan; ++i)
+        {
+            const float db = analyzerSmoothedDb[i];
+            if (! std::isfinite (db))
+                continue;
+
+            minDb = std::min (minDb, db);
+            maxDb = std::max (maxDb, db);
+        }
+
+        lastRmsSmoothedMinDb = std::isfinite (minDb) ? minDb : 0.0f;
+        lastRmsSmoothedMaxDb = std::isfinite (maxDb) ? maxDb : 0.0f;
+    }
+
+    void updatePeakTelemetry (const char* peakPath,
+                              const char* peakHoldPath,
+                              bool peakBuildOk,
+                              bool peakHoldBuildOk) noexcept
+    {
+        lastPeakPath = peakPath;
+        lastPeakHoldPath = peakHoldPath;
+        lastPeakBuildOk = peakBuildOk;
+        lastPeakHoldBuildOk = peakHoldBuildOk;
+    }
+
+    void appendRenderFrameDiagnostic (const MetalAnalyzerFrame& frame, bool rmsDidDraw, const char* peakPath, bool peakDidDraw)
+    {
+        if (wroteRenderFrameDiagnostic || ! frame.rmsTrace.visible)
+            return;
+
+        wroteRenderFrameDiagnostic = true;
+        if (auto* file = std::fopen ("/tmp/analyzerpro_metal_frame_diag.txt", "ab"))
+        {
+            std::fprintf (file,
+                          "rms_did_draw=%d\n"
+                          "peak_path=%s\n"
+                          "peak_did_draw=%d\n",
+                          rmsDidDraw ? 1 : 0,
+                          peakPath,
+                          peakDidDraw ? 1 : 0);
+            (void) std::fclose (file);
+        }
+    }
+
     void drawAnalyzerFrame (id<MTLRenderCommandEncoder> encoder,
                             id<MTLTexture> drawableTexture,
                             const std::shared_ptr<const MetalAnalyzerFrame>& frame,
@@ -1241,29 +1775,7 @@ private:
         if (frame == nullptr)
             return;
 
-        const size_t validBins = updateAnalyzerPipelineFromSnapshot (*frame, renderDtSeconds);
-        if (validBins <= 1)
-            return;
-
-        size_t fillVertexCount = 0;
-        size_t lineVertexCount = 0;
-        if (! buildAnalyzerVertices (*frame,
-                                     validBins,
-                                     static_cast<float> ([drawableTexture width]),
-                                     static_cast<float> ([drawableTexture height]),
-                                     fillVertexCount,
-                                     lineVertexCount))
-        {
-            return;
-        }
-
-        std::memcpy ([analyzerFillBuffer contents],
-                     analyzerFillVertices.data(),
-                     sizeof (ColourVertex) * fillVertexCount);
-        std::memcpy ([analyzerLineBuffer contents],
-                     analyzerLineVertices.data(),
-                     sizeof (ColourVertex) * lineVertexCount);
-
+        const size_t analyzerPipelineBinsForFrame = updateAnalyzerPipelineFromSnapshot (*frame, renderDtSeconds);
         const NSUInteger drawableWidth = [drawableTexture width];
         const NSUInteger drawableHeight = [drawableTexture height];
         const NSUInteger scissorX = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableWidth), frame->plotRectPx.x));
@@ -1282,16 +1794,188 @@ private:
         };
         [encoder setScissorRect: scissor];
         [encoder setRenderPipelineState: colourPipeline];
-        [encoder setVertexBuffer: analyzerFillBuffer offset: 0 atIndex: 0];
-        [encoder drawPrimitives: MTLPrimitiveTypeTriangleStrip
-                     vertexStart: 0
-                     vertexCount: static_cast<NSUInteger> (fillVertexCount)];
 
-        [encoder setVertexBuffer: analyzerLineBuffer offset: 0 atIndex: 0];
-        [encoder drawPrimitives: MTLPrimitiveTypeLineStrip
-                     vertexStart: 0
-                     vertexCount: static_cast<NSUInteger> (lineVertexCount)];
+        if (hasSuppliedTrace (*frame))
+        {
+            const float width = static_cast<float> (drawableWidth);
+            const float height = static_cast<float> (drawableHeight);
+            bool didDrawAnyTrace = false;
 
+            if (! rmsDiagnosticLogged && frame->rmsTrace.visible)
+            {
+                float smoothedMinDb = std::numeric_limits<float>::infinity();
+                float smoothedMaxDb = -std::numeric_limits<float>::infinity();
+                for (size_t i = 0; i < analyzerPipelineBinsForFrame; ++i)
+                {
+                    const float db = analyzerSmoothedDb[i];
+                    if (! std::isfinite (db))
+                        continue;
+
+                    smoothedMinDb = std::min (smoothedMinDb, db);
+                    smoothedMaxDb = std::max (smoothedMaxDb, db);
+                }
+
+                if (! std::isfinite (smoothedMinDb) || ! std::isfinite (smoothedMaxDb))
+                {
+                    smoothedMinDb = 0.0f;
+                    smoothedMaxDb = 0.0f;
+                }
+
+                size_t diagnosticFillVertexCount = 0;
+                size_t diagnosticLineVertexCount = 0;
+                const bool pipelineBuildFromDb = analyzerPipelineBinsForFrame > 1
+                    && buildTraceVerticesFromDb (*frame,
+                                                 frame->rmsTrace,
+                                                 analyzerSmoothedDb,
+                                                 analyzerPipelineBinsForFrame,
+                                                 width,
+                                                 height,
+                                                 diagnosticFillVertexCount,
+                                                 diagnosticLineVertexCount);
+                const size_t pipelineFillVertexCount = diagnosticFillVertexCount;
+                const size_t pipelineLineVertexCount = diagnosticLineVertexCount;
+
+                diagnosticFillVertexCount = 0;
+                diagnosticLineVertexCount = 0;
+                const bool pipelineBuildAnalyzer = analyzerPipelineBinsForFrame > 1
+                    && buildAnalyzerVertices (*frame,
+                                              analyzerPipelineBinsForFrame,
+                                              width,
+                                              height,
+                                              diagnosticFillVertexCount,
+                                              diagnosticLineVertexCount);
+                const size_t analyzerFillVertexCount = diagnosticFillVertexCount;
+                const size_t analyzerLineVertexCount = diagnosticLineVertexCount;
+
+                diagnosticFillVertexCount = 0;
+                diagnosticLineVertexCount = 0;
+                const bool fallbackBuild = buildTraceVertices (*frame,
+                                                               frame->rmsTrace,
+                                                               width,
+                                                               height,
+                                                               diagnosticFillVertexCount,
+                                                               diagnosticLineVertexCount);
+
+                NSLog (@"[MetalHost #%d] RMS diagnostic path=%s bins=%zu rmsVisible=%d rmsDbSize=%zu smoothedMin=%.2f smoothedMax=%.2f buildFromDb=%d fromDbFill=%zu fromDbLine=%zu buildAnalyzer=%d analyzerFill=%zu analyzerLine=%zu fallbackBuild=%d fallbackFill=%zu fallbackLine=%zu snapshotValid=%d snapshotBins=%d expectedBins=%d sampleRate=%.1f fftSize=%d",
+                       instanceId,
+                       analyzerPipelineBinsForFrame > 1 ? "pipeline" : "fallback",
+                       analyzerPipelineBinsForFrame,
+                       frame->rmsTrace.visible ? 1 : 0,
+                       frame->rmsTrace.db.size(),
+                       static_cast<double> (smoothedMinDb),
+                       static_cast<double> (smoothedMaxDb),
+                       pipelineBuildFromDb ? 1 : 0,
+                       pipelineFillVertexCount,
+                       pipelineLineVertexCount,
+                       pipelineBuildAnalyzer ? 1 : 0,
+                       analyzerFillVertexCount,
+                       analyzerLineVertexCount,
+                       fallbackBuild ? 1 : 0,
+                       diagnosticFillVertexCount,
+                       diagnosticLineVertexCount,
+                       renderSnapshot.isValid ? 1 : 0,
+                       renderSnapshot.fftBinCount > 0 ? renderSnapshot.fftBinCount : renderSnapshot.numBins,
+                       renderSnapshot.fftSize / 2 + 1,
+                       renderSnapshot.sampleRate,
+                       renderSnapshot.fftSize);
+                rmsDiagnosticLogged = true;
+            }
+
+            didDrawAnyTrace |= drawTracePayload (encoder, *frame, frame->sideTrace, width, height);
+            didDrawAnyTrace |= drawTracePayload (encoder, *frame, frame->midTrace, width, height);
+            didDrawAnyTrace |= drawTracePayload (encoder, *frame, frame->leftTrace, width, height);
+            didDrawAnyTrace |= drawTracePayload (encoder, *frame, frame->rightTrace, width, height);
+            didDrawAnyTrace |= drawTracePayload (encoder, *frame, frame->monoTrace, width, height);
+            didDrawAnyTrace |= drawTracePayload (encoder, *frame, frame->stereoTrace, width, height);
+            bool rmsBuildOk = false;
+            const char* rmsPath = "none";
+            if (frame->rmsTrace.visible)
+            {
+                if (analyzerPipelineBinsForFrame > 1)
+                {
+                    rmsPath = "pipeline";
+                    rmsBuildOk = drawTracePayloadFromDb (encoder,
+                                                         *frame,
+                                                         frame->rmsTrace,
+                                                         analyzerSmoothedDb,
+                                                         analyzerPipelineBinsForFrame,
+                                                         width,
+                                                         height);
+                }
+                else
+                {
+                    rmsPath = "fallback";
+                    rmsBuildOk = drawTracePayload (encoder, *frame, frame->rmsTrace, width, height);
+                }
+
+                didDrawAnyTrace |= rmsBuildOk;
+            }
+            updateRmsTelemetry (*frame, rmsPath, analyzerPipelineBinsForFrame, rmsBuildOk);
+
+            bool peakBuildOk = false;
+            const char* peakPath = "none";
+            if (frame->peakTrace.visible)
+            {
+                if (analyzerPipelineBinsForFrame > 1)
+                {
+                    peakPath = "pipeline";
+                    peakBuildOk = drawTracePayloadFromDb (encoder,
+                                                          *frame,
+                                                          frame->peakTrace,
+                                                          analyzerPeakDb,
+                                                          analyzerPipelineBinsForFrame,
+                                                          width,
+                                                          height);
+                }
+                else
+                {
+                    peakPath = "fallback";
+                    peakBuildOk = drawTracePayload (encoder, *frame, frame->peakTrace, width, height);
+                }
+
+                didDrawAnyTrace |= peakBuildOk;
+            }
+
+            bool peakHoldBuildOk = false;
+            const char* peakHoldPath = "none";
+            if (frame->peakHoldTrace.visible)
+            {
+                if (analyzerPipelineBinsForFrame > 1)
+                {
+                    peakHoldPath = "pipeline";
+                    peakHoldBuildOk = drawTracePayloadFromDb (encoder,
+                                                              *frame,
+                                                              frame->peakHoldTrace,
+                                                              analyzerPeakHoldDb,
+                                                              analyzerPipelineBinsForFrame,
+                                                              width,
+                                                              height);
+                }
+                else
+                {
+                    peakHoldPath = "fallback";
+                    peakHoldBuildOk = drawTracePayload (encoder, *frame, frame->peakHoldTrace, width, height);
+                }
+
+                didDrawAnyTrace |= peakHoldBuildOk;
+            }
+            updatePeakTelemetry (peakPath, peakHoldPath, peakBuildOk, peakHoldBuildOk);
+            appendRenderFrameDiagnostic (*frame, rmsBuildOk, peakPath, peakBuildOk);
+
+            if (! didDrawAnyTrace)
+            {
+                const MTLScissorRect fullScissor { 0, 0, drawableWidth, drawableHeight };
+                [encoder setScissorRect: fullScissor];
+                return;
+            }
+
+            const MTLScissorRect fullScissor { 0, 0, drawableWidth, drawableHeight };
+            [encoder setScissorRect: fullScissor];
+            return;
+        }
+
+        updateRmsTelemetry (*frame, "none", analyzerPipelineBinsForFrame, false);
+        updatePeakTelemetry ("none", "none", false, false);
         const MTLScissorRect fullScissor { 0, 0, drawableWidth, drawableHeight };
         [encoder setScissorRect: fullScissor];
     }
@@ -1357,7 +2041,6 @@ private:
             texture = [device newTextureWithDescriptor: descriptor];
             createdAll = createdAll && texture != nil;
         }
-        [descriptor release];
 
         if (! createdAll)
         {
@@ -1408,6 +2091,10 @@ private:
         {
             lastFpsTime = now;
             fpsFrames = 0;
+            nextDrawableBlockedSeconds = 0.0;
+            encodeAccumulatedSeconds = 0.0;
+            analyzerPipelineCalls = 0;
+            analyzerDataChanges = 0;
             return;
         }
 
@@ -1417,15 +2104,143 @@ private:
         if (elapsed >= 1.0)
         {
             const float computedFps = static_cast<float> (static_cast<double> (fpsFrames) / elapsed);
+            const double nextDrawableBlockPct = juce::jlimit (0.0, 1.0, nextDrawableBlockedSeconds / elapsed);
+            const float averageEncodeMs = fpsFrames > 0
+                ? static_cast<float> ((encodeAccumulatedSeconds / static_cast<double> (fpsFrames)) * 1000.0)
+                : 0.0f;
+            const float pipelineFps = static_cast<float> (static_cast<double> (analyzerPipelineCalls) / elapsed);
+            const float dataFps = static_cast<float> (static_cast<double> (analyzerDataChanges) / elapsed);
             gMetalHostFps.store (computedFps, std::memory_order_relaxed);
-            NSLog (@"[MetalHost #%d] driver=CADisplayLink thread=%s mech=%s fps=%.1f encode_ms=%.3f",
+            gMetalHostEncodeMs.store (averageEncodeMs, std::memory_order_relaxed);
+            writeStatsFile (computedFps, nextDrawableBlockPct, averageEncodeMs, pipelineFps, dataFps);
+            NSLog (@"[MetalHost #%d] driver=self_paced_nextDrawable thread=%s mech=%s fps=%.1f nextDrawable_block_pct=%.3f encode_ms=%.3f pipeline_fps=%.1f data_fps=%.1f",
                    instanceId,
                    [NSThread isMainThread] ? "main" : "off-main",
                    getMetalHostMechanismName (mechanism),
                    static_cast<double> (computedFps),
-                   static_cast<double> (gMetalHostEncodeMs.load (std::memory_order_relaxed)));
+                   nextDrawableBlockPct,
+                   static_cast<double> (averageEncodeMs),
+                   static_cast<double> (pipelineFps),
+                   static_cast<double> (dataFps));
             fpsFrames = 0;
             lastFpsTime = now;
+            nextDrawableBlockedSeconds = 0.0;
+            encodeAccumulatedSeconds = 0.0;
+            analyzerPipelineCalls = 0;
+            analyzerDataChanges = 0;
+        }
+    }
+
+    void resetStatsCounters() noexcept
+    {
+        lastFpsTime = 0.0;
+        fpsFrames = 0;
+        nextDrawableBlockedSeconds = 0.0;
+        encodeAccumulatedSeconds = 0.0;
+        analyzerPipelineCalls = 0;
+        analyzerDataChanges = 0;
+    }
+
+    void writeStatsFile (float presentFps, double nextDrawableBlockPct, float encodeMs, float pipelineFps, float dataFps) const
+    {
+        char tempPath[128] {};
+        (void) std::snprintf (tempPath, sizeof (tempPath), "%s.%d.tmp", kMetalHostStatsPath, instanceId);
+
+        if (auto* file = std::fopen (tempPath, "wb"))
+        {
+            char buffer[4096] {};
+            const int bytes = std::snprintf (buffer,
+                                             sizeof (buffer),
+                                             "present_fps=%.2f\n"
+                                             "nextDrawable_block_pct=%.4f\n"
+                                             "encode_ms=%.3f\n"
+                                             "pipeline_fps=%.2f\n"
+                                             "data_fps=%.2f\n"
+                                             "rms_path=%s\n"
+                                             "rms_pipeline_bins=%zu\n"
+                                             "rms_build_ok=%d\n"
+                                             "rms_smoothed_min=%.2f\n"
+                                             "rms_smoothed_max=%.2f\n"
+                                             "peak_path=%s\n"
+                                             "peak_build_ok=%d\n"
+                                             "peak_hold_path=%s\n"
+                                             "peak_hold_build_ok=%d\n"
+                                             "rms_above_peak_violations=%d\n"
+                                             "render_dt_ms=%.3f\n"
+                                             "render_attack_ms=%.2f\n"
+                                             "render_release_ms=%.2f\n"
+                                             "render_attack_alpha=%.6f\n"
+                                             "render_release_alpha=%.6f\n"
+                                             "rms_interp_alpha=%.6f\n"
+                                             "rms_interp_interval_ms=%.3f\n"
+                                             "pipeline_sr=%.1f\n"
+                                             "pipeline_fft=%d\n"
+                                             "frame_sr=%.1f\n"
+                                             "frame_fft=%d\n"
+                                             "topDb=%.2f\n"
+                                             "bottomDb=%.2f\n"
+                                             "minHz=%.2f\n"
+                                             "maxHz=%.2f\n"
+                                             "plotW=%.1f\n"
+                                             "plotH=%.1f\n"
+                                             "maxdrawable3=%d\n"
+                                             "maximumDrawableCount=%d\n"
+                                             "mainthread_kick=%d\n"
+                                             "mainthread_kick_active=%d\n"
+                                             "mainthread_kick_driver=%s\n"
+                                             "instance_id=%d\n"
+                                             "mechanism=%s\n"
+                                             "live_render_threads=%d\n",
+                                             static_cast<double> (presentFps),
+                                             nextDrawableBlockPct,
+                                             static_cast<double> (encodeMs),
+                                             static_cast<double> (pipelineFps),
+                                             static_cast<double> (dataFps),
+                                             lastRmsPath,
+                                             lastRmsPipelineBins,
+                                             lastRmsBuildOk ? 1 : 0,
+                                             static_cast<double> (lastRmsSmoothedMinDb),
+                                             static_cast<double> (lastRmsSmoothedMaxDb),
+                                             lastPeakPath,
+                                             lastPeakBuildOk ? 1 : 0,
+                                             lastPeakHoldPath,
+                                             lastPeakHoldBuildOk ? 1 : 0,
+                                             lastRmsAbovePeakViolations,
+                                             lastRenderDtSeconds * 1000.0,
+                                             static_cast<double> (lastRenderAttackMs),
+                                             static_cast<double> (lastRenderReleaseMs),
+                                             static_cast<double> (lastRenderAttackAlpha),
+                                             static_cast<double> (lastRenderReleaseAlpha),
+                                             static_cast<double> (lastRmsInterpolationAlpha),
+                                             static_cast<double> (lastRmsInterpolationIntervalMs),
+                                             lastRmsPipelineSampleRate,
+                                             lastRmsPipelineFftSize,
+                                             lastRmsFrameSampleRate,
+                                             lastRmsFrameFftSize,
+                                             static_cast<double> (lastRmsTopDb),
+                                             static_cast<double> (lastRmsBottomDb),
+                                             static_cast<double> (lastRmsMinHz),
+                                             static_cast<double> (lastRmsMaxHz),
+                                             static_cast<double> (lastRmsPlotW),
+                                             static_cast<double> (lastRmsPlotH),
+                                             maxDrawable3Enabled ? 1 : 0,
+                                             effectiveMaximumDrawableCount,
+                                             mainThreadKickEnabled ? 1 : 0,
+                                             (mainThreadDisplayLink != nil || mainThreadKickTimer != nil) ? 1 : 0,
+                                             mainThreadKickDriver,
+                                             instanceId,
+                                             getMetalHostMechanismName (mechanism),
+                                             liveRenderThreadCount().load (std::memory_order_relaxed));
+
+            const bool wrote = bytes > 0
+                && bytes < static_cast<int> (sizeof (buffer))
+                && std::fwrite (buffer, 1, static_cast<size_t> (bytes), file) == static_cast<size_t> (bytes);
+            const bool closed = std::fclose (file) == 0;
+
+            if (wrote && closed)
+                (void) std::rename (tempPath, kMetalHostStatsPath);
+            else
+                (void) std::remove (tempPath);
         }
     }
 
@@ -1449,23 +2264,25 @@ private:
     uint64_t uploadedChromeSequence = 0;
     size_t nextChromeTextureUploadSlot = 0;
     std::atomic<int> currentChromeTextureIndex { kNoChromeTextureIndex };
-    id displayLink = nil;
-    AnalyzerProMetalDisplayLinkTarget* displayLinkTarget = nil;
     std::thread renderThread;
-    std::mutex displayLinkMutex;
-    std::condition_variable displayLinkCv;
-    CFRunLoopRef renderRunLoop = nullptr;
-    bool renderThreadReady = false;
-    bool renderThreadExited = true;
+    std::atomic<bool> renderThreadExited { true };
     std::atomic<bool> renderThreadShouldExit { true };
     NSView* peerView = nil;
     CALayer* originalLayer = nil;
     AnalyzerProMetalCoverView* coverView = nil;
+    AnalyzerProMetalMainThreadKickProxy* mainThreadKickProxy = nil;
+    id mainThreadDisplayLink = nil;
+    NSTimer* mainThreadKickTimer = nil;
+    NSView* mainThreadKickHostView = nil;
+    const char* mainThreadKickDriver = "off";
     BOOL originalWantsLayer = NO;
     bool layerAttached = false;
     bool initialised = false;
     bool running = false;
     bool teardownAbandoned = false;
+    bool maxDrawable3Enabled = false;
+    bool mainThreadKickEnabled = false;
+    int effectiveMaximumDrawableCount = 0;
     std::atomic<bool> stopping { false };
     std::atomic<int> inFlightFrames { 0 };
     std::atomic<float> backingScale { 1.0f };
@@ -1473,6 +2290,10 @@ private:
     std::shared_ptr<const MetalAnalyzerFrame> latestAnalyzerFrame;
     AnalyzerSnapshot renderSnapshot;
     std::array<float, kMaxAnalyzerBins> analyzerSmoothedDb {};
+    std::array<float, kMaxAnalyzerBins> analyzerRmsPreviousDb {};
+    std::array<float, kMaxAnalyzerBins> analyzerRmsTargetDb {};
+    std::array<float, kMaxAnalyzerBins> analyzerPeakDb {};
+    std::array<float, kMaxAnalyzerBins> analyzerPeakHoldDb {};
     std::vector<ColourVertex> analyzerFillVertices;
     std::vector<ColourVertex> analyzerLineVertices;
     double analyzerPipelineSampleRate = 0.0;
@@ -1481,9 +2302,48 @@ private:
     bool analyzerPipelinePrimed = false;
     double lastFpsTime = 0.0;
     double lastRenderFrameTime = 0.0;
+    double nextDrawableBlockedSeconds = 0.0;
+    double encodeAccumulatedSeconds = 0.0;
     int fpsFrames = 0;
+    int analyzerPipelineCalls = 0;
+    int analyzerDataChanges = 0;
     int instanceId = 0;
     bool renderPipelinesReady = false;
+    bool rmsDiagnosticLogged = false;
+    bool wroteRenderFrameDiagnostic = false;
+    const char* lastRmsPath = "none";
+    size_t lastRmsPipelineBins = 0;
+    bool lastRmsBuildOk = false;
+    const char* lastPeakPath = "none";
+    const char* lastPeakHoldPath = "none";
+    bool lastPeakBuildOk = false;
+    bool lastPeakHoldBuildOk = false;
+    int lastRmsAbovePeakViolations = 0;
+    double lastRenderDtSeconds = 0.0;
+    float lastRenderAttackMs = 0.0f;
+    float lastRenderReleaseMs = 0.0f;
+    float lastRenderAttackAlpha = 0.0f;
+    float lastRenderReleaseAlpha = 0.0f;
+    float lastRmsInterpolationAlpha = 0.0f;
+    float lastRmsInterpolationIntervalMs = 0.0f;
+    double analyzerRmsInterpolationStartTime = 0.0;
+    double analyzerRmsLastSnapshotTime = 0.0;
+    double analyzerRmsMeasuredIntervalSeconds = 0.0;
+    std::array<double, kRmsInterpolationIntervalHistorySize> analyzerRmsIntervalHistory {};
+    size_t analyzerRmsIntervalHistoryCount = 0;
+    size_t analyzerRmsIntervalHistoryIndex = 0;
+    float lastRmsSmoothedMinDb = 0.0f;
+    float lastRmsSmoothedMaxDb = 0.0f;
+    double lastRmsPipelineSampleRate = 0.0;
+    int lastRmsPipelineFftSize = 0;
+    double lastRmsFrameSampleRate = 0.0;
+    int lastRmsFrameFftSize = 0;
+    float lastRmsTopDb = 0.0f;
+    float lastRmsBottomDb = 0.0f;
+    float lastRmsMinHz = 0.0f;
+    float lastRmsMaxHz = 0.0f;
+    float lastRmsPlotW = 0.0f;
+    float lastRmsPlotH = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MetalHostImpl)
 };
@@ -1518,12 +2378,20 @@ private:
 
 @end
 
-@implementation AnalyzerProMetalDisplayLinkTarget
+@implementation AnalyzerProMetalMainThreadKickProxy
 
-- (void)step:(id)sender
+- (void)displayLinkTick:(id)sender
 {
+    (void) sender;
     if (owner != nullptr)
-        owner->displayLinkStep (sender);
+        owner->handleMainThreadKick();
+}
+
+- (void)timerTick:(NSTimer*)timer
+{
+    (void) timer;
+    if (owner != nullptr)
+        owner->handleMainThreadKick();
 }
 
 @end
@@ -1551,13 +2419,7 @@ void MetalHost::stop()
         return;
 
     if (! impl_->stop())
-    {
-        // Pro Tools can close the editor while CoreAnimation is completing a Metal present.
-        // If the render thread does not exit promptly, keep the context alive rather than
-        // blocking the host close path or freeing memory still reachable by the callback.
-        juce::ignoreUnused (impl_.release());
-        return;
-    }
+        NSLog (@"[MetalHost] teardown did not complete before reset");
 
     impl_.reset();
 }

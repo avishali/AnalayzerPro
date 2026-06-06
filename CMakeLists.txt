@@ -68,6 +68,8 @@ endif()
 
 option(ANALYZERPRO_COPY_AFTER_BUILD "Copy built plugins to system folders after build" ON)
 option(ANALYZERPRO_METAL_EDITOR "Full-editor Metal UI" OFF)
+option(ANALYZERPRO_METAL_REPRO "Headless Metal repro harness" OFF)
+option(ANALYZERPRO_ASAN "AddressSanitizer for MetalReproHarness only" OFF)
 
 # ==============================================================================
 # SDK PATHS
@@ -152,11 +154,11 @@ project(${PLUGIN_NAME}
     LANGUAGES C CXX
 )
 
-if(ANALYZERPRO_METAL_EDITOR)
+if(ANALYZERPRO_METAL_EDITOR OR ANALYZERPRO_METAL_REPRO)
     if(APPLE)
         enable_language(OBJCXX)
     else()
-        message(FATAL_ERROR "ANALYZERPRO_METAL_EDITOR requires macOS / Apple platforms")
+        message(FATAL_ERROR "AnalyzerPro Metal targets require macOS / Apple platforms")
     endif()
 endif()
 
@@ -427,6 +429,54 @@ if(APPLE AND ANALYZERPRO_METAL_EDITOR)
             )
         endif()
     endforeach()
+endif()
+
+if(APPLE AND ANALYZERPRO_METAL_REPRO)
+    add_executable(MetalReproHarness
+        Source/ui/analyzer/metal/repro/MetalReproMain.mm
+        Source/ui/analyzer/metal/MetalHost.h
+        Source/ui/analyzer/metal/MetalHost.mm
+        Source/ui/analyzer/metal/MetalHostShared.h
+        Source/analyzer/AnalyzerEngine.cpp
+        Source/analyzer/AnalyzerEngine.h
+    )
+
+    target_compile_features(MetalReproHarness PRIVATE cxx_std_17)
+    target_include_directories(MetalReproHarness PRIVATE Source)
+    target_compile_definitions(MetalReproHarness
+        PRIVATE
+            ANALYZERPRO_METAL_EDITOR=1
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+            MDSP_SDK_VERSION_STRING="${MDSP_SDK_VERSION}"
+    )
+
+    target_link_libraries(MetalReproHarness
+        PRIVATE
+            juce::juce_audio_utils
+            juce::juce_audio_basics
+            juce::juce_gui_basics
+            juce::juce_dsp
+            $<$<BOOL:$<TARGET_EXISTS:mdsp::sdk>>:mdsp::sdk>
+            $<$<AND:$<NOT:$<TARGET_EXISTS:mdsp::sdk>>,$<BOOL:$<TARGET_EXISTS:mdsp_sdk>>>:mdsp_sdk>
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags
+            "-framework Metal"
+            "-framework QuartzCore"
+            "-framework AppKit"
+            "-framework Foundation"
+    )
+
+    set_source_files_properties(
+        Source/ui/analyzer/metal/repro/MetalReproMain.mm
+        Source/ui/analyzer/metal/MetalHost.mm
+        PROPERTIES COMPILE_FLAGS "-fno-objc-arc"
+    )
+
+    if(ANALYZERPRO_ASAN)
+        target_compile_options(MetalReproHarness PRIVATE -fsanitize=address -fno-omit-frame-pointer)
+        target_link_options(MetalReproHarness PRIVATE -fsanitize=address)
+    endif()
 endif()
 
 if (COMMAND mdsp_report_bridge_consumer_summary)

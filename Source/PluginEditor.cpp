@@ -3,6 +3,16 @@
 #if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
 #include "ui/analyzer/metal/MetalEditorRenderer.h"
 #endif
+#include <cstdlib>
+
+namespace
+{
+bool isAaxMetalEditorEnabled() noexcept
+{
+    const auto* value = std::getenv ("ANALYZERPRO_ENABLE_AAX_METAL");
+    return value != nullptr && value[0] == '1';
+}
+}
 
 //==============================================================================
 AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerProAudioProcessor& p)
@@ -109,7 +119,7 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
     buildInfoLabel_.toFront (false);
 
 #if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
-    if (isAAX)
+    if (isAAX && isAaxMetalEditorEnabled())
         startMetalSurfaceIfNeeded();
 #endif
 }

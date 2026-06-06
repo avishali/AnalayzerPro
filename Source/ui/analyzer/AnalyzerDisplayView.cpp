@@ -6,6 +6,7 @@
 #include <mdsp_ui/Theme.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 
 #if !defined(ANALYZERPRO_MODE_DEBUG_OVERLAY)
@@ -546,6 +547,7 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
     frame.maxHz = juce::jmin (viewFreqMax_, getEffectiveAbsFreqMax());
     frame.topDb = kSpectrumTopDb;
     frame.bottomDb = lastAppliedMinDb_;
+    frame.displayGainDb = displayGainDb_;
     frame.sampleRate = lastMetaSampleRate_;
     frame.fftSize = lastMetaFftSize_;
     frame.rmsReleaseMs = releaseMs_;
@@ -554,10 +556,126 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
     frame.sequence = metalAnalyzerSequence_++;
     frame.valid = ! frame.plotRectPx.isEmpty();
 
-    const juce::Colour rms = traceColors_ != nullptr
-        ? traceColors_->get (AnalyzerPro::TraceId::Rms)
-        : theme_.seriesRms;
-    frame.rmsColour = { rms.getFloatRed(), rms.getFloatGreen(), rms.getFloatBlue(), rms.getFloatAlpha() };
+    const auto colourFor = [this] (AnalyzerPro::TraceId id, juce::Colour fallback) -> AnalyzerPro::metal::MetalColour
+    {
+        const juce::Colour c = traceColors_ != nullptr ? traceColors_->get (id) : fallback;
+        return { c.getFloatRed(), c.getFloatGreen(), c.getFloatBlue(), c.getFloatAlpha() };
+    };
+
+    const auto setTrace = [] (AnalyzerPro::metal::MetalTracePayload& trace,
+                              const std::vector<float>& source,
+                              AnalyzerPro::metal::MetalColour colour,
+                              bool visible,
+                              bool strokeVisible = true,
+                              bool fillToBottom = false,
+                              float fillTopAlpha = 0.0f,
+                              float fillBottomAlpha = 0.0f)
+    {
+        trace.db = source;
+        trace.colour = colour;
+        trace.visible = visible && ! trace.db.empty();
+        trace.strokeVisible = strokeVisible;
+        trace.fillToBottom = fillToBottom;
+        trace.fillTopAlpha = fillTopAlpha;
+        trace.fillBottomAlpha = fillBottomAlpha;
+    };
+
+    const auto rms = colourFor (AnalyzerPro::TraceId::Rms, theme_.seriesRms);
+    frame.rmsColour = rms;
+    if (fftFrame_.hasCurrent_)
+    {
+        setTrace (frame.rmsTrace, fftFrame_.display_, rms, traceConfig_.showRMS, true, true, 0.35f, 0.05f);
+        const bool anyNonPeakTraceEnabled = traceConfig_.showSide
+            || traceConfig_.showMid
+            || traceConfig_.showL
+            || traceConfig_.showR
+            || traceConfig_.showLR
+            || traceConfig_.showMono
+            || traceConfig_.showRMS;
+        setTrace (frame.stereoTrace,
+                  fftFrame_.display_,
+                  colourFor (AnalyzerPro::TraceId::LR, theme_.seriesStereo),
+                  traceConfig_.showLR);
+
+        if (fftPeakDbDisplay_.size() == fftFrame_.display_.size())
+        {
+            setTrace (frame.peakTrace,
+                      fftPeakDbDisplay_,
+                      colourFor (AnalyzerPro::TraceId::Peak, theme_.seriesPeak),
+                      true,
+                      true,
+                      ! anyNonPeakTraceEnabled,
+                      0.24f,
+                      0.05f);
+            frame.peakTrace.colour.a *= 0.80f;
+        }
+
+        setTrace (frame.peakHoldTrace,
+                  fftFrame_.display_,
+                  colourFor (AnalyzerPro::TraceId::Peak, theme_.seriesHold),
+                  true);
+        frame.peakHoldTrace.colour.a *= 0.80f;
+    }
+
+    const bool hasMultiTrace = latestMultiTraceEnabled_
+        && multiTraceLFrame_.hasCurrent_
+        && multiTraceRFrame_.hasCurrent_
+        && multiTraceMidFrame_.hasCurrent_
+        && multiTraceSideFrame_.hasCurrent_
+        && multiTraceMonoFrame_.hasCurrent_
+        && multiTraceRFrame_.display_.size() == multiTraceLFrame_.display_.size()
+        && multiTraceMidFrame_.display_.size() == multiTraceLFrame_.display_.size()
+        && multiTraceSideFrame_.display_.size() == multiTraceLFrame_.display_.size()
+        && multiTraceMonoFrame_.display_.size() == multiTraceLFrame_.display_.size();
+    if (hasMultiTrace)
+    {
+        setTrace (frame.leftTrace, multiTraceLFrame_.display_, colourFor (AnalyzerPro::TraceId::L, theme_.seriesLeft), traceConfig_.showL);
+        setTrace (frame.rightTrace, multiTraceRFrame_.display_, colourFor (AnalyzerPro::TraceId::R, theme_.seriesRight), traceConfig_.showR);
+        setTrace (frame.midTrace, multiTraceMidFrame_.display_, colourFor (AnalyzerPro::TraceId::Mid, theme_.seriesMid), traceConfig_.showMid);
+        setTrace (frame.sideTrace, multiTraceSideFrame_.display_, colourFor (AnalyzerPro::TraceId::Side, theme_.seriesSide), traceConfig_.showSide);
+        setTrace (frame.monoTrace, multiTraceMonoFrame_.display_, colourFor (AnalyzerPro::TraceId::Mono, theme_.seriesMono), traceConfig_.showMono);
+    }
+
+    static bool wroteMetalRmsFrameDiagnostic = false;
+    if (! wroteMetalRmsFrameDiagnostic && fftFrame_.hasCurrent_)
+    {
+        wroteMetalRmsFrameDiagnostic = true;
+        if (auto* file = std::fopen ("/tmp/analyzerpro_metal_frame_diag.txt", "wb"))
+        {
+            std::fprintf (file,
+                          "traceConfig_showRMS=%d\n"
+                          "rmsTrace_visible=%d\n"
+                          "rmsTrace_db_size=%zu\n"
+                          "fftFrame_hasCurrent=%d\n"
+                          "fftFrame_display_size=%zu\n"
+                          "peakTrace_visible=%d\n"
+                          "peakTrace_db_size=%zu\n"
+                          "rms_colour=%.3f,%.3f,%.3f,%.3f\n"
+                          "peak_colour=%.3f,%.3f,%.3f,%.3f\n"
+                          "rms_strokeVisible=%d\n"
+                          "rms_fillToBottom=%d\n"
+                          "frame_valid=%d\n",
+                          traceConfig_.showRMS ? 1 : 0,
+                          frame.rmsTrace.visible ? 1 : 0,
+                          frame.rmsTrace.db.size(),
+                          fftFrame_.hasCurrent_ ? 1 : 0,
+                          fftFrame_.display_.size(),
+                          frame.peakTrace.visible ? 1 : 0,
+                          frame.peakTrace.db.size(),
+                          static_cast<double> (frame.rmsTrace.colour.r),
+                          static_cast<double> (frame.rmsTrace.colour.g),
+                          static_cast<double> (frame.rmsTrace.colour.b),
+                          static_cast<double> (frame.rmsTrace.colour.a),
+                          static_cast<double> (frame.peakTrace.colour.r),
+                          static_cast<double> (frame.peakTrace.colour.g),
+                          static_cast<double> (frame.peakTrace.colour.b),
+                          static_cast<double> (frame.peakTrace.colour.a),
+                          frame.rmsTrace.strokeVisible ? 1 : 0,
+                          frame.rmsTrace.fillToBottom ? 1 : 0,
+                          frame.valid ? 1 : 0);
+            (void) std::fclose (file);
+        }
+    }
 
     return frame.valid;
 }
@@ -939,6 +1057,7 @@ void AnalyzerDisplayView::setSpectrumDecayRate (float decay)
 
 void AnalyzerDisplayView::setDisplayGainDb (float db)
 {
+    displayGainDb_ = db;
     analyzerBridgeWidget_.setDisplayGainDb (db);
     forceNextRenderFrame_ = true;
 }

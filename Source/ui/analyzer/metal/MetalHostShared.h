@@ -19,6 +19,8 @@ inline std::atomic<float> gMetalChromeCaptureMs { 0.0f };
 inline std::atomic<float> gMetalChromeCaptureIntervalMs { 0.0f };
 inline std::atomic<int> gMetalHostInputHits { 0 };
 inline std::atomic<int> gMetalHostMechanism { static_cast<int> (MetalHostMechanism::BackingLayer) };
+inline std::atomic<int> gMetalHostLiveRenderThreads { 0 };
+inline std::atomic<uint64_t> gMetalHostRenderedFrames { 0 };
 
 struct FrameTexturePayload
 {
@@ -38,6 +40,17 @@ struct MetalColour
     float a = 1.0f;
 };
 
+struct MetalTracePayload
+{
+    std::vector<float> db;
+    MetalColour colour;
+    bool visible = false;
+    bool strokeVisible = true;
+    bool fillToBottom = false;
+    float fillTopAlpha = 0.0f;
+    float fillBottomAlpha = 0.0f;
+};
+
 struct MetalRectPx
 {
     float x = 0.0f;
@@ -52,10 +65,20 @@ struct MetalAnalyzerFrame
 {
     MetalRectPx plotRectPx;
     MetalColour rmsColour;
+    MetalTracePayload rmsTrace;
+    MetalTracePayload peakTrace;
+    MetalTracePayload peakHoldTrace;
+    MetalTracePayload stereoTrace;
+    MetalTracePayload monoTrace;
+    MetalTracePayload leftTrace;
+    MetalTracePayload rightTrace;
+    MetalTracePayload midTrace;
+    MetalTracePayload sideTrace;
     float minHz = 10.0f;
     float maxHz = 20000.0f;
     float topDb = 6.0f;
     float bottomDb = -90.0f;
+    float displayGainDb = 0.0f;
     float rmsAttackMs = 60.0f;
     float rmsReleaseMs = 300.0f;
     double sampleRate = 48000.0;

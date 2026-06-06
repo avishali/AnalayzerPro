@@ -269,6 +269,7 @@ private:
     int lastWeightingMode_ = -1; // 0=None, 1=A, 2=BS.468
     int currentWeightingMode_ = 0; // Tracks parameter state
     TiltMode currentTiltMode_ = TiltMode::Flat;
+    float displayGainDb_ = 0.0f;
     int lastWeightingFftSize_ = 0; // Check for rebuild
     double lastWeightingSampleRate_ = 0.0; 
     
