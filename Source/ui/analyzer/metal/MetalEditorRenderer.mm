@@ -43,13 +43,16 @@ bool MetalEditorRenderer::start (juce::Component& editor)
     }
 
     captureChromeFrame();
+    publishAnalyzerFrame();
+    startFramePublishTimer();
     scheduleNextChromeCapture();
     return true;
 }
 
 void MetalEditorRenderer::stop()
 {
-    stopTimer();
+    stopTimer (kFramePublishTimerId);
+    stopTimer (kChromeCaptureTimerId);
     editor_ = nullptr;
 
     if (host_ != nullptr)
@@ -72,8 +75,11 @@ void MetalEditorRenderer::resized()
     if (host_ != nullptr)
         host_->resized();
 
-    stopTimer();
+    stopTimer (kFramePublishTimerId);
+    stopTimer (kChromeCaptureTimerId);
     captureChromeFrame();
+    publishAnalyzerFrame();
+    startFramePublishTimer();
     scheduleNextChromeCapture();
 }
 
@@ -82,11 +88,20 @@ bool MetalEditorRenderer::isRunning() const noexcept
     return host_ != nullptr && host_->isRunning();
 }
 
-void MetalEditorRenderer::timerCallback()
+void MetalEditorRenderer::timerCallback (int timerID)
 {
-    stopTimer();
-    captureChromeFrame();
-    scheduleNextChromeCapture();
+    if (timerID == kFramePublishTimerId)
+    {
+        publishAnalyzerFrame();
+        return;
+    }
+
+    if (timerID == kChromeCaptureTimerId)
+    {
+        stopTimer (kChromeCaptureTimerId);
+        captureChromeFrame();
+        scheduleNextChromeCapture();
+    }
 }
 
 void MetalEditorRenderer::captureChromeFrame()
@@ -118,7 +133,6 @@ void MetalEditorRenderer::captureChromeFrame()
         return;
     }
 
-    const float backingScale = juce::jmax (1.0f, host_->getBackingScaleFactor());
     constexpr float captureScale = 1.0f;
     const int widthPx = scaledDimension (width, captureScale);
     const int heightPx = scaledDimension (height, captureScale);
@@ -186,16 +200,52 @@ void MetalEditorRenderer::captureChromeFrame()
 
     host_->setChromeFrame (std::move (payload));
 
+    recordCaptureCost();
+}
+
+void MetalEditorRenderer::publishAnalyzerFrame()
+{
+    auto* editor = editor_.getComponent();
+    if (editor == nullptr || host_ == nullptr || ! host_->isRunning())
+    {
+        if (host_ != nullptr)
+            host_->setAnalyzerFrame (nullptr);
+        return;
+    }
+
+    if (editor->getPeer() == nullptr)
+    {
+        host_->setAnalyzerFrame (nullptr);
+        return;
+    }
+
+    if (editor->getWidth() <= 0 || editor->getHeight() <= 0)
+    {
+        host_->setAnalyzerFrame (nullptr);
+        return;
+    }
+
     if (auto* analyzerEditor = dynamic_cast<AnalayzerProAudioProcessorEditor*> (editor))
     {
+        const float backingScale = juce::jmax (1.0f, host_->getBackingScaleFactor());
         auto analyzerFrame = std::make_shared<MetalAnalyzerFrame>();
         if (analyzerEditor->fillMetalAnalyzerFrame (*analyzerFrame, backingScale))
             host_->setAnalyzerFrame (std::move (analyzerFrame));
         else
             host_->setAnalyzerFrame (nullptr);
+        return;
     }
 
-    recordCaptureCost();
+    host_->setAnalyzerFrame (nullptr);
+}
+
+void MetalEditorRenderer::startFramePublishTimer()
+{
+    auto* editor = editor_.getComponent();
+    if (editor == nullptr || host_ == nullptr)
+        return;
+
+    startTimer (kFramePublishTimerId, kFramePublishIntervalMs);
 }
 
 void MetalEditorRenderer::scheduleNextChromeCapture()
@@ -208,7 +258,7 @@ void MetalEditorRenderer::scheduleNextChromeCapture()
                                                   lastChromeCaptureMs_ * kChromeCaptureCostMultiplier);
     const int intervalMs = juce::jmax (1, static_cast<int> (std::ceil (adaptiveIntervalMs)));
     gMetalChromeCaptureIntervalMs.store (static_cast<float> (intervalMs), std::memory_order_relaxed);
-    startTimer (intervalMs);
+    startTimer (kChromeCaptureTimerId, intervalMs);
 }
 
 bool MetalEditorRenderer::ensureChromePayloadPool (int widthPx, int heightPx, float scale)

@@ -76,6 +76,15 @@ struct ColourVertex
 
 constexpr size_t kMaxAnalyzerBins = static_cast<size_t> (AnalyzerSnapshot::kMaxFFTBins);
 constexpr size_t kMaxAnalyzerFillVertices = kMaxAnalyzerBins * 2;
+constexpr size_t kPhaseFanAngleBins = MetalAnalyzerFrame::kPhaseFanAngleBins;
+constexpr size_t kMaxPhaseFanFillVertices = (kPhaseFanAngleBins - 1) * 3;
+constexpr size_t kMaxPhaseFanLineVertices = kPhaseFanAngleBins * 3;
+constexpr size_t kMaxPhaseFanLineDraws = kPhaseFanAngleBins * 3;
+constexpr size_t kMaxGonioPoints = MetalAnalyzerFrame::kGonioMaxPoints;
+constexpr size_t kMaxGonioHistoryPoints = MetalAnalyzerFrame::kGonioHistoryPointCapacity;
+constexpr size_t kMaxGonioHoldPoints = MetalAnalyzerFrame::kGonioHoldBins;
+constexpr size_t kMaxGonioPointQuads = kMaxGonioPoints + kMaxGonioHistoryPoints + kMaxGonioHoldPoints;
+constexpr size_t kMaxGonioPointVertices = kMaxGonioPointQuads * 6;
 constexpr size_t kChromeTextureRingSize = 3;
 constexpr int kNoChromeTextureIndex = -1;
 constexpr auto kRenderThreadStopTimeout = std::chrono::milliseconds (2000);
@@ -346,6 +355,24 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
         {
             [analyzerLineBuffer release];
             analyzerLineBuffer = nil;
+        }
+
+        if (phaseFanFillBuffer != nil)
+        {
+            [phaseFanFillBuffer release];
+            phaseFanFillBuffer = nil;
+        }
+
+        if (phaseFanLineBuffer != nil)
+        {
+            [phaseFanLineBuffer release];
+            phaseFanLineBuffer = nil;
+        }
+
+        if (gonioPointBuffer != nil)
+        {
+            [gonioPointBuffer release];
+            gonioPointBuffer = nil;
         }
 
         if (metalLayer != nil)
@@ -881,8 +908,15 @@ private:
                                                  options: MTLResourceStorageModeShared];
         analyzerLineBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxAnalyzerBins
                                                  options: MTLResourceStorageModeShared];
+        phaseFanFillBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxPhaseFanFillVertices
+                                                 options: MTLResourceStorageModeShared];
+        phaseFanLineBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxPhaseFanLineVertices
+                                                 options: MTLResourceStorageModeShared];
+        gonioPointBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxGonioPointVertices
+                                               options: MTLResourceStorageModeShared];
         analyzerFillVertices.resize (kMaxAnalyzerFillVertices);
         analyzerLineVertices.resize (kMaxAnalyzerBins);
+        gonioPointVertices.resize (kMaxGonioPointVertices);
         analyzerSmoothedDb.fill (-200.0f);
         analyzerRmsPreviousDb.fill (-200.0f);
         analyzerRmsTargetDb.fill (-200.0f);
@@ -893,7 +927,11 @@ private:
         renderPipelinesReady = chromeSampler != nil
             && chromeQuadBuffer != nil
             && analyzerFillBuffer != nil
-            && analyzerLineBuffer != nil;
+            && analyzerLineBuffer != nil
+            && phaseFanFillBuffer != nil
+            && phaseFanLineBuffer != nil
+            && gonioPointBuffer != nil
+            ;
     }
 
     double consumeRenderDeltaSeconds()
@@ -990,6 +1028,8 @@ private:
 
         auto analyzerFrame = std::atomic_load_explicit (&latestAnalyzerFrame, std::memory_order_acquire);
         drawAnalyzerFrame (encoder, drawableTexture, analyzerFrame, renderDtSeconds);
+        drawPhaseFanFrame (encoder, drawableTexture, analyzerFrame);
+        drawGonioFrame (encoder, drawableTexture, analyzerFrame);
         [encoder endEncoding];
     }
 
@@ -1631,6 +1671,425 @@ private:
     }
 #endif
 
+    struct PhaseFanLineDraw
+    {
+        NSUInteger vertexStart = 0;
+        NSUInteger vertexCount = 0;
+    };
+
+    static bool phaseFanDrawsLines (int renderMode) noexcept
+    {
+        return renderMode == 1 || renderMode == 2;
+    }
+
+    static float phaseFanRadiusToPx (const MetalAnalyzerFrame& frame, float rNorm) noexcept
+    {
+        const float rMin = frame.phaseFanRadiusPx * 0.02f;
+        const float rMax = frame.phaseFanRadiusPx;
+        return juce::jmap (juce::jlimit (0.0f, 1.0f, rNorm), 0.0f, 1.0f, rMin, rMax);
+    }
+
+    static float phaseFanThetaForAngleBin (int angleBin) noexcept
+    {
+        static constexpr float kPiHalf = juce::MathConstants<float>::halfPi;
+        return juce::jmap (static_cast<float> (angleBin),
+                           0.0f,
+                           static_cast<float> (kPhaseFanAngleBins - 1),
+                           -kPiHalf,
+                           kPiHalf);
+    }
+
+    static juce::Point<float> phaseFanPointFor (const MetalAnalyzerFrame& frame, int angleBin, float rNorm) noexcept
+    {
+        const float theta = phaseFanThetaForAngleBin (angleBin);
+        const float rPx = phaseFanRadiusToPx (frame, rNorm);
+        return { frame.phaseFanCx + std::sin (theta) * rPx,
+                 frame.phaseFanCy - std::cos (theta) * rPx };
+    }
+
+    ColourVertex makePhaseFanVertex (juce::Point<float> point,
+                                     MetalColour colour,
+                                     float alpha,
+                                     float drawableWidth,
+                                     float drawableHeight) noexcept
+    {
+        return {
+            { pixelXToNdc (point.x, drawableWidth), pixelYToNdc (point.y, drawableHeight) },
+            { colour.r, colour.g, colour.b, juce::jlimit (0.0f, 1.0f, alpha) }
+        };
+    }
+
+    size_t buildPhaseFanFillVertices (const MetalAnalyzerFrame& frame,
+                                      std::array<ColourVertex, kMaxPhaseFanFillVertices>& vertices,
+                                      float drawableWidth,
+                                      float drawableHeight)
+    {
+        static constexpr float kContourMinDraw = 0.003f;
+        size_t vertexCount = 0;
+        const juce::Point<float> centre { frame.phaseFanCx, frame.phaseFanCy };
+
+        for (size_t a = 0; a + 1 < kPhaseFanAngleBins; ++a)
+        {
+            const float r0 = frame.phaseFanContourRNorm[a];
+            const float r1 = frame.phaseFanContourRNorm[a + 1];
+            if (r0 < kContourMinDraw && r1 < kContourMinDraw)
+                continue;
+
+            if (vertexCount + 3 > vertices.size())
+                break;
+
+            vertices[vertexCount++] = makePhaseFanVertex (centre, frame.phaseFanColour, 0.04f, drawableWidth, drawableHeight);
+            vertices[vertexCount++] = makePhaseFanVertex (phaseFanPointFor (frame, static_cast<int> (a), r0),
+                                                          frame.phaseFanColour,
+                                                          0.42f,
+                                                          drawableWidth,
+                                                          drawableHeight);
+            vertices[vertexCount++] = makePhaseFanVertex (phaseFanPointFor (frame, static_cast<int> (a + 1), r1),
+                                                          frame.phaseFanColour,
+                                                          0.42f,
+                                                          drawableWidth,
+                                                          drawableHeight);
+        }
+
+        return vertexCount;
+    }
+
+    void finishPhaseFanLineSegment (std::array<ColourVertex, kMaxPhaseFanLineVertices>&,
+                                    size_t& vertexCount,
+                                    std::array<PhaseFanLineDraw, kMaxPhaseFanLineDraws>& draws,
+                                    size_t& drawCount,
+                                    size_t segmentStart,
+                                    size_t segmentCount) noexcept
+    {
+        if (segmentCount >= 2)
+        {
+            draws[drawCount++] = {
+                static_cast<NSUInteger> (segmentStart),
+                static_cast<NSUInteger> (segmentCount)
+            };
+        }
+        else
+        {
+            vertexCount = segmentStart;
+        }
+    }
+
+    void appendPhaseFanLineSegments (const MetalAnalyzerFrame& frame,
+                                     const std::array<float, MetalAnalyzerFrame::kPhaseFanAngleBins>& source,
+                                     float threshold,
+                                     MetalColour colour,
+                                     float alpha,
+                                     std::array<ColourVertex, kMaxPhaseFanLineVertices>& vertices,
+                                     size_t& vertexCount,
+                                     std::array<PhaseFanLineDraw, kMaxPhaseFanLineDraws>& draws,
+                                     size_t& drawCount,
+                                     float drawableWidth,
+                                     float drawableHeight)
+    {
+        size_t segmentStart = vertexCount;
+        size_t segmentCount = 0;
+
+        for (size_t a = 0; a < kPhaseFanAngleBins; ++a)
+        {
+            const float rNorm = source[a];
+            if (rNorm <= threshold)
+            {
+                finishPhaseFanLineSegment (vertices, vertexCount, draws, drawCount, segmentStart, segmentCount);
+                segmentStart = vertexCount;
+                segmentCount = 0;
+                continue;
+            }
+
+            if (vertexCount >= vertices.size())
+                break;
+
+            vertices[vertexCount++] = makePhaseFanVertex (phaseFanPointFor (frame, static_cast<int> (a), rNorm),
+                                                          colour,
+                                                          alpha,
+                                                          drawableWidth,
+                                                          drawableHeight);
+            ++segmentCount;
+        }
+
+        finishPhaseFanLineSegment (vertices, vertexCount, draws, drawCount, segmentStart, segmentCount);
+    }
+
+    void drawPhaseFanFrame (id<MTLRenderCommandEncoder> encoder,
+                            id<MTLTexture> drawableTexture,
+                            const std::shared_ptr<const MetalAnalyzerFrame>& frame)
+    {
+        if (frame == nullptr || ! frame->phaseFanValid || frame->phaseFanRadiusPx <= 0.0f)
+            return;
+
+        if (phaseFanFillBuffer == nil || phaseFanLineBuffer == nil)
+            return;
+
+        const NSUInteger drawableWidth = [drawableTexture width];
+        const NSUInteger drawableHeight = [drawableTexture height];
+        if (drawableWidth == 0 || drawableHeight == 0)
+            return;
+
+        const NSUInteger scissorX = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableWidth), frame->phaseFanRectPx.x));
+        const NSUInteger scissorY = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableHeight), frame->phaseFanRectPx.y));
+        const NSUInteger scissorRight = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableWidth), frame->phaseFanRectPx.x + frame->phaseFanRectPx.w));
+        const NSUInteger scissorBottom = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableHeight), frame->phaseFanRectPx.y + frame->phaseFanRectPx.h));
+        if (scissorRight <= scissorX || scissorBottom <= scissorY)
+            return;
+
+        const MTLScissorRect scissor {
+            scissorX,
+            scissorY,
+            scissorRight - scissorX,
+            scissorBottom - scissorY
+        };
+        [encoder setScissorRect: scissor];
+        [encoder setRenderPipelineState: colourPipeline];
+
+        const float width = static_cast<float> (drawableWidth);
+        const float height = static_cast<float> (drawableHeight);
+
+        std::array<ColourVertex, kMaxPhaseFanFillVertices> fillVertices {};
+        const size_t fillVertexCount = buildPhaseFanFillVertices (*frame, fillVertices, width, height);
+        if (fillVertexCount > 0 && fillVertexCount <= kMaxPhaseFanFillVertices)
+        {
+            std::memcpy ([phaseFanFillBuffer contents], fillVertices.data(), sizeof (ColourVertex) * fillVertexCount);
+            [encoder setVertexBuffer: phaseFanFillBuffer offset: 0 atIndex: 0];
+            [encoder drawPrimitives: MTLPrimitiveTypeTriangle
+                         vertexStart: 0
+                         vertexCount: static_cast<NSUInteger> (fillVertexCount)];
+        }
+
+        if (phaseFanDrawsLines (frame->phaseFanRenderMode))
+        {
+            std::array<ColourVertex, kMaxPhaseFanLineVertices> lineVertices {};
+            std::array<PhaseFanLineDraw, kMaxPhaseFanLineDraws> lineDraws {};
+            size_t lineVertexCount = 0;
+            size_t lineDrawCount = 0;
+
+            appendPhaseFanLineSegments (*frame,
+                                        frame->phaseFanContourRNorm,
+                                        0.003f,
+                                        frame->phaseFanColour,
+                                        0.90f,
+                                        lineVertices,
+                                        lineVertexCount,
+                                        lineDraws,
+                                        lineDrawCount,
+                                        width,
+                                        height);
+
+            if (frame->phaseFanPeakHoldEnabled)
+            {
+                appendPhaseFanLineSegments (*frame,
+                                            frame->phaseFanPeakRNorm,
+                                            0.003f,
+                                            frame->phaseFanColour,
+                                            0.22f,
+                                            lineVertices,
+                                            lineVertexCount,
+                                            lineDraws,
+                                            lineDrawCount,
+                                            width,
+                                            height);
+                appendPhaseFanLineSegments (*frame,
+                                            frame->phaseFanPeakRNorm,
+                                            0.003f,
+                                            frame->phaseFanColour,
+                                            0.98f,
+                                            lineVertices,
+                                            lineVertexCount,
+                                            lineDraws,
+                                            lineDrawCount,
+                                            width,
+                                            height);
+            }
+
+            if (lineVertexCount > 0 && lineVertexCount <= kMaxPhaseFanLineVertices)
+            {
+                std::memcpy ([phaseFanLineBuffer contents], lineVertices.data(), sizeof (ColourVertex) * lineVertexCount);
+                [encoder setVertexBuffer: phaseFanLineBuffer offset: 0 atIndex: 0];
+
+                for (size_t i = 0; i < lineDrawCount; ++i)
+                {
+                    [encoder drawPrimitives: MTLPrimitiveTypeLineStrip
+                                 vertexStart: lineDraws[i].vertexStart
+                                 vertexCount: lineDraws[i].vertexCount];
+                }
+            }
+        }
+
+        const MTLScissorRect fullScissor { 0, 0, drawableWidth, drawableHeight };
+        [encoder setScissorRect: fullScissor];
+    }
+
+    static juce::Point<float> gonioPointToDrawablePx (const MetalAnalyzerFrame& frame, MetalPoint point) noexcept
+    {
+        return {
+            frame.gonioCx + point.x * frame.gonioHalfUsable,
+            frame.gonioCy - point.y * frame.gonioHalfUsable
+        };
+    }
+
+    bool appendGonioPointQuad (const MetalAnalyzerFrame& frame,
+                               MetalPoint point,
+                               float alpha,
+                               float drawableWidth,
+                               float drawableHeight,
+                               size_t& vertexCount) noexcept
+    {
+        if (! std::isfinite (point.x) || ! std::isfinite (point.y))
+            return true;
+
+        if (vertexCount + 6 > gonioPointVertices.size())
+            return false;
+
+        const auto centre = gonioPointToDrawablePx (frame, point);
+        const float halfSize = frame.gonioPointHalfSizePx > 0.0f ? frame.gonioPointHalfSizePx : 0.75f;
+        const float left = centre.x - halfSize;
+        const float right = centre.x + halfSize;
+        const float top = centre.y - halfSize;
+        const float bottom = centre.y + halfSize;
+        const auto colour = frame.gonioColour;
+        const float a = juce::jlimit (0.0f, 1.0f, alpha);
+
+        const ColourVertex quad[] = {
+            { { pixelXToNdc (left,  drawableWidth), pixelYToNdc (bottom, drawableHeight) }, { colour.r, colour.g, colour.b, a } },
+            { { pixelXToNdc (right, drawableWidth), pixelYToNdc (bottom, drawableHeight) }, { colour.r, colour.g, colour.b, a } },
+            { { pixelXToNdc (left,  drawableWidth), pixelYToNdc (top,    drawableHeight) }, { colour.r, colour.g, colour.b, a } },
+            { { pixelXToNdc (right, drawableWidth), pixelYToNdc (bottom, drawableHeight) }, { colour.r, colour.g, colour.b, a } },
+            { { pixelXToNdc (right, drawableWidth), pixelYToNdc (top,    drawableHeight) }, { colour.r, colour.g, colour.b, a } },
+            { { pixelXToNdc (left,  drawableWidth), pixelYToNdc (top,    drawableHeight) }, { colour.r, colour.g, colour.b, a } }
+        };
+
+        std::memcpy (gonioPointVertices.data() + vertexCount, quad, sizeof (quad));
+        vertexCount += 6;
+        return true;
+    }
+
+    void drawGonioFrame (id<MTLRenderCommandEncoder> encoder,
+                         id<MTLTexture> drawableTexture,
+                         const std::shared_ptr<const MetalAnalyzerFrame>& frame)
+    {
+        if (frame == nullptr || ! frame->gonioValid || frame->gonioHalfUsable <= 0.0f)
+            return;
+
+        if (gonioPointBuffer == nil || gonioPointVertices.empty())
+            return;
+
+        const NSUInteger drawableWidth = [drawableTexture width];
+        const NSUInteger drawableHeight = [drawableTexture height];
+        if (drawableWidth == 0 || drawableHeight == 0)
+            return;
+
+        const NSUInteger scissorX = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableWidth), frame->gonioRectPx.x));
+        const NSUInteger scissorY = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableHeight), frame->gonioRectPx.y));
+        const NSUInteger scissorRight = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableWidth), frame->gonioRectPx.x + frame->gonioRectPx.w));
+        const NSUInteger scissorBottom = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableHeight), frame->gonioRectPx.y + frame->gonioRectPx.h));
+        if (scissorRight <= scissorX || scissorBottom <= scissorY)
+            return;
+
+        const MTLScissorRect scissor {
+            scissorX,
+            scissorY,
+            scissorRight - scissorX,
+            scissorBottom - scissorY
+        };
+        [encoder setScissorRect: scissor];
+        [encoder setRenderPipelineState: colourPipeline];
+
+        const float width = static_cast<float> (drawableWidth);
+        const float height = static_cast<float> (drawableHeight);
+        size_t vertexCount = 0;
+
+        const int activeFrames = juce::jlimit (0,
+                                               static_cast<int> (MetalAnalyzerFrame::kGonioHistoryFrames),
+                                               frame->gonioActiveHistoryFrames);
+        const int pointsPerFrame = juce::jlimit (1,
+                                                 static_cast<int> (MetalAnalyzerFrame::kGonioPointsPerHistoryFrame),
+                                                 frame->gonioPointsPerHistoryFrame);
+        const int newestFrame = juce::jlimit (-1,
+                                              static_cast<int> (MetalAnalyzerFrame::kGonioHistoryFrames) - 1,
+                                              frame->gonioNewestHistoryFrame);
+
+        if (activeFrames > 0 && newestFrame >= 0)
+        {
+            for (int age = 0; age < activeFrames; ++age)
+            {
+                const int frameIndex = (newestFrame - age + static_cast<int> (MetalAnalyzerFrame::kGonioHistoryFrames))
+                                     % static_cast<int> (MetalAnalyzerFrame::kGonioHistoryFrames);
+                const int base = frameIndex * pointsPerFrame;
+                const float newestness = activeFrames <= 1
+                    ? 1.0f
+                    : 1.0f - (static_cast<float> (age) / static_cast<float> (activeFrames - 1));
+                const float alpha = juce::jmap (newestness, 0.08f, 0.62f);
+
+                for (int i = 0; i < pointsPerFrame; ++i)
+                {
+                    const int index = base + i;
+                    if (index < 0 || index >= static_cast<int> (MetalAnalyzerFrame::kGonioHistoryPointCapacity))
+                        break;
+
+                    if (! appendGonioPointQuad (*frame,
+                                                frame->gonioHistoryPoints[static_cast<size_t> (index)],
+                                                alpha,
+                                                width,
+                                                height,
+                                                vertexCount))
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+
+        const int numPoints = juce::jlimit (0,
+                                            static_cast<int> (MetalAnalyzerFrame::kGonioMaxPoints),
+                                            frame->gonioNumPoints);
+        for (int i = 0; i < numPoints; ++i)
+        {
+            if (! appendGonioPointQuad (*frame,
+                                        frame->gonioPoints[static_cast<size_t> (i)],
+                                        0.82f,
+                                        width,
+                                        height,
+                                        vertexCount))
+            {
+                break;
+            }
+        }
+
+        if (frame->gonioHoldEnabled)
+        {
+            const int holdCount = juce::jlimit (0,
+                                                static_cast<int> (MetalAnalyzerFrame::kGonioHoldBins),
+                                                frame->gonioHoldCount);
+            for (int i = 0; i < holdCount; ++i)
+            {
+                if (! appendGonioPointQuad (*frame,
+                                            frame->gonioHoldPoints[static_cast<size_t> (i)],
+                                            0.45f,
+                                            width,
+                                            height,
+                                            vertexCount))
+                {
+                    break;
+                }
+            }
+        }
+
+        if (vertexCount > 0 && vertexCount <= kMaxGonioPointVertices)
+        {
+            std::memcpy ([gonioPointBuffer contents], gonioPointVertices.data(), sizeof (ColourVertex) * vertexCount);
+            [encoder setVertexBuffer: gonioPointBuffer offset: 0 atIndex: 0];
+            [encoder drawPrimitives: MTLPrimitiveTypeTriangle
+                         vertexStart: 0
+                         vertexCount: static_cast<NSUInteger> (vertexCount)];
+        }
+
+        const MTLScissorRect fullScissor { 0, 0, drawableWidth, drawableHeight };
+        [encoder setScissorRect: fullScissor];
+    }
+
     void drawAnalyzerFrame (id<MTLRenderCommandEncoder> encoder,
                             id<MTLTexture> drawableTexture,
                             const std::shared_ptr<const MetalAnalyzerFrame>& frame,
@@ -2118,6 +2577,9 @@ private:
     id<MTLBuffer> chromeQuadBuffer = nil;
     id<MTLBuffer> analyzerFillBuffer = nil;
     id<MTLBuffer> analyzerLineBuffer = nil;
+    id<MTLBuffer> phaseFanFillBuffer = nil;
+    id<MTLBuffer> phaseFanLineBuffer = nil;
+    id<MTLBuffer> gonioPointBuffer = nil;
     std::array<id<MTLTexture>, kChromeTextureRingSize> chromeTextures {};
     int chromeTextureWidth = 0;
     int chromeTextureHeight = 0;
@@ -2148,6 +2610,7 @@ private:
     std::array<float, kMaxAnalyzerBins> analyzerPeakHoldDb {};
     std::vector<ColourVertex> analyzerFillVertices;
     std::vector<ColourVertex> analyzerLineVertices;
+    std::vector<ColourVertex> gonioPointVertices;
     double analyzerPipelineSampleRate = 0.0;
     int analyzerPipelineFftSize = 0;
     size_t analyzerPipelineBins = 0;

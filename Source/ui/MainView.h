@@ -115,6 +115,7 @@ private:
     mdsp_ui::scopes::PhaseFanRenderStateProvider phaseFanProvider_;
     std::array<float, mdsp_ui::scopes::StereoScopeRenderState::kMaxPoints> scopeLeftScratch_ {};
     std::array<float, mdsp_ui::scopes::StereoScopeRenderState::kMaxPoints> scopeRightScratch_ {};
+    int scopeFeedTick_ = 0;
 
 #if JUCE_DEBUG
     DebugRectCallback debugRectCallback_;

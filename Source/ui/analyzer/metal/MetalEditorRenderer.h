@@ -11,7 +11,7 @@ namespace AnalyzerPro::metal
 {
 
 class MetalEditorRenderer final : public IEditorSurface,
-                                  private juce::Timer
+                                  private juce::MultiTimer
 {
 public:
     MetalEditorRenderer();
@@ -23,13 +23,18 @@ public:
     bool isRunning() const noexcept override;
 
 private:
-    void timerCallback() override;
+    void timerCallback (int timerID) override;
     void captureChromeFrame();
+    void publishAnalyzerFrame();
+    void startFramePublishTimer();
     void scheduleNextChromeCapture();
     bool ensureChromePayloadPool (int widthPx, int heightPx, float scale);
     std::shared_ptr<FrameTexturePayload> acquireChromePayload() noexcept;
 
     static constexpr size_t kChromePayloadPoolSize = 3;
+    static constexpr int kFramePublishTimerId = 0;
+    static constexpr int kChromeCaptureTimerId = 1;
+    static constexpr int kFramePublishIntervalMs = 16;
 
     std::unique_ptr<MetalHost> host_;
     juce::Component::SafePointer<juce::Component> editor_;

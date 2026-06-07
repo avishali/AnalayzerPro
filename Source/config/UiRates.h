@@ -20,6 +20,9 @@ namespace UiRates
 static constexpr int kAnalyzerDataHz      = 30;  // snapshot pump + timer-tick render rate
 static constexpr int kAnalyzerMaxRenderHz = ANALYZERPRO_MAX_RENDER_HZ; // VBlank interpolation cap
 static constexpr int kMeterHz             = 30;
+// Feed faster than CPU repaint so the Metal 60 Hz publish path has fresh point-cloud data;
+// CPU scope components still refresh at kScopeHz to avoid doubling non-Metal paint cost.
+static constexpr int kScopeFeedHz         = 60;
 static constexpr int kScopeHz             = 30;
 static constexpr int kNumericLabelHz      = 15;
 }

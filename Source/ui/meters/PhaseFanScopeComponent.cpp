@@ -47,6 +47,13 @@ void PhaseFanScopeComponent::setRenderState (const mdsp_ui::scopes::PhaseFanRend
     repaint();
 }
 
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+void PhaseFanScopeComponent::setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept
+{
+    metalTraceSuppressed_ = shouldSuppress;
+}
+#endif
+
 void PhaseFanScopeComponent::resized()
 {
     rebuildCachedPaths();
@@ -251,30 +258,35 @@ void PhaseFanScopeComponent::paint (juce::Graphics& g)
     // ── Signal ────────────────────────────────────────────────────────────────
     const auto scopeColour = traceColourOrFallback (traceColors_, AnalyzerPro::TraceId::Peak, theme.seriesPeak);
 
-    if (!fanFillPath_.isEmpty())
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    if (! metalTraceSuppressed_)
+#endif
     {
-        // Gradient fill, like the spectrum RMS trace: brighter near the dome, fading to centre.
-        juce::ColourGradient grad (scopeColour.withAlpha (0.42f), cx, cy - radiusPx,
-                                   scopeColour.withAlpha (0.04f), cx, cy, false);
-        g.setGradientFill (grad);
-        g.fillPath (fanFillPath_);
-    }
+        if (!fanFillPath_.isEmpty())
+        {
+            // Gradient fill, like the spectrum RMS trace: brighter near the dome, fading to centre.
+            juce::ColourGradient grad (scopeColour.withAlpha (0.42f), cx, cy - radiusPx,
+                                       scopeColour.withAlpha (0.04f), cx, cy, false);
+            g.setGradientFill (grad);
+            g.fillPath (fanFillPath_);
+        }
 
-    if (!contourPath_.isEmpty())
-    {
-        g.setColour (scopeColour.withAlpha (0.90f));
-        g.strokePath (contourPath_, juce::PathStrokeType (1.6f));
-    }
+        if (!contourPath_.isEmpty())
+        {
+            g.setColour (scopeColour.withAlpha (0.90f));
+            g.strokePath (contourPath_, juce::PathStrokeType (1.6f));
+        }
 
-    if (state_.peakHoldEnabled && !peakHoldPath_.isEmpty())
-    {
-        // Same colour as the trace, thicker with a soft glow.
-        g.setColour (scopeColour.withAlpha (0.22f));
-        g.strokePath (peakHoldPath_, juce::PathStrokeType (4.5f, juce::PathStrokeType::curved,
-                                                           juce::PathStrokeType::rounded));
-        g.setColour (scopeColour.withAlpha (0.98f));
-        g.strokePath (peakHoldPath_, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved,
-                                                           juce::PathStrokeType::rounded));
+        if (state_.peakHoldEnabled && !peakHoldPath_.isEmpty())
+        {
+            // Same colour as the trace, thicker with a soft glow.
+            g.setColour (scopeColour.withAlpha (0.22f));
+            g.strokePath (peakHoldPath_, juce::PathStrokeType (4.5f, juce::PathStrokeType::curved,
+                                                               juce::PathStrokeType::rounded));
+            g.setColour (scopeColour.withAlpha (0.98f));
+            g.strokePath (peakHoldPath_, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved,
+                                                               juce::PathStrokeType::rounded));
+        }
     }
 
     // ── Labels at arc geometry positions ─────────────────────────────────────

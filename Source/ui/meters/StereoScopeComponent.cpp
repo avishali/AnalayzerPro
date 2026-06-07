@@ -40,6 +40,13 @@ void StereoScopeComponent::setRenderState (const mdsp_ui::scopes::StereoScopeRen
     repaint();
 }
 
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+void StereoScopeComponent::setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept
+{
+    metalTraceSuppressed_ = shouldSuppress;
+}
+#endif
+
 void StereoScopeComponent::setFreezeToggleCallback (ScopeActionFn fn, void* ctx) noexcept
 {
     onFreezeToggle_ = fn;
@@ -216,7 +223,11 @@ void StereoScopeComponent::paint (juce::Graphics& g)
     g.drawVerticalLine (static_cast<int> (cx), plot.getY(), plot.getBottom());
     g.drawHorizontalLine (static_cast<int> (cy), plot.getX(), plot.getRight());
 
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    if (enabled_ && ! metalTraceSuppressed_)
+#else
     if (enabled_)
+#endif
     {
         const auto scopeColour = traceColourOrFallback (traceColors_, AnalyzerPro::TraceId::Peak, theme.seriesPeak);
         g.saveState();

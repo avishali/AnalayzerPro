@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -61,9 +62,47 @@ struct MetalRectPx
     bool isEmpty() const noexcept { return w <= 1.0f || h <= 1.0f; }
 };
 
+struct MetalPoint
+{
+    float x = 0.0f;
+    float y = 0.0f;
+};
+
 struct MetalAnalyzerFrame
 {
     MetalRectPx plotRectPx;
+    static constexpr size_t kPhaseFanAngleBins = 180;
+    MetalRectPx phaseFanRectPx;
+    MetalColour phaseFanColour;
+    float phaseFanCx = 0.0f;
+    float phaseFanCy = 0.0f;
+    float phaseFanRadiusPx = 0.0f;
+    std::array<float, kPhaseFanAngleBins> phaseFanContourRNorm {};
+    std::array<float, kPhaseFanAngleBins> phaseFanPeakRNorm {};
+    bool phaseFanPeakHoldEnabled = false;
+    int phaseFanRenderMode = 0;
+    bool phaseFanValid = false;
+    static constexpr size_t kGonioMaxPoints = 2048;
+    static constexpr size_t kGonioHistoryFrames = 24;
+    static constexpr size_t kGonioPointsPerHistoryFrame = 256;
+    static constexpr size_t kGonioHistoryPointCapacity = kGonioHistoryFrames * kGonioPointsPerHistoryFrame;
+    static constexpr size_t kGonioHoldBins = 180;
+    MetalRectPx gonioRectPx;
+    float gonioCx = 0.0f;
+    float gonioCy = 0.0f;
+    float gonioHalfUsable = 0.0f;
+    float gonioPointHalfSizePx = 0.75f;
+    MetalColour gonioColour;
+    int gonioNumPoints = 0;
+    std::array<MetalPoint, kGonioMaxPoints> gonioPoints {};
+    int gonioActiveHistoryFrames = 0;
+    int gonioPointsPerHistoryFrame = 0;
+    int gonioNewestHistoryFrame = -1;
+    std::array<MetalPoint, kGonioHistoryPointCapacity> gonioHistoryPoints {};
+    bool gonioHoldEnabled = false;
+    int gonioHoldCount = 0;
+    std::array<MetalPoint, kGonioHoldBins> gonioHoldPoints {};
+    bool gonioValid = false;
     MetalColour rmsColour;
     MetalTracePayload rmsTrace;
     MetalTracePayload peakTrace;

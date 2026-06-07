@@ -29,6 +29,10 @@ public:
     void setRenderState (const mdsp_ui::scopes::StereoScopeRenderState& state);
     const mdsp_ui::scopes::StereoScopeRenderState& getRenderState() const noexcept { return state_; }
     void setTraceColorStore (AnalyzerPro::TraceColorStore* store) noexcept { traceColors_ = store; }
+    juce::Rectangle<int> getViewportBounds() const noexcept { return viewportRect_; }
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    void setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept;
+#endif
 
     float getCorrelation() const noexcept { return state_.correlation; }
 
@@ -51,6 +55,9 @@ private:
     juce::Rectangle<int> viewportRect_;
     int maxViewportSize_ = kDefaultMaxViewportSize;
     bool enabled_ = true;
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    bool metalTraceSuppressed_ = false;
+#endif
     AnalyzerPro::TraceColorStore* traceColors_ = nullptr;
 
     ScopeActionFn onFreezeToggle_ = nullptr;

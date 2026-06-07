@@ -7,6 +7,51 @@
 
 using namespace AnalyzerPro::Layout;
 
+namespace
+{
+constexpr int kScopeComponentRefreshTicks = (AnalyzerPro::UiRates::kScopeFeedHz + AnalyzerPro::UiRates::kScopeHz / 2)
+                                          / AnalyzerPro::UiRates::kScopeHz;
+}
+
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+namespace
+{
+constexpr float kMetalGonioEdgeInset = 0.5f;
+constexpr float kMetalPhaseFanEdgeInset = 3.0f;
+
+AnalyzerPro::metal::MetalRectPx componentBoundsToMetalRectPx (const juce::Component& editor,
+                                                              const juce::Component& source,
+                                                              juce::Rectangle<int> boundsInSource,
+                                                              float backingScale)
+{
+    const auto rectInEditor = editor.getLocalArea (&source, boundsInSource).toFloat();
+    backingScale = juce::jmax (1.0f, backingScale);
+
+    return {
+        rectInEditor.getX() * backingScale,
+        rectInEditor.getY() * backingScale,
+        rectInEditor.getWidth() * backingScale,
+        rectInEditor.getHeight() * backingScale
+    };
+}
+
+AnalyzerPro::metal::MetalColour metalColourFor (juce::Colour colour) noexcept
+{
+    return {
+        colour.getFloatRed(),
+        colour.getFloatGreen(),
+        colour.getFloatBlue(),
+        colour.getFloatAlpha()
+    };
+}
+
+AnalyzerPro::metal::MetalPoint metalPointFor (juce::Point<float> point) noexcept
+{
+    return { point.x, point.y };
+}
+} // namespace
+#endif
+
 //==============================================================================
 MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce::AudioProcessorValueTreeState* apvts)
     : audioProcessor (p),
@@ -270,7 +315,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         }
     }
 
-    startTimerHz (AnalyzerPro::UiRates::kScopeHz);
+    startTimerHz (AnalyzerPro::UiRates::kScopeFeedHz);
 
     //setSize (900, 650);  // Slightly bigger to fit all controls
 
@@ -589,13 +634,87 @@ void MainView::setSizePresetPercent (int percent)
 void MainView::setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept
 {
     analyzerView_.setMetalTraceSuppressedForChromeCapture (shouldSuppress);
+    stereoScopeComponent_.setMetalTraceSuppressedForChromeCapture (shouldSuppress);
+    phaseFanScopeComponent_.setMetalTraceSuppressedForChromeCapture (shouldSuppress);
 }
 
 bool MainView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& frame,
                                        const juce::Component& editor,
                                        float backingScale)
 {
-    return analyzerView_.fillMetalAnalyzerFrame (frame, editor, backingScale);
+    if (! analyzerView_.fillMetalAnalyzerFrame (frame, editor, backingScale))
+        return false;
+
+    const auto phaseFanRectPx = componentBoundsToMetalRectPx (editor,
+                                                             *this,
+                                                             phaseFanScopeComponent_.getBoundsInParent(),
+                                                             backingScale);
+    const float scale = juce::jmax (1.0f, backingScale);
+    const float insetPx = kMetalPhaseFanEdgeInset * scale;
+    const float radiusFromHeight = phaseFanRectPx.h - insetPx * 2.0f;
+    const float radiusFromWidth = phaseFanRectPx.w * 0.5f - insetPx;
+
+    frame.phaseFanRectPx = phaseFanRectPx;
+    frame.phaseFanCx = phaseFanRectPx.x + phaseFanRectPx.w * 0.5f;
+    frame.phaseFanCy = phaseFanRectPx.y + phaseFanRectPx.h - insetPx;
+    frame.phaseFanRadiusPx = juce::jmax (0.0f, juce::jmin (radiusFromHeight, radiusFromWidth));
+
+    const auto phaseFanState = phaseFanProvider_.state();
+    frame.phaseFanContourRNorm = phaseFanState.contourRNorm;
+    frame.phaseFanPeakRNorm = phaseFanState.peakRNorm;
+    frame.phaseFanPeakHoldEnabled = phaseFanState.peakHoldEnabled;
+    frame.phaseFanRenderMode = static_cast<int> (phaseFanState.renderMode);
+    frame.phaseFanColour = metalColourFor (traceColors_ != nullptr
+        ? traceColors_->get (AnalyzerPro::TraceId::Peak)
+        : ui_.theme().seriesPeak);
+    frame.phaseFanValid = ! phaseFanRectPx.isEmpty() && frame.phaseFanRadiusPx > 0.0f;
+
+    const float gonioScale = juce::jmax (1.0f, backingScale);
+    const auto gonioRectPx = componentBoundsToMetalRectPx (editor,
+                                                          stereoScopeComponent_,
+                                                          stereoScopeComponent_.getViewportBounds(),
+                                                          gonioScale);
+    const auto gonioState = stereoScopeProvider_.state();
+
+    frame.gonioRectPx = gonioRectPx;
+    frame.gonioCx = gonioRectPx.x + gonioRectPx.w * 0.5f;
+    frame.gonioCy = gonioRectPx.y + gonioRectPx.h * 0.5f;
+    frame.gonioHalfUsable = juce::jmin (gonioRectPx.w, gonioRectPx.h) * 0.5f - kMetalGonioEdgeInset * gonioScale;
+    frame.gonioPointHalfSizePx = 0.75f * gonioScale;
+    frame.gonioColour = metalColourFor (traceColors_ != nullptr
+        ? traceColors_->get (AnalyzerPro::TraceId::Peak)
+        : ui_.theme().seriesPeak);
+
+    frame.gonioNumPoints = juce::jlimit (0,
+                                         static_cast<int> (AnalyzerPro::metal::MetalAnalyzerFrame::kGonioMaxPoints),
+                                         gonioState.numPoints);
+    for (int i = 0; i < frame.gonioNumPoints; ++i)
+        frame.gonioPoints[static_cast<size_t> (i)] = metalPointFor (gonioState.points[static_cast<size_t> (i)]);
+
+    frame.gonioActiveHistoryFrames = juce::jlimit (0,
+                                                  static_cast<int> (AnalyzerPro::metal::MetalAnalyzerFrame::kGonioHistoryFrames),
+                                                  gonioState.activeHistoryFrames);
+    frame.gonioPointsPerHistoryFrame = juce::jlimit (1,
+                                                     static_cast<int> (AnalyzerPro::metal::MetalAnalyzerFrame::kGonioPointsPerHistoryFrame),
+                                                     gonioState.pointsPerHistoryFrame);
+    frame.gonioNewestHistoryFrame = juce::jlimit (-1,
+                                                 static_cast<int> (AnalyzerPro::metal::MetalAnalyzerFrame::kGonioHistoryFrames) - 1,
+                                                 gonioState.newestHistoryFrame);
+
+    for (size_t i = 0; i < frame.gonioHistoryPoints.size(); ++i)
+        frame.gonioHistoryPoints[i] = metalPointFor (gonioState.historyPoints[i]);
+
+    frame.gonioHoldEnabled = gonioState.holdEnabled;
+    frame.gonioHoldCount = juce::jlimit (0,
+                                         static_cast<int> (AnalyzerPro::metal::MetalAnalyzerFrame::kGonioHoldBins),
+                                         gonioState.holdPointCount);
+    for (int i = 0; i < frame.gonioHoldCount; ++i)
+        frame.gonioHoldPoints[static_cast<size_t> (i)] = metalPointFor (gonioState.holdPoints[static_cast<size_t> (i)]);
+
+    frame.gonioValid = ! gonioRectPx.isEmpty()
+                    && frame.gonioHalfUsable > 0.0f
+                    && (frame.gonioNumPoints > 0 || frame.gonioActiveHistoryFrames > 0);
+    return true;
 }
 #endif
 
@@ -613,25 +732,34 @@ void MainView::triggerResetPeaks()
 
 void MainView::timerCallback()
 {
+    const bool shouldRefreshScopeComponents = ++scopeFeedTick_ >= kScopeComponentRefreshTicks;
+    if (shouldRefreshScopeComponents)
+        scopeFeedTick_ = 0;
+
     const int pulled = audioProcessor.pullStereoScopeSamples (scopeLeftScratch_.data(),
                                                               scopeRightScratch_.data(),
                                                               static_cast<int> (scopeLeftScratch_.size()));
     if (pulled <= 0)
     {
-        phaseFanProvider_.advanceNoSignal (1.0 / static_cast<double> (AnalyzerPro::UiRates::kScopeHz));
-        phaseFanScopeComponent_.setRenderState (phaseFanProvider_.state());
+        phaseFanProvider_.advanceNoSignal (1.0 / static_cast<double> (AnalyzerPro::UiRates::kScopeFeedHz));
+        if (shouldRefreshScopeComponents)
+            phaseFanScopeComponent_.setRenderState (phaseFanProvider_.state());
         return;
     }
 
     stereoScopeProvider_.pushSamples (std::span<const float> (scopeLeftScratch_.data(), static_cast<size_t> (pulled)),
                                       std::span<const float> (scopeRightScratch_.data(), static_cast<size_t> (pulled)),
                                       audioProcessor.getStereoScopeSampleRate());
-    stereoScopeComponent_.setRenderState (stereoScopeProvider_.state());
 
     phaseFanProvider_.pushSamples (std::span<const float> (scopeLeftScratch_.data(), static_cast<size_t> (pulled)),
                                    std::span<const float> (scopeRightScratch_.data(), static_cast<size_t> (pulled)),
                                    audioProcessor.getStereoScopeSampleRate());
-    phaseFanScopeComponent_.setRenderState (phaseFanProvider_.state());
+
+    if (shouldRefreshScopeComponents)
+    {
+        stereoScopeComponent_.setRenderState (stereoScopeProvider_.state());
+        phaseFanScopeComponent_.setRenderState (phaseFanProvider_.state());
+    }
 }
 
 void MainView::toggleRail()
