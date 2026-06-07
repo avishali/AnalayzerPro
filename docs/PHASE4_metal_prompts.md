@@ -63,29 +63,53 @@ End of CONTEXT.
 ## Phase 4A — Goniometer + Phase-fan scopes → GPU (DO THIS FIRST)
 
 **Why first:** the two animated vector scopes (`StereoScopeComponent` goniometer,
-`PhaseFanScopeComponent`) are re-stroked into the **chrome texture every capture** — they are the
-dominant chrome-capture cost (they once *hung* Pro Tools via `strokePath` saturating the main
-thread). Moving them to GPU geometry both removes the biggest chrome cost AND makes them smooth.
-They already have lock-free providers: `mdsp_ui::StereoScopeRenderStateProvider` /
-`PhaseFanRenderStateProvider` (instantiated in `MainView`).
+`PhaseFanScopeComponent`) are re-stroked into the **chrome texture every capture** — the dominant
+chrome-capture cost (they once *hung* Pro Tools via `strokePath` saturating the main thread). The
+**primary goal of 4A is to remove that chrome `strokePath` cost**, not to hit 120 fps scope data.
 
-**Prompt:**
+**Corrected facts (a first attempt failed on these — do not repeat):**
+- **The scope providers are NOT lock-free.** `StereoScope`/`PhaseFanRenderStateProvider` expose a
+  plain `state()` getter, fed by `pushSamples()`, read on the **message thread** (MainView). Do
+  **NOT** read `state()` from the render thread (race). **Publish an immutable scope snapshot from
+  the message thread** (`std::atomic<std::shared_ptr<const MetalScopeFrame>>`), built from
+  `state()` on the message thread — same pattern as the analyzer config. Message-rate scope data is
+  acceptable (scopes aren't motion-critical); the win is killing the chrome strokePath cost.
+- **Scale MUST be unified on the host backing scale.** Use the analyzer/Metal path's
+  `host_->getBackingScaleFactor()` for ALL scope geometry — **never** `editor->getDesktopScaleFactor()`
+  (that mismatch was the placement bug; fixing it placed the phase-fan correctly).
+- **Goniometer = points, not line-strips** (line strips produced spike artifacts) — draw it as a
+  point cloud (small quads / point primitives).
 
-> Port the goniometer (`StereoScopeComponent`) and phase-fan (`PhaseFanScopeComponent`) to GPU
-> geometry on the Metal render thread, reading their existing lock-free
-> `StereoScopeRenderStateProvider` / `PhaseFanRenderStateProvider` (same handoff pattern as the
-> analyzer: render thread reads provider state every frame; message thread publishes config via
-> `atomic<shared_ptr>`). Draw each as line geometry (point cloud / path → line-strip or expanded
-> triangle-strip) clipped to its rect (in drawable-pixel space), matching the CPU look (colors from
-> theme/`TraceColors`, blend, fade). **Suppress both scopes in the chrome capture when Metal is
-> active** (add a suppression flag like the analyzer trace had) so they're not double-drawn and the
-> chrome-capture cost drops sharply. Reuse the analyzer's render-thread patterns: preallocated
-> vertex buffers, dynamic interpolation matched to the provider's real update rate (no second
-> ballistics), no allocations/`juce::Graphics`/MM-lock on the render thread. Keep the CPU scope
-> paint intact as the permanent fallback (flag off / non-Metal). ARC-off memory rules apply.
-> **Validate:** harness (add scope toggles or a scope mode) clean under NSZombie+ASan; then PT —
-> scopes animate smoothly at display rate, PT main-thread cost visibly drops (no chrome strokePath
-> for scopes), no hang on multi-instance churn. ⛔ STOP at checkpoint; human signs + PT-verifies.
+**Prompt — STEP 0 (diagnostic, do this alone first; do NOT draw real scopes yet):**
+
+> Add a temporary debug mode that draws a solid translucent **rectangle** in Metal at each scope's
+> computed rect — phase-fan rect and goniometer rect — using the SAME rect→drawable-pixel mapping
+> the analyzer plot rect uses (host `getBackingScaleFactor()`, editor-coords → drawable px). Also
+> overlay the analyzer plot rect for reference. Do NOT suppress the chrome scopes yet (so you see the
+> Metal debug rect AND the CPU scope together). Build/sign/install/PT: **confirm each Metal debug
+> rect exactly covers where the CPU scope is.** Iterate ONLY on the rect math until they align
+> pixel-for-pixel on a Retina display. Do not touch the spectrum/analyzer draw path. ⛔ STOP — nail
+> placement before any real geometry.
+
+**Prompt — STEP 1 (one surface: phase-fan first, then goniometer):**
+
+> With rects confirmed (Step 0), port **one scope at a time, phase-fan first**. (1) Message thread:
+> build an immutable `MetalScopeFrame` (point/segment arrays in normalized scope space + rect in
+> drawable px + colors/mode from theme) from the provider's `state()`, publish via
+> `atomic<shared_ptr<const MetalScopeFrame>>`. (2) Render thread: draw it into its rect (scissor),
+> matching the CPU look (colors from theme/`TraceColors`, blend, fade); phase-fan as line/segments,
+> **goniometer as points (small quads), NOT line-strips**. Preallocated buffers; no
+> alloc/`juce::Graphics`/MM-lock on the render thread; ARC-off (don't release autoreleased objects).
+> Do NOT add a second ballistics stage. **Do NOT touch the spectrum/analyzer pipeline** (the prior
+> attempt regressed it by interacting with the spectrum-overlay path — keep them fully isolated).
+> Once a scope renders correctly in Metal, **suppress that scope in the chrome capture** (flag, like
+> the analyzer trace) so it's not double-drawn and chrome cost drops. Keep CPU scope paint as the
+> permanent fallback. Validate in the harness `--scopes` mode (NSZombie+ASan, clean) then PT. ⛔
+> STOP after phase-fan; human signs + PT-verifies BEFORE starting the goniometer.
+
+**Acceptance (per scope):** placed correctly on 1× and 2× displays; looks like the CPU scope; PT
+main-thread cost drops (scope no longer stroked into chrome); no hang on multi-instance churn;
+spectrum/analyzer unchanged.
 
 ---
 
