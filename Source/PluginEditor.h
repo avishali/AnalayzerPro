@@ -43,8 +43,9 @@ public:
 #endif
 
 private:
-    static constexpr int kBaseEditorWidth = 1100;
-    static constexpr int kBaseEditorHeight = 720;
+    static constexpr int kBaseEditorWidth = 1360;
+    static constexpr int kBaseEditorHeight = 765;
+    static constexpr int kMinEditorSizePreset = 75;
     static constexpr int kMaxEditorSize = 4096;
 
     static int clampEditorSizePreset (int percent) noexcept;

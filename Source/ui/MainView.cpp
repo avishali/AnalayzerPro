@@ -11,6 +11,7 @@ namespace
 {
 constexpr int kScopeComponentRefreshTicks = (AnalyzerPro::UiRates::kScopeFeedHz + AnalyzerPro::UiRates::kScopeHz / 2)
                                           / AnalyzerPro::UiRates::kScopeHz;
+constexpr int kMeterRailCenterScaleWidthDelta = 18;
 }
 
 #if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
@@ -48,6 +49,41 @@ AnalyzerPro::metal::MetalColour metalColourFor (juce::Colour colour) noexcept
 AnalyzerPro::metal::MetalPoint metalPointFor (juce::Point<float> point) noexcept
 {
     return { point.x, point.y };
+}
+
+void appendMetalMeterBar (AnalyzerPro::metal::MetalAnalyzerFrame& frame,
+                          const juce::Component& editor,
+                          const MeterComponent* meter,
+                          float backingScale,
+                          AnalyzerPro::metal::MetalColour peakColour,
+                          AnalyzerPro::metal::MetalColour rmsColour,
+                          AnalyzerPro::metal::MetalColour holdColour)
+{
+    if (meter == nullptr
+        || frame.meterCount >= static_cast<int> (AnalyzerPro::metal::MetalAnalyzerFrame::kMaxMeters))
+    {
+        return;
+    }
+
+    auto& bar = frame.meters[static_cast<size_t> (frame.meterCount++)];
+    bar = {};
+
+    const auto rectPx = componentBoundsToMetalRectPx (editor,
+                                                     *meter,
+                                                     meter->getMeterBarBounds(),
+                                                     backingScale);
+    const auto& state = meter->getRenderState();
+    const bool peakMode = state.displayMode == mdsp_ui::meters::MeterDisplayMode::Peak;
+
+    bar.rectPx = rectPx;
+    bar.mainNorm = peakMode ? state.peakNorm : state.rmsNorm;
+    bar.peakNorm = state.peakNorm;
+    bar.maxPeakNorm = state.maxPeakNorm;
+    bar.mainColour = peakMode ? peakColour : rmsColour;
+    bar.peakColour = peakColour;
+    bar.holdColour = holdColour;
+    bar.displayMode = static_cast<int> (state.displayMode);
+    bar.valid = ! rectPx.isEmpty();
 }
 } // namespace
 #endif
@@ -636,6 +672,8 @@ void MainView::setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noe
     analyzerView_.setMetalTraceSuppressedForChromeCapture (shouldSuppress);
     stereoScopeComponent_.setMetalTraceSuppressedForChromeCapture (shouldSuppress);
     phaseFanScopeComponent_.setMetalTraceSuppressedForChromeCapture (shouldSuppress);
+    inputMeters_.setMetalTraceSuppressedForChromeCapture (shouldSuppress);
+    outputMeters_.setMetalTraceSuppressedForChromeCapture (shouldSuppress);
 }
 
 bool MainView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& frame,
@@ -714,6 +752,20 @@ bool MainView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& f
     frame.gonioValid = ! gonioRectPx.isEmpty()
                     && frame.gonioHalfUsable > 0.0f
                     && (frame.gonioNumPoints > 0 || frame.gonioActiveHistoryFrames > 0);
+
+    const auto meterPeakColour = metalColourFor (traceColors_ != nullptr
+        ? traceColors_->get (AnalyzerPro::TraceId::Peak)
+        : ui_.theme().seriesPeak);
+    const auto meterRmsColour = metalColourFor (traceColors_ != nullptr
+        ? traceColors_->get (AnalyzerPro::TraceId::Rms)
+        : ui_.theme().accent);
+    const auto meterHoldColour = metalColourFor (ui_.theme().warning);
+
+    frame.meterCount = 0;
+    appendMetalMeterBar (frame, editor, inputMeters_.getMeter (0), backingScale, meterPeakColour, meterRmsColour, meterHoldColour);
+    appendMetalMeterBar (frame, editor, inputMeters_.getMeter (1), backingScale, meterPeakColour, meterRmsColour, meterHoldColour);
+    appendMetalMeterBar (frame, editor, outputMeters_.getMeter (0), backingScale, meterPeakColour, meterRmsColour, meterHoldColour);
+    appendMetalMeterBar (frame, editor, outputMeters_.getMeter (1), backingScale, meterPeakColour, meterRmsColour, meterHoldColour);
     return true;
 }
 #endif
@@ -930,8 +982,9 @@ void MainView::resized()
 #endif
 
     // Meter rails (never hidden)
-    auto leftMeters = bounds.removeFromLeft (meterRailWidth);
-    auto rightMeters = bounds.removeFromRight (meterRailWidth);
+    const int meterRailWidthWithCenterScale = meterRailWidth + kMeterRailCenterScaleWidthDelta;
+    auto leftMeters = bounds.removeFromLeft (meterRailWidthWithCenterScale);
+    auto rightMeters = bounds.removeFromRight (meterRailWidthWithCenterScale);
     if (meterRailHeight > 0)
     {
         const int h = juce::jmin (leftMeters.getHeight(), meterRailHeight);

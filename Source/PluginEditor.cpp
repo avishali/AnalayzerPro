@@ -20,6 +20,14 @@ bool isAaxMetalEditorDisabled() noexcept
 }
 #endif
 
+namespace
+{
+constexpr int scaledEditorSize (int base, int percent) noexcept
+{
+    return (base * percent + 50) / 100;
+}
+}
+
 //==============================================================================
 AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerProAudioProcessor& p)
     : AudioProcessorEditor (&p),
@@ -73,7 +81,10 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
     else
     {
         setResizable (true, true);
-        setResizeLimits (1100, 720, 4096, 4096);
+        setResizeLimits (scaledEditorSize (kBaseEditorWidth, kMinEditorSizePreset),
+                         scaledEditorSize (kBaseEditorHeight, kMinEditorSizePreset),
+                         kMaxEditorSize,
+                         kMaxEditorSize);
     }
 
     mainView.onSizePresetChanged = [this] (int percent)
@@ -81,31 +92,31 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
         applyEditorSizePreset (percent);
     };
 
-    // Restore State Size or Default to Screen 70% (never below minimum)
-    const int minW = kBaseEditorWidth;
-    const int minH = kBaseEditorHeight;
+    // Restore a valid stored size, otherwise open at the 16:9 100% preset.
+    const int minW = scaledEditorSize (kBaseEditorWidth, kMinEditorSizePreset);
+    const int minH = scaledEditorSize (kBaseEditorHeight, kMinEditorSizePreset);
     const int storedW = p.getEditorWidth();
     const int storedH = p.getEditorHeight();
     currentEditorSizePreset_ = clampEditorSizePreset (p.getEditorSizePreset());
 
-    if (storedW >= minW && storedH >= minH)
+    if (storedW >= minW && storedH >= minH && storedW <= kMaxEditorSize && storedH <= kMaxEditorSize)
     {
         setSize (storedW, storedH);
     }
     else
     {
+        int defaultPreset = 100;
         auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
         if (display != nullptr)
         {
             const auto area = display->userArea;
-            const int w = juce::jmax (minW, 1300);
-            const int h = juce::jmax (minH, static_cast<int> (area.getHeight() * 0.7));
-            setSize (w, h);
+            if (area.getWidth() < kBaseEditorWidth || area.getHeight() < kBaseEditorHeight)
+                defaultPreset = kMinEditorSizePreset;
         }
-        else
-        {
-            setSize (juce::jmax (minW, 1300), juce::jmax (minH, 700));
-        }
+
+        currentEditorSizePreset_ = defaultPreset;
+        const auto bounds = getPresetBoundsForPercent (defaultPreset);
+        setSize (bounds.getWidth(), bounds.getHeight());
     }
 
     audioProcessor.setEditorSizePreset (currentEditorSizePreset_);
@@ -215,11 +226,21 @@ void AnalayzerProAudioProcessorEditor::startMetalSurfaceIfNeeded()
 
 int AnalayzerProAudioProcessorEditor::clampEditorSizePreset (int percent) noexcept
 {
-    if (percent >= 150)
-        return 150;
-    if (percent >= 125)
-        return 125;
-    return 100;
+    static constexpr int presets[] { 75, 100, 125, 150 };
+    int nearest = presets[0];
+    int nearestDistance = percent > nearest ? percent - nearest : nearest - percent;
+
+    for (const auto preset : presets)
+    {
+        const int distance = percent > preset ? percent - preset : preset - percent;
+        if (distance < nearestDistance)
+        {
+            nearest = preset;
+            nearestDistance = distance;
+        }
+    }
+
+    return nearest;
 }
 
 int AnalayzerProAudioProcessorEditor::deriveEditorSizePreset (int width, int height) noexcept
@@ -233,20 +254,22 @@ juce::Rectangle<int> AnalayzerProAudioProcessorEditor::getPresetBoundsForPercent
 {
     percent = clampEditorSizePreset (percent);
 
-    const int desiredW = kBaseEditorWidth * percent / 100;
-    const int desiredH = kBaseEditorHeight * percent / 100;
+    const int desiredW = scaledEditorSize (kBaseEditorWidth, percent);
+    const int desiredH = scaledEditorSize (kBaseEditorHeight, percent);
+    const int minW = scaledEditorSize (kBaseEditorWidth, kMinEditorSizePreset);
+    const int minH = scaledEditorSize (kBaseEditorHeight, kMinEditorSizePreset);
     int maxW = kMaxEditorSize;
     int maxH = kMaxEditorSize;
 
     if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
     {
-        maxW = juce::jmax (kBaseEditorWidth, display->userArea.getWidth());
-        maxH = juce::jmax (kBaseEditorHeight, display->userArea.getHeight());
+        maxW = juce::jmax (minW, display->userArea.getWidth());
+        maxH = juce::jmax (minH, display->userArea.getHeight());
     }
 
     return { 0, 0,
-             juce::jlimit (kBaseEditorWidth, maxW, desiredW),
-             juce::jlimit (kBaseEditorHeight, maxH, desiredH) };
+             juce::jlimit (minW, maxW, desiredW),
+             juce::jlimit (minH, maxH, desiredH) };
 }
 
 void AnalayzerProAudioProcessorEditor::applyEditorSizePreset (int percent)

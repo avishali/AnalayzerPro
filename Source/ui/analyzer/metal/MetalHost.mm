@@ -85,8 +85,10 @@ constexpr size_t kMaxGonioHistoryPoints = MetalAnalyzerFrame::kGonioHistoryPoint
 constexpr size_t kMaxGonioHoldPoints = MetalAnalyzerFrame::kGonioHoldBins;
 constexpr size_t kMaxGonioPointQuads = kMaxGonioPoints + kMaxGonioHistoryPoints + kMaxGonioHoldPoints;
 constexpr size_t kMaxGonioPointVertices = kMaxGonioPointQuads * 6;
+constexpr size_t kMaxMeterBarVertices = MetalAnalyzerFrame::kMaxMeters * 5 * 6;
 constexpr size_t kChromeTextureRingSize = 3;
 constexpr int kNoChromeTextureIndex = -1;
+constexpr int kMeterDisplayModeRms = 0;
 constexpr auto kRenderThreadStopTimeout = std::chrono::milliseconds (2000);
 constexpr auto kDrawableUnavailableSleep = std::chrono::milliseconds (2);
 #if ANALYZERPRO_METAL_DIAGNOSTICS
@@ -373,6 +375,12 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
         {
             [gonioPointBuffer release];
             gonioPointBuffer = nil;
+        }
+
+        if (meterBarBuffer != nil)
+        {
+            [meterBarBuffer release];
+            meterBarBuffer = nil;
         }
 
         if (metalLayer != nil)
@@ -914,9 +922,12 @@ private:
                                                  options: MTLResourceStorageModeShared];
         gonioPointBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxGonioPointVertices
                                                options: MTLResourceStorageModeShared];
+        meterBarBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxMeterBarVertices
+                                             options: MTLResourceStorageModeShared];
         analyzerFillVertices.resize (kMaxAnalyzerFillVertices);
         analyzerLineVertices.resize (kMaxAnalyzerBins);
         gonioPointVertices.resize (kMaxGonioPointVertices);
+        meterBarVertices.resize (kMaxMeterBarVertices);
         analyzerSmoothedDb.fill (-200.0f);
         analyzerRmsPreviousDb.fill (-200.0f);
         analyzerRmsTargetDb.fill (-200.0f);
@@ -931,6 +942,7 @@ private:
             && phaseFanFillBuffer != nil
             && phaseFanLineBuffer != nil
             && gonioPointBuffer != nil
+            && meterBarBuffer != nil
             ;
     }
 
@@ -1030,6 +1042,7 @@ private:
         drawAnalyzerFrame (encoder, drawableTexture, analyzerFrame, renderDtSeconds);
         drawPhaseFanFrame (encoder, drawableTexture, analyzerFrame);
         drawGonioFrame (encoder, drawableTexture, analyzerFrame);
+        drawMeterBars (encoder, drawableTexture, analyzerFrame);
         [encoder endEncoding];
     }
 
@@ -2090,6 +2103,229 @@ private:
         [encoder setScissorRect: fullScissor];
     }
 
+    struct MeterBarDraw
+    {
+        NSUInteger vertexStart = 0;
+        NSUInteger vertexCount = 0;
+        MTLScissorRect scissor {};
+    };
+
+    bool appendMeterQuad (float left,
+                          float top,
+                          float right,
+                          float bottom,
+                          MetalColour colour,
+                          float topAlpha,
+                          float bottomAlpha,
+                          float drawableWidth,
+                          float drawableHeight,
+                          size_t& vertexCount) noexcept
+    {
+        if (vertexCount + 6 > meterBarVertices.size())
+            return false;
+
+        if (! std::isfinite (left)
+            || ! std::isfinite (top)
+            || ! std::isfinite (right)
+            || ! std::isfinite (bottom)
+            || right <= left
+            || bottom <= top)
+        {
+            return true;
+        }
+
+        const float topA = colour.a * juce::jlimit (0.0f, 1.0f, topAlpha);
+        const float bottomA = colour.a * juce::jlimit (0.0f, 1.0f, bottomAlpha);
+        const ColourVertex quad[] = {
+            { { pixelXToNdc (left,  drawableWidth), pixelYToNdc (bottom, drawableHeight) }, { colour.r, colour.g, colour.b, bottomA } },
+            { { pixelXToNdc (right, drawableWidth), pixelYToNdc (bottom, drawableHeight) }, { colour.r, colour.g, colour.b, bottomA } },
+            { { pixelXToNdc (left,  drawableWidth), pixelYToNdc (top,    drawableHeight) }, { colour.r, colour.g, colour.b, topA } },
+            { { pixelXToNdc (right, drawableWidth), pixelYToNdc (bottom, drawableHeight) }, { colour.r, colour.g, colour.b, bottomA } },
+            { { pixelXToNdc (right, drawableWidth), pixelYToNdc (top,    drawableHeight) }, { colour.r, colour.g, colour.b, topA } },
+            { { pixelXToNdc (left,  drawableWidth), pixelYToNdc (top,    drawableHeight) }, { colour.r, colour.g, colour.b, topA } }
+        };
+
+        std::memcpy (meterBarVertices.data() + vertexCount, quad, sizeof (quad));
+        vertexCount += 6;
+        return true;
+    }
+
+    void drawMeterBars (id<MTLRenderCommandEncoder> encoder,
+                        id<MTLTexture> drawableTexture,
+                        const std::shared_ptr<const MetalAnalyzerFrame>& frame)
+    {
+        if (frame == nullptr || frame->meterCount <= 0)
+            return;
+
+        if (meterBarBuffer == nil || meterBarVertices.empty())
+            return;
+
+        const NSUInteger drawableWidth = [drawableTexture width];
+        const NSUInteger drawableHeight = [drawableTexture height];
+        if (drawableWidth == 0 || drawableHeight == 0)
+            return;
+
+        const float width = static_cast<float> (drawableWidth);
+        const float height = static_cast<float> (drawableHeight);
+        const int meterCount = juce::jlimit (0,
+                                             static_cast<int> (MetalAnalyzerFrame::kMaxMeters),
+                                             frame->meterCount);
+
+        std::array<MeterBarDraw, MetalAnalyzerFrame::kMaxMeters> draws {};
+        size_t drawCount = 0;
+        size_t vertexCount = 0;
+
+        for (int i = 0; i < meterCount; ++i)
+        {
+            const auto& bar = frame->meters[static_cast<size_t> (i)];
+            const auto& rect = bar.rectPx;
+            if (! bar.valid || rect.isEmpty())
+                continue;
+
+            const float scissorLeftF = juce::jlimit (0.0f, width, std::floor (rect.x));
+            const float scissorTopF = juce::jlimit (0.0f, height, std::floor (rect.y));
+            const float scissorRightF = juce::jlimit (0.0f, width, std::ceil (rect.x + rect.w));
+            const float scissorBottomF = juce::jlimit (0.0f, height, std::ceil (rect.y + rect.h));
+            if (scissorRightF <= scissorLeftF || scissorBottomF <= scissorTopF)
+                continue;
+
+            const MTLScissorRect scissor {
+                static_cast<NSUInteger> (scissorLeftF),
+                static_cast<NSUInteger> (scissorTopF),
+                static_cast<NSUInteger> (scissorRightF - scissorLeftF),
+                static_cast<NSUInteger> (scissorBottomF - scissorTopF)
+            };
+
+            const size_t drawStart = vertexCount;
+            const float left = rect.x;
+            const float right = rect.x + rect.w;
+            const float barBottom = rect.y + rect.h;
+            const float mainNorm = juce::jlimit (0.0f, 1.0f, bar.mainNorm);
+            const float mainH = mainNorm * rect.h;
+            const float mainTop = barBottom - mainH;
+            const float peakNorm = juce::jlimit (0.0f, 1.0f, bar.peakNorm);
+            const float peakTop = barBottom - peakNorm * rect.h;
+
+            if (mainH >= 0.5f)
+            {
+                if (! appendMeterQuad (left - 1.0f,
+                                       mainTop,
+                                       right + 1.0f,
+                                       barBottom,
+                                       bar.mainColour,
+                                       0.34f,
+                                       0.05f,
+                                       width,
+                                       height,
+                                       vertexCount))
+                {
+                    break;
+                }
+
+                if (! appendMeterQuad (left,
+                                       mainTop,
+                                       right,
+                                       barBottom,
+                                       bar.mainColour,
+                                       0.85f,
+                                       0.34f,
+                                       width,
+                                       height,
+                                       vertexCount))
+                {
+                    break;
+                }
+            }
+
+            if (bar.displayMode == kMeterDisplayModeRms && bar.peakNorm > mainNorm)
+            {
+                const float capHalf = juce::jlimit (0.5f, 1.25f, rect.h * 0.0025f);
+                auto peakColour = bar.peakColour;
+                peakColour.a = 1.0f;
+
+                if (mainTop > peakTop)
+                {
+                    if (! appendMeterQuad (left + 2.0f,
+                                           peakTop,
+                                           right - 2.0f,
+                                           mainTop,
+                                           peakColour,
+                                           0.30f,
+                                           0.30f,
+                                           width,
+                                           height,
+                                           vertexCount))
+                    {
+                        break;
+                    }
+                }
+
+                if (! appendMeterQuad (left + 2.0f,
+                                       juce::jlimit (rect.y, barBottom, peakTop - capHalf),
+                                       right - 2.0f,
+                                       juce::jlimit (rect.y, barBottom, peakTop + capHalf),
+                                       peakColour,
+                                       0.95f,
+                                       0.95f,
+                                       width,
+                                       height,
+                                       vertexCount))
+                {
+                    break;
+                }
+            }
+
+            if (bar.maxPeakNorm > 0.001f)
+            {
+                const float maxPeakNorm = juce::jlimit (0.0f, 1.0f, bar.maxPeakNorm);
+                const float maxPeakY = barBottom - maxPeakNorm * rect.h;
+                auto holdColour = bar.holdColour;
+                holdColour.a = 1.0f;
+
+                if (! appendMeterQuad (left + 1.0f,
+                                       juce::jlimit (rect.y, barBottom, maxPeakY - 0.75f),
+                                       right - 1.0f,
+                                       juce::jlimit (rect.y, barBottom, maxPeakY + 0.75f),
+                                       holdColour,
+                                       0.90f,
+                                       0.90f,
+                                       width,
+                                       height,
+                                       vertexCount))
+                {
+                    break;
+                }
+            }
+
+            if (vertexCount > drawStart && drawCount < draws.size())
+            {
+                draws[drawCount++] = {
+                    static_cast<NSUInteger> (drawStart),
+                    static_cast<NSUInteger> (vertexCount - drawStart),
+                    scissor
+                };
+            }
+        }
+
+        if (vertexCount == 0 || drawCount == 0)
+            return;
+
+        std::memcpy ([meterBarBuffer contents], meterBarVertices.data(), sizeof (ColourVertex) * vertexCount);
+        [encoder setRenderPipelineState: colourPipeline];
+        [encoder setVertexBuffer: meterBarBuffer offset: 0 atIndex: 0];
+
+        for (size_t i = 0; i < drawCount; ++i)
+        {
+            [encoder setScissorRect: draws[i].scissor];
+            [encoder drawPrimitives: MTLPrimitiveTypeTriangle
+                         vertexStart: draws[i].vertexStart
+                         vertexCount: draws[i].vertexCount];
+        }
+
+        const MTLScissorRect fullScissor { 0, 0, drawableWidth, drawableHeight };
+        [encoder setScissorRect: fullScissor];
+    }
+
     void drawAnalyzerFrame (id<MTLRenderCommandEncoder> encoder,
                             id<MTLTexture> drawableTexture,
                             const std::shared_ptr<const MetalAnalyzerFrame>& frame,
@@ -2580,6 +2816,7 @@ private:
     id<MTLBuffer> phaseFanFillBuffer = nil;
     id<MTLBuffer> phaseFanLineBuffer = nil;
     id<MTLBuffer> gonioPointBuffer = nil;
+    id<MTLBuffer> meterBarBuffer = nil;
     std::array<id<MTLTexture>, kChromeTextureRingSize> chromeTextures {};
     int chromeTextureWidth = 0;
     int chromeTextureHeight = 0;
@@ -2611,6 +2848,7 @@ private:
     std::vector<ColourVertex> analyzerFillVertices;
     std::vector<ColourVertex> analyzerLineVertices;
     std::vector<ColourVertex> gonioPointVertices;
+    std::vector<ColourVertex> meterBarVertices;
     double analyzerPipelineSampleRate = 0.0;
     int analyzerPipelineFftSize = 0;
     size_t analyzerPipelineBins = 0;

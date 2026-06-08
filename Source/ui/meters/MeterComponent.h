@@ -19,8 +19,14 @@ public:
     ~MeterComponent() override = default;
 
     void setLabelText (juce::String labelText);
+    void updateRenderState (const MeterRenderState& state) noexcept;
     void setRenderState (const MeterRenderState& state);
+    juce::Rectangle<int> getMeterBarBounds() const noexcept { return meterArea_; }
+    const MeterRenderState& getRenderState() const noexcept { return renderState_; }
     void setTraceColorStore (AnalyzerPro::TraceColorStore* store) noexcept { traceColors_ = store; }
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    void setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept;
+#endif
     void setClipResetCallback (Callback cb, void* ctx) noexcept;
     void setPeakResetCallback (Callback cb, void* ctx) noexcept;
 
@@ -34,6 +40,9 @@ private:
     mdsp_ui::UiContext& ui_;
     MeterRenderState renderState_ {};
     AnalyzerPro::TraceColorStore* traceColors_ = nullptr;
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    bool metalTraceSuppressed_ = false;
+#endif
 
     juce::String label_;
     juce::String numericTextPeak_ { "-inf" };

@@ -90,6 +90,8 @@ public:
     //==============================================================================
     const MeterState* getInputMeterStates() const noexcept { return inputMeters_; }
     const MeterState* getOutputMeterStates() const noexcept { return outputMeters_; }
+    const MeterState* getInputMidSideMeterStates() const noexcept { return inputMidSide_; }
+    const MeterState* getOutputMidSideMeterStates() const noexcept { return outputMidSide_; }
     int getMeterInputChannelCount() const noexcept;
     int getMeterOutputChannelCount() const noexcept;
 
@@ -158,6 +160,8 @@ private:
 
     MeterState inputMeters_[2];
     MeterState outputMeters_[2];
+    MeterState inputMidSide_[2];
+    MeterState outputMidSide_[2];
     
     std::atomic<int> meterMode_ { 0 }; // 0=RMS, 1=Peak (Shared)
 
@@ -165,6 +169,10 @@ private:
     float outputPeakEnv_[2]{ 0.0f, 0.0f };
     float inputRmsSq_[2]   { 0.0f, 0.0f };
     float outputRmsSq_[2]  { 0.0f, 0.0f };
+    float inputMidSidePeakEnv_[2] { 0.0f, 0.0f };
+    float outputMidSidePeakEnv_[2]{ 0.0f, 0.0f };
+    float inputMidSideRmsSq_[2]   { 0.0f, 0.0f };
+    float outputMidSideRmsSq_[2]  { 0.0f, 0.0f };
     double meterSampleRate_ = 48000.0;
 
     HardwareMeterMapper hardwareMeterMapper_ { HardwareMeterMapper::Config { 16, false } };

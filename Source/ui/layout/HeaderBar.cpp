@@ -65,15 +65,17 @@ HeaderBar::HeaderBar (mdsp_ui::UiContext& ui)
     {
         const auto current = sizePresetButton_.getButtonText();
         juce::PopupMenu m;
-        m.addItem (1, "100%", true, current == "100%");
-        m.addItem (2, "125%", true, current == "125%");
-        m.addItem (3, "150%", true, current == "150%");
+        m.addItem (1, "75%",  true, current == "75%");
+        m.addItem (2, "100%", true, current == "100%");
+        m.addItem (3, "125%", true, current == "125%");
+        m.addItem (4, "150%", true, current == "150%");
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&sizePresetButton_),
                          [this] (int r)
                          {
-                             if (r == 1 && onSizePresetChanged) onSizePresetChanged (100);
-                             else if (r == 2 && onSizePresetChanged) onSizePresetChanged (125);
-                             else if (r == 3 && onSizePresetChanged) onSizePresetChanged (150);
+                             if (r == 1 && onSizePresetChanged) onSizePresetChanged (75);
+                             else if (r == 2 && onSizePresetChanged) onSizePresetChanged (100);
+                             else if (r == 3 && onSizePresetChanged) onSizePresetChanged (125);
+                             else if (r == 4 && onSizePresetChanged) onSizePresetChanged (150);
                          });
     };
     addAndMakeVisible (sizePresetButton_);
@@ -414,7 +416,19 @@ void HeaderBar::setPeakRangeSelectedId (int id)
 
 void HeaderBar::setSizePresetPercent (int percent)
 {
-    const int clamped = (percent >= 150 ? 150 : (percent >= 125 ? 125 : 100));
+    int clamped = 75;
+    int nearestDistance = percent > clamped ? percent - clamped : clamped - percent;
+
+    for (const auto preset : { 75, 100, 125, 150 })
+    {
+        const int distance = percent > preset ? percent - preset : preset - percent;
+        if (distance < nearestDistance)
+        {
+            clamped = preset;
+            nearestDistance = distance;
+        }
+    }
+
     sizePresetButton_.setButtonText (juce::String (clamped) + "%");
 }
 

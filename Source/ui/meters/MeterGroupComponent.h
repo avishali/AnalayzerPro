@@ -42,7 +42,11 @@ public:
 
     void setScaleMode (ScaleMode mode);
     ScaleMode getScaleMode() const noexcept { return scaleMode_; }
+    const MeterComponent* getMeter (int idx) const noexcept;
     void setTraceColorStore (AnalyzerPro::TraceColorStore* store) noexcept;
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    void setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept;
+#endif
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -53,6 +57,7 @@ private:
 
     void handleClipReset() noexcept;
     void handlePeakReset() noexcept;
+    void resetMidSideSmoothing() noexcept;
     void pushRenderStates();
     void setDisplayMode (DisplayMode mode);
     void timerCallback() override;
@@ -80,6 +85,12 @@ private:
     mdsp_ui::meters::MeterRenderStateProvider provider1_;
     mdsp_ui::meters::MeterRenderState renderState0_ {};
     mdsp_ui::meters::MeterRenderState renderState1_ {};
+    int meterFeedTick_ = 0;
+    bool midSideSmoothingInitialised_ = false;
+    float smoothedMidPeakDb_ = -120.0f;
+    float smoothedSidePeakDb_ = -120.0f;
+    float smoothedMidRmsDb_ = -120.0f;
+    float smoothedSideRmsDb_ = -120.0f;
 
     juce::Rectangle<int> headerArea_;
     juce::Rectangle<int> labelArea_;

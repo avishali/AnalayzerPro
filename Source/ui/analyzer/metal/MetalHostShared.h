@@ -62,6 +62,19 @@ struct MetalRectPx
     bool isEmpty() const noexcept { return w <= 1.0f || h <= 1.0f; }
 };
 
+struct MetalMeterBar
+{
+    MetalRectPx rectPx;
+    float mainNorm = 0.0f;
+    float peakNorm = 0.0f;
+    float maxPeakNorm = 0.0f;
+    MetalColour mainColour;
+    MetalColour peakColour;
+    MetalColour holdColour;
+    int displayMode = 0;
+    bool valid = false;
+};
+
 struct MetalPoint
 {
     float x = 0.0f;
@@ -71,6 +84,9 @@ struct MetalPoint
 struct MetalAnalyzerFrame
 {
     MetalRectPx plotRectPx;
+    static constexpr size_t kMaxMeters = 4;
+    std::array<MetalMeterBar, kMaxMeters> meters {};
+    int meterCount = 0;
     static constexpr size_t kPhaseFanAngleBins = 180;
     MetalRectPx phaseFanRectPx;
     MetalColour phaseFanColour;

@@ -87,6 +87,27 @@ namespace
     {
         return std::isfinite (db) ? juce::jmax (db, -120.0f) : -120.0f;
     }
+
+    static inline void updateMeterStateFromBlock (AnalayzerProAudioProcessor::MeterState& meter,
+                                                  float& peakEnv,
+                                                  float& rmsSq,
+                                                  float blockPeak,
+                                                  float blockMeanSq,
+                                                  bool clipped,
+                                                  float dtSec) noexcept
+    {
+        const float peakReleaseCoeff = std::exp (-dtSec / 0.30f);
+        peakEnv = juce::jmax (blockPeak, peakEnv * peakReleaseCoeff);
+        meter.peakDb.store (clampStoredDb (linToDb (peakEnv)), std::memory_order_relaxed);
+
+        const float tau = (blockMeanSq > rmsSq) ? 0.30f : 0.40f;
+        const float rmsCoeff = std::exp (-dtSec / tau);
+        rmsSq = (rmsCoeff * rmsSq) + ((1.0f - rmsCoeff) * blockMeanSq);
+        meter.rmsDb.store (clampStoredDb (linToDb (std::sqrt (rmsSq))), std::memory_order_relaxed);
+
+        if (clipped)
+            meter.clipLatched.store (true, std::memory_order_relaxed);
+    }
 }
 
 //==============================================================================
@@ -225,6 +246,10 @@ void AnalayzerProAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
         outputPeakEnv_[ch] = 0.0f;
         inputRmsSq_[ch] = 0.0f;
         outputRmsSq_[ch] = 0.0f;
+        inputMidSidePeakEnv_[ch] = 0.0f;
+        outputMidSidePeakEnv_[ch] = 0.0f;
+        inputMidSideRmsSq_[ch] = 0.0f;
+        outputMidSideRmsSq_[ch] = 0.0f;
 
         inputMeters_[ch].peakDb.store (-120.0f, std::memory_order_relaxed);
         inputMeters_[ch].rmsDb.store (-120.0f, std::memory_order_relaxed);
@@ -233,6 +258,14 @@ void AnalayzerProAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
         outputMeters_[ch].peakDb.store (-120.0f, std::memory_order_relaxed);
         outputMeters_[ch].rmsDb.store (-120.0f, std::memory_order_relaxed);
         outputMeters_[ch].clipLatched.store (false, std::memory_order_relaxed);
+
+        inputMidSide_[ch].peakDb.store (-120.0f, std::memory_order_relaxed);
+        inputMidSide_[ch].rmsDb.store (-120.0f, std::memory_order_relaxed);
+        inputMidSide_[ch].clipLatched.store (false, std::memory_order_relaxed);
+
+        outputMidSide_[ch].peakDb.store (-120.0f, std::memory_order_relaxed);
+        outputMidSide_[ch].rmsDb.store (-120.0f, std::memory_order_relaxed);
+        outputMidSide_[ch].clipLatched.store (false, std::memory_order_relaxed);
     }
 
     lastFftSizeIndex_ = -1;
@@ -386,6 +419,66 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         
         if (clipped)
             inputMeters_[ch].clipLatched.store (true, std::memory_order_relaxed);
+    }
+
+    if (inChCount <= 0)
+    {
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            inputMidSide_[ch].peakDb.store (-120.0f, std::memory_order_relaxed);
+            inputMidSide_[ch].rmsDb.store (-120.0f, std::memory_order_relaxed);
+        }
+    }
+    else
+    {
+        const float* left = buffer.getReadPointer (0);
+        const float* right = (inChCount > 1) ? buffer.getReadPointer (1) : left;
+        float midBlockPeak = 0.0f;
+        float sideBlockPeak = 0.0f;
+        float midSumSq = 0.0f;
+        float sideSumSq = 0.0f;
+        bool midClipped = false;
+        bool sideClipped = false;
+
+        for (int i = 0; i < n; ++i)
+        {
+            const float mid = (left[i] + right[i]) * 0.5f;
+            const float side = (inChCount > 1) ? ((left[i] - right[i]) * 0.5f) : 0.0f;
+            const float midAbs = std::abs (mid);
+            const float sideAbs = std::abs (side);
+
+            midBlockPeak = (midAbs > midBlockPeak) ? midAbs : midBlockPeak;
+            sideBlockPeak = (sideAbs > sideBlockPeak) ? sideAbs : sideBlockPeak;
+            midSumSq += mid * mid;
+            sideSumSq += side * side;
+            midClipped = midClipped || (midAbs >= 1.0f);
+            sideClipped = sideClipped || (sideAbs >= 1.0f);
+        }
+
+        updateMeterStateFromBlock (inputMidSide_[0],
+                                   inputMidSidePeakEnv_[0],
+                                   inputMidSideRmsSq_[0],
+                                   midBlockPeak,
+                                   midSumSq / static_cast<float> (n),
+                                   midClipped,
+                                   dtSec);
+        if (inChCount > 1)
+        {
+            updateMeterStateFromBlock (inputMidSide_[1],
+                                       inputMidSidePeakEnv_[1],
+                                       inputMidSideRmsSq_[1],
+                                       sideBlockPeak,
+                                       sideSumSq / static_cast<float> (n),
+                                       sideClipped,
+                                       dtSec);
+        }
+        else
+        {
+            inputMidSidePeakEnv_[1] = 0.0f;
+            inputMidSideRmsSq_[1] = 0.0f;
+            inputMidSide_[1].peakDb.store (-120.0f, std::memory_order_relaxed);
+            inputMidSide_[1].rmsDb.store (-120.0f, std::memory_order_relaxed);
+        }
     }
 
     // Clear any output channels that don't contain input data
@@ -548,6 +641,66 @@ void AnalayzerProAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             outputMeters_[ch].clipLatched.store (true, std::memory_order_relaxed);
     }
 
+    if (outChCount <= 0)
+    {
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            outputMidSide_[ch].peakDb.store (-120.0f, std::memory_order_relaxed);
+            outputMidSide_[ch].rmsDb.store (-120.0f, std::memory_order_relaxed);
+        }
+    }
+    else
+    {
+        const float* left = buffer.getReadPointer (0);
+        const float* right = (outChCount > 1) ? buffer.getReadPointer (1) : left;
+        float midBlockPeak = 0.0f;
+        float sideBlockPeak = 0.0f;
+        float midSumSq = 0.0f;
+        float sideSumSq = 0.0f;
+        bool midClipped = false;
+        bool sideClipped = false;
+
+        for (int i = 0; i < n; ++i)
+        {
+            const float mid = (left[i] + right[i]) * 0.5f;
+            const float side = (outChCount > 1) ? ((left[i] - right[i]) * 0.5f) : 0.0f;
+            const float midAbs = std::abs (mid);
+            const float sideAbs = std::abs (side);
+
+            midBlockPeak = (midAbs > midBlockPeak) ? midAbs : midBlockPeak;
+            sideBlockPeak = (sideAbs > sideBlockPeak) ? sideAbs : sideBlockPeak;
+            midSumSq += mid * mid;
+            sideSumSq += side * side;
+            midClipped = midClipped || (midAbs >= 1.0f);
+            sideClipped = sideClipped || (sideAbs >= 1.0f);
+        }
+
+        updateMeterStateFromBlock (outputMidSide_[0],
+                                   outputMidSidePeakEnv_[0],
+                                   outputMidSideRmsSq_[0],
+                                   midBlockPeak,
+                                   midSumSq / static_cast<float> (n),
+                                   midClipped,
+                                   dtSec);
+        if (outChCount > 1)
+        {
+            updateMeterStateFromBlock (outputMidSide_[1],
+                                       outputMidSidePeakEnv_[1],
+                                       outputMidSideRmsSq_[1],
+                                       sideBlockPeak,
+                                       sideSumSq / static_cast<float> (n),
+                                       sideClipped,
+                                       dtSec);
+        }
+        else
+        {
+            outputMidSidePeakEnv_[1] = 0.0f;
+            outputMidSideRmsSq_[1] = 0.0f;
+            outputMidSide_[1].peakDb.store (-120.0f, std::memory_order_relaxed);
+            outputMidSide_[1].rmsDb.store (-120.0f, std::memory_order_relaxed);
+        }
+    }
+
     // Hardware meter mapping (RT-safe): convert current meter states to LED-friendly levels.
     {
         HardwareMeterLevelsFrame frame;
@@ -604,6 +757,8 @@ void AnalayzerProAudioProcessor::resetMeterClipLatches() noexcept
     {
         inputMeters_[ch].clipLatched.store (false, std::memory_order_relaxed);
         outputMeters_[ch].clipLatched.store (false, std::memory_order_relaxed);
+        inputMidSide_[ch].clipLatched.store (false, std::memory_order_relaxed);
+        outputMidSide_[ch].clipLatched.store (false, std::memory_order_relaxed);
     }
 }
 
