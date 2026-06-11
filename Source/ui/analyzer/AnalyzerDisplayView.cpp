@@ -625,10 +625,13 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
             frame.peakTrace.colour.a *= 0.80f;
         }
 
+        // Peak-hold is the held-max envelope; it only makes sense while Hold is
+        // engaged. With Hold off it collapses onto the live Peak line, so showing it
+        // there is a redundant yellow "duplicate". Gate it on the hold state.
         setTrace (frame.peakHoldTrace,
                   fftFrame_.display_,
                   colourFor (AnalyzerPro::TraceId::Peak, theme_.seriesHold),
-                  true);
+                  isHoldOn_);
         frame.peakHoldTrace.colour.a *= 0.80f;
     }
 
@@ -642,31 +645,6 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
         && multiTraceMidFrame_.display_.size() == multiTraceLFrame_.display_.size()
         && multiTraceSideFrame_.display_.size() == multiTraceLFrame_.display_.size()
         && multiTraceMonoFrame_.display_.size() == multiTraceLFrame_.display_.size();
-    {
-        static int traceCfgDiagCounter = 0;
-        if ((traceCfgDiagCounter++ % 30) == 0)
-        {
-            if (auto* f = std::fopen ("/tmp/analyzerpro_traceconfig_diag.txt", "wb"))
-            {
-                std::fprintf (f,
-                    "latestMultiTraceEnabled=%d hasMultiTrace=%d\n"
-                    "hasCurrent: L=%d R=%d Mid=%d Side=%d Mono=%d  fft=%d\n"
-                    "size: L=%zu R=%zu Mid=%zu Side=%zu Mono=%zu  fft=%zu\n"
-                    "traceConfig show: L=%d R=%d Mid=%d Side=%d Mono=%d LR=%d RMS=%d\n",
-                    latestMultiTraceEnabled_ ? 1 : 0, hasMultiTrace ? 1 : 0,
-                    multiTraceLFrame_.hasCurrent_, multiTraceRFrame_.hasCurrent_,
-                    multiTraceMidFrame_.hasCurrent_, multiTraceSideFrame_.hasCurrent_,
-                    multiTraceMonoFrame_.hasCurrent_, fftFrame_.hasCurrent_,
-                    multiTraceLFrame_.display_.size(), multiTraceRFrame_.display_.size(),
-                    multiTraceMidFrame_.display_.size(), multiTraceSideFrame_.display_.size(),
-                    multiTraceMonoFrame_.display_.size(), fftFrame_.display_.size(),
-                    traceConfig_.showL, traceConfig_.showR, traceConfig_.showMid,
-                    traceConfig_.showSide, traceConfig_.showMono,
-                    traceConfig_.showLR, traceConfig_.showRMS);
-                std::fclose (f);
-            }
-        }
-    }
     if (hasMultiTrace)
     {
         setTrace (frame.leftTrace, multiTraceLFrame_.display_, colourFor (AnalyzerPro::TraceId::L, theme_.seriesLeft), traceConfig_.showL,

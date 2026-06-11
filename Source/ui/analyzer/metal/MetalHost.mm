@@ -1321,7 +1321,7 @@ private:
                 analyzerRmsTargetDb[i] = targetDb;
                 analyzerSmoothedDb[i] = targetDb;
                 analyzerPeakDb[i] = sanitizeAnalyzerDb (juce::jmax (peakSourceDb, targetDb));
-                analyzerPeakHoldDb[i] = analyzerPeakDb[i];
+                analyzerPeakHoldDb[i] = targetDb;
                 continue;
             }
 
@@ -1345,8 +1345,6 @@ private:
             const float rmsFloorDb = analyzerSmoothedDb[i];
             analyzerPeakDb[i] = sanitizeAnalyzerDb (juce::jmax (analyzerPeakDb[i], rmsFloorDb));
             analyzerPeakHoldDb[i] = sanitizeAnalyzerDb (juce::jmax (analyzerPeakHoldDb[i], rmsFloorDb));
-            // Max-hold envelope must always dominate the current peak line.
-            analyzerPeakHoldDb[i] = sanitizeAnalyzerDb (juce::jmax (analyzerPeakHoldDb[i], analyzerPeakDb[i]));
 
             if (std::isfinite (rmsFloorDb)
                 && std::isfinite (analyzerPeakHoldDb[i])
@@ -1581,6 +1579,10 @@ private:
                 { trace.colour.r, trace.colour.g, trace.colour.b, trace.colour.a }
             };
             analyzerLineVertices[lineVertexCount++] = top;
+            // Record pixel-space centerline so the stroke ribbon (glow + core) can
+            // tessellate it. Without this the DB path leaves the centerline stale and
+            // every stroke-only trace renders as degenerate (invisible) geometry.
+            analyzerCenterlinePx_[lineVertexCount - 1] = simd_make_float2 (x, y);
 
             if (trace.fillToBottom)
             {
@@ -1676,41 +1678,6 @@ private:
             analyzerFillVertices[n++] = {
                 { pixelXToNdc (lo.x, drawableWidth), pixelYToNdc (lo.y, drawableHeight) },
                 { c.r, c.g, c.b, alpha }
-            };
-            if (n + 2 > kMaxAnalyzerFillVertices)
-                break;
-        }
-
-        emitAnalyzerFillSlice (enc, n);
-    }
-
-    // Feathered band half: edge row alpha 0, center row alpha alpha. Call twice
-    // (sideSign = +1 then -1) to build a soft-edged core bright at center.
-    void emitFeatheredHalf (id<MTLRenderCommandEncoder> enc,
-                            size_t count,
-                            float halfPx,
-                            float sideSign,
-                            MetalColour c,
-                            float alpha,
-                            float drawableWidth,
-                            float drawableHeight)
-    {
-        if (count < 2)
-            return;
-
-        size_t n = 0;
-        for (size_t k = 0; k < count; ++k)
-        {
-            const simd_float2 p = analyzerCenterlinePx_[k];
-            const simd_float2 nrm = centerlineNormalPx (k, count);
-            const simd_float2 edge = p + nrm * (halfPx * sideSign);
-            analyzerFillVertices[n++] = {
-                { pixelXToNdc (p.x, drawableWidth), pixelYToNdc (p.y, drawableHeight) },
-                { c.r, c.g, c.b, alpha }
-            };
-            analyzerFillVertices[n++] = {
-                { pixelXToNdc (edge.x, drawableWidth), pixelYToNdc (edge.y, drawableHeight) },
-                { c.r, c.g, c.b, 0.0f }
             };
             if (n + 2 > kMaxAnalyzerFillVertices)
                 break;
@@ -2579,86 +2546,6 @@ private:
             const float height = static_cast<float> (drawableHeight);
             bool didDrawAnyTrace = false;
 
-            if (! rmsDiagnosticLogged && frame->rmsTrace.visible)
-            {
-                float smoothedMinDb = std::numeric_limits<float>::infinity();
-                float smoothedMaxDb = -std::numeric_limits<float>::infinity();
-                for (size_t i = 0; i < analyzerPipelineBinsForFrame; ++i)
-                {
-                    const float db = analyzerSmoothedDb[i];
-                    if (! std::isfinite (db))
-                        continue;
-
-                    smoothedMinDb = std::min (smoothedMinDb, db);
-                    smoothedMaxDb = std::max (smoothedMaxDb, db);
-                }
-
-                if (! std::isfinite (smoothedMinDb) || ! std::isfinite (smoothedMaxDb))
-                {
-                    smoothedMinDb = 0.0f;
-                    smoothedMaxDb = 0.0f;
-                }
-
-                size_t diagnosticFillVertexCount = 0;
-                size_t diagnosticLineVertexCount = 0;
-                const bool pipelineBuildFromDb = analyzerPipelineBinsForFrame > 1
-                    && buildTraceVerticesFromDb (*frame,
-                                                 frame->rmsTrace,
-                                                 analyzerSmoothedDb,
-                                                 analyzerPipelineBinsForFrame,
-                                                 width,
-                                                 height,
-                                                 diagnosticFillVertexCount,
-                                                 diagnosticLineVertexCount);
-                const size_t pipelineFillVertexCount = diagnosticFillVertexCount;
-                const size_t pipelineLineVertexCount = diagnosticLineVertexCount;
-
-                diagnosticFillVertexCount = 0;
-                diagnosticLineVertexCount = 0;
-                const bool pipelineBuildAnalyzer = analyzerPipelineBinsForFrame > 1
-                    && buildAnalyzerVertices (*frame,
-                                              analyzerPipelineBinsForFrame,
-                                              width,
-                                              height,
-                                              diagnosticFillVertexCount,
-                                              diagnosticLineVertexCount);
-                const size_t analyzerFillVertexCount = diagnosticFillVertexCount;
-                const size_t analyzerLineVertexCount = diagnosticLineVertexCount;
-
-                diagnosticFillVertexCount = 0;
-                diagnosticLineVertexCount = 0;
-                const bool fallbackBuild = buildTraceVertices (*frame,
-                                                               frame->rmsTrace,
-                                                               width,
-                                                               height,
-                                                               diagnosticFillVertexCount,
-                                                               diagnosticLineVertexCount);
-
-                NSLog (@"[MetalHost #%d] RMS diagnostic path=%s bins=%zu rmsVisible=%d rmsDbSize=%zu smoothedMin=%.2f smoothedMax=%.2f buildFromDb=%d fromDbFill=%zu fromDbLine=%zu buildAnalyzer=%d analyzerFill=%zu analyzerLine=%zu fallbackBuild=%d fallbackFill=%zu fallbackLine=%zu snapshotValid=%d snapshotBins=%d expectedBins=%d sampleRate=%.1f fftSize=%d",
-                       instanceId,
-                       analyzerPipelineBinsForFrame > 1 ? "pipeline" : "fallback",
-                       analyzerPipelineBinsForFrame,
-                       frame->rmsTrace.visible ? 1 : 0,
-                       frame->rmsTrace.db.size(),
-                       static_cast<double> (smoothedMinDb),
-                       static_cast<double> (smoothedMaxDb),
-                       pipelineBuildFromDb ? 1 : 0,
-                       pipelineFillVertexCount,
-                       pipelineLineVertexCount,
-                       pipelineBuildAnalyzer ? 1 : 0,
-                       analyzerFillVertexCount,
-                       analyzerLineVertexCount,
-                       fallbackBuild ? 1 : 0,
-                       diagnosticFillVertexCount,
-                       diagnosticLineVertexCount,
-                       renderSnapshot.isValid ? 1 : 0,
-                       renderSnapshot.fftBinCount > 0 ? renderSnapshot.fftBinCount : renderSnapshot.numBins,
-                       renderSnapshot.fftSize / 2 + 1,
-                       renderSnapshot.sampleRate,
-                       renderSnapshot.fftSize);
-                rmsDiagnosticLogged = true;
-            }
-
             const bool sideDrew = drawTracePayloadPipelineFirst (encoder, *frame, frame->sideTrace,
                                       analyzerSmoothedDbSide, analyzerPipelineBinsForFrame, width, height);
             const bool midDrew = drawTracePayloadPipelineFirst (encoder, *frame, frame->midTrace,
@@ -2672,37 +2559,6 @@ private:
             const bool stereoDrew = drawTracePayloadPipelineFirst (encoder, *frame, frame->stereoTrace,
                                       analyzerSmoothedDb, analyzerPipelineBinsForFrame, width, height);
             didDrawAnyTrace |= sideDrew | midDrew | leftDrew | rightDrew | monoDrew | stereoDrew;
-
-            // TEMP 4B DIAGNOSTIC (continuous ~2 Hz): reflects CURRENT state so toggling Show
-            // on/off in PT is captured live. Remove once 4B is verified.
-            if ((analyzerPipelineCalls % 60) == 0)
-            {
-                const size_t n = analyzerPipelineBinsForFrame;
-                const auto mx = [n] (const std::array<float, kMaxAnalyzerBins>& a) {
-                    float m = -1.0e9f; for (size_t i = 0; i < n; ++i) m = std::max (m, a[i]); return m;
-                };
-                if (auto* f = std::fopen ("/tmp/analyzerpro_4b_diag.txt", "wb"))
-                {
-                    std::fprintf (f,
-                        "pipelineBins=%zu multiTraceEnabled=%d\n"
-                        "visible: L=%d R=%d Mid=%d Side=%d Mono=%d Stereo=%d  RMS=%d Peak=%d\n"
-                        "didDraw: L=%d R=%d Mid=%d Side=%d Mono=%d Stereo=%d\n"
-                        "renderMax: L=%.1f R=%.1f Mid=%.1f Side=%.1f Mono=%.1f main=%.1f\n"
-                        "peakMax: peak=%.1f hold=%.1f  frame=%llu isHoldOn=%d\n",
-                        n, renderSnapshot.multiTraceEnabled ? 1 : 0,
-                        frame->leftTrace.visible, frame->rightTrace.visible, frame->midTrace.visible,
-                        frame->sideTrace.visible, frame->monoTrace.visible, frame->stereoTrace.visible,
-                        frame->rmsTrace.visible, frame->peakTrace.visible,
-                        leftDrew, rightDrew, midDrew, sideDrew, monoDrew, stereoDrew,
-                        (double) mx (analyzerSmoothedDbL), (double) mx (analyzerSmoothedDbR),
-                        (double) mx (analyzerSmoothedDbMid), (double) mx (analyzerSmoothedDbSide),
-                        (double) mx (analyzerSmoothedDbMono), (double) mx (analyzerSmoothedDb),
-                        (double) mx (analyzerPeakDb), (double) mx (analyzerPeakHoldDb),
-                        (unsigned long long) analyzerPipelineCalls, renderSnapshot.isHoldOn ? 1 : 0);
-                    std::fclose (f);
-                }
-            }
-
 
             bool rmsBuildOk = false;
             const char* rmsPath = "none";
@@ -3140,8 +2996,6 @@ private:
     int analyzerDataChanges = 0;
     int instanceId = 0;
     bool renderPipelinesReady = false;
-    bool rmsDiagnosticLogged = false;
-    bool wroteMultiTraceDiag_ = false; // TEMP 4B diagnostic one-shot
 #if ANALYZERPRO_METAL_DIAGNOSTICS
     bool wroteRenderFrameDiagnostic = false;
 #endif
