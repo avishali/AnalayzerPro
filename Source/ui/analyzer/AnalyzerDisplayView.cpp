@@ -6,9 +6,7 @@
 #include <mdsp_ui/Theme.h>
 #include <algorithm>
 #include <cmath>
-#if defined(ANALYZERPRO_METAL_DIAGNOSTICS) && ANALYZERPRO_METAL_DIAGNOSTICS
 #include <cstdio>
-#endif
 #include <limits>
 
 #if !defined(ANALYZERPRO_MODE_DEBUG_OVERLAY)
@@ -584,6 +582,19 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
 
     const auto rms = colourFor (AnalyzerPro::TraceId::Rms, theme_.seriesRms);
     frame.rmsColour = rms;
+
+    // Fill a channel/stereo trace only when it is the single enabled non-peak trace;
+    // with several overlaid, fills stack into a muddy wash, so stroke-only. Declared
+    // here so it is in scope for both the stereo trace and the multi-trace block below.
+    const int nonPeakTraceCount =
+          (traceConfig_.showSide ? 1 : 0) + (traceConfig_.showMid  ? 1 : 0)
+        + (traceConfig_.showL    ? 1 : 0) + (traceConfig_.showR    ? 1 : 0)
+        + (traceConfig_.showLR   ? 1 : 0) + (traceConfig_.showMono ? 1 : 0)
+        + (traceConfig_.showRMS  ? 1 : 0);
+    const bool loneTrace = (nonPeakTraceCount == 1);
+    constexpr float kLoneFillTopAlpha    = 0.20f;
+    constexpr float kLoneFillBottomAlpha = 0.04f;
+
     if (fftFrame_.hasCurrent_)
     {
         setTrace (frame.rmsTrace, fftFrame_.display_, rms, traceConfig_.showRMS, true, true, 0.35f, 0.05f);
@@ -594,10 +605,12 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
             || traceConfig_.showLR
             || traceConfig_.showMono
             || traceConfig_.showRMS;
+
         setTrace (frame.stereoTrace,
                   fftFrame_.display_,
                   colourFor (AnalyzerPro::TraceId::LR, theme_.seriesStereo),
-                  traceConfig_.showLR);
+                  traceConfig_.showLR, true,
+                  loneTrace && traceConfig_.showLR, kLoneFillTopAlpha, kLoneFillBottomAlpha);
 
         if (fftPeakDbDisplay_.size() == fftFrame_.display_.size())
         {
@@ -629,13 +642,43 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
         && multiTraceMidFrame_.display_.size() == multiTraceLFrame_.display_.size()
         && multiTraceSideFrame_.display_.size() == multiTraceLFrame_.display_.size()
         && multiTraceMonoFrame_.display_.size() == multiTraceLFrame_.display_.size();
+    {
+        static int traceCfgDiagCounter = 0;
+        if ((traceCfgDiagCounter++ % 30) == 0)
+        {
+            if (auto* f = std::fopen ("/tmp/analyzerpro_traceconfig_diag.txt", "wb"))
+            {
+                std::fprintf (f,
+                    "latestMultiTraceEnabled=%d hasMultiTrace=%d\n"
+                    "hasCurrent: L=%d R=%d Mid=%d Side=%d Mono=%d  fft=%d\n"
+                    "size: L=%zu R=%zu Mid=%zu Side=%zu Mono=%zu  fft=%zu\n"
+                    "traceConfig show: L=%d R=%d Mid=%d Side=%d Mono=%d LR=%d RMS=%d\n",
+                    latestMultiTraceEnabled_ ? 1 : 0, hasMultiTrace ? 1 : 0,
+                    multiTraceLFrame_.hasCurrent_, multiTraceRFrame_.hasCurrent_,
+                    multiTraceMidFrame_.hasCurrent_, multiTraceSideFrame_.hasCurrent_,
+                    multiTraceMonoFrame_.hasCurrent_, fftFrame_.hasCurrent_,
+                    multiTraceLFrame_.display_.size(), multiTraceRFrame_.display_.size(),
+                    multiTraceMidFrame_.display_.size(), multiTraceSideFrame_.display_.size(),
+                    multiTraceMonoFrame_.display_.size(), fftFrame_.display_.size(),
+                    traceConfig_.showL, traceConfig_.showR, traceConfig_.showMid,
+                    traceConfig_.showSide, traceConfig_.showMono,
+                    traceConfig_.showLR, traceConfig_.showRMS);
+                std::fclose (f);
+            }
+        }
+    }
     if (hasMultiTrace)
     {
-        setTrace (frame.leftTrace, multiTraceLFrame_.display_, colourFor (AnalyzerPro::TraceId::L, theme_.seriesLeft), traceConfig_.showL);
-        setTrace (frame.rightTrace, multiTraceRFrame_.display_, colourFor (AnalyzerPro::TraceId::R, theme_.seriesRight), traceConfig_.showR);
-        setTrace (frame.midTrace, multiTraceMidFrame_.display_, colourFor (AnalyzerPro::TraceId::Mid, theme_.seriesMid), traceConfig_.showMid);
-        setTrace (frame.sideTrace, multiTraceSideFrame_.display_, colourFor (AnalyzerPro::TraceId::Side, theme_.seriesSide), traceConfig_.showSide);
-        setTrace (frame.monoTrace, multiTraceMonoFrame_.display_, colourFor (AnalyzerPro::TraceId::Mono, theme_.seriesMono), traceConfig_.showMono);
+        setTrace (frame.leftTrace, multiTraceLFrame_.display_, colourFor (AnalyzerPro::TraceId::L, theme_.seriesLeft), traceConfig_.showL,
+                  true, loneTrace && traceConfig_.showL, kLoneFillTopAlpha, kLoneFillBottomAlpha);
+        setTrace (frame.rightTrace, multiTraceRFrame_.display_, colourFor (AnalyzerPro::TraceId::R, theme_.seriesRight), traceConfig_.showR,
+                  true, loneTrace && traceConfig_.showR, kLoneFillTopAlpha, kLoneFillBottomAlpha);
+        setTrace (frame.midTrace, multiTraceMidFrame_.display_, colourFor (AnalyzerPro::TraceId::Mid, theme_.seriesMid), traceConfig_.showMid,
+                  true, loneTrace && traceConfig_.showMid, kLoneFillTopAlpha, kLoneFillBottomAlpha);
+        setTrace (frame.sideTrace, multiTraceSideFrame_.display_, colourFor (AnalyzerPro::TraceId::Side, theme_.seriesSide), traceConfig_.showSide,
+                  true, loneTrace && traceConfig_.showSide, kLoneFillTopAlpha, kLoneFillBottomAlpha);
+        setTrace (frame.monoTrace, multiTraceMonoFrame_.display_, colourFor (AnalyzerPro::TraceId::Mono, theme_.seriesMono), traceConfig_.showMono,
+                  true, loneTrace && traceConfig_.showMono, kLoneFillTopAlpha, kLoneFillBottomAlpha);
     }
 
 #if defined(ANALYZERPRO_METAL_DIAGNOSTICS) && ANALYZERPRO_METAL_DIAGNOSTICS

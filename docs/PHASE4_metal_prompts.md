@@ -46,7 +46,11 @@ JUCE_PATH=… AAX_SDK_PATH=… cmake build-release-macos-universal   # then rebu
 # sign (PACE cloud sign via scripts/.aax_wraptool.env) + install + verify:
 A="build-release-macos-universal/AnalyzerPro_artefacts/Release/AAX/AnalyzerPro.aaxplugin/Contents/MacOS/AnalyzerPro"
 bash scripts/wraptool_sign_aax.sh "$A"
-rsync -a --delete "$(dirname "$A")/../.." "/Library/Application Support/Avid/Audio/Plug-Ins/AnalyzerPro.aaxplugin/"
+# install: MIRROR the bundle (trailing slash on BOTH src and dest). Do NOT use the bundle path
+# without a trailing slash + dest-with-slash — that nests AnalyzerPro.aaxplugin/AnalyzerPro.aaxplugin
+# and an rsync "hangup on nonblocking write" can leave the OLD build in place (seen 2026-06-11).
+SRCBUNDLE="$(dirname "$A")/../.."   # .../AAX/AnalyzerPro.aaxplugin
+rsync -a --delete "$SRCBUNDLE/" "/Library/Application Support/Avid/Audio/Plug-Ins/AnalyzerPro.aaxplugin/"
 # verify: installed SHA == built SHA; footer git-hash matches HEAD; codesign -v --strict passes
 ```
 - **Build identity:** trust the **git short-hash in the footer** (not the `__DATE__/__TIME__`
@@ -120,26 +124,65 @@ spectrum/analyzer unchanged.
 animate at the ~13 fps message rate during playback. Port them to the render-thread pipeline like
 RMS/Peak.
 
-**Dependency to resolve first:** the render thread needs **lock-free** access to the L/R/M/S/
-stereo/mono spectra. Today those are published as message-thread `*Frame_.display_` vectors. If the
-shared engine doesn't already expose them in a lock-free snapshot, add that to the **shared engine**
-(not the Metal layer) — extend the seqlock snapshot with the multi-trace spectra so the render
-thread can read them, exactly as it reads the RMS `fftDb`.
+**Dependency RESOLVED (recon 2026-06-10):** the lock-free snapshot **already carries** every
+multi-trace spectrum, RMS-ballistics-processed engine-side — `AnalyzerSnapshot` (in
+`third_party/melechdsp-hq/.../analyzer/AnalyzerSnapshot.h`) fields `fftDbLRms`, `fftDbRRms`,
+`fftDbMidRms`, `fftDbSideRms`, `fftDbMonoRms` (lines 29–33). The message-thread CPU path already
+copies straight from these (`AnalyzerDisplayView::handlePumpedSnapshot` ~1705). **So NO shared-engine /
+snapshot change is needed — 4B is a pure `MetalHost.mm` replication of the RMS pipeline.** The
+`stereoTrace` is fed from the *main* combined spectrum (`fftFrame_.display_`, same source as RMS), so
+on the render thread it simply **reuses the existing `analyzerSmoothedDb`** — no new array.
+
+**Exact mapping (frame payload ← render-thread source array ← snapshot field):**
+| frame trace    | new render array          | snapshot source        |
+|----------------|---------------------------|------------------------|
+| `leftTrace`    | `analyzerSmoothedDbL`     | `renderSnapshot.fftDbLRms`    |
+| `rightTrace`   | `analyzerSmoothedDbR`     | `renderSnapshot.fftDbRRms`    |
+| `midTrace`     | `analyzerSmoothedDbMid`   | `renderSnapshot.fftDbMidRms`  |
+| `sideTrace`    | `analyzerSmoothedDbSide`  | `renderSnapshot.fftDbSideRms` |
+| `monoTrace`    | `analyzerSmoothedDbMono`  | `renderSnapshot.fftDbMonoRms` |
+| `stereoTrace`  | **reuse `analyzerSmoothedDb`** | `fftDb` (already in pipeline) |
+
+These five snapshot arrays are **already fully ballistic-processed** (like the main RMS `fftDb`), so
+apply **only the linear inter-snapshot interpolation** — no second ballistics stage, no peak/peak-hold
+math. Reuse the *existing shared* timing state (`resetState`, `gotNewSnapshot`, `rmsInterpolationAlpha`,
+`analyzerRmsMeasuredIntervalSeconds`) — one snapshot publish drives all traces, so do NOT add per-trace
+interval measurement; just add per-trace `previous/target/smoothed` arrays.
 
 **Prompt:**
 
-> Move the remaining analyzer traces (stereo, mono, L, R, Mid, Side) onto the Metal render-thread
-> pipeline, like RMS/Peak. Step 1: ensure the **shared engine** publishes these spectra in the
-> lock-free snapshot the render thread already reads (extend the snapshot in
-> `mdsp_dsp`/`AnalyzerSnapshot` if needed — shared core, NOT the Metal layer; this also benefits the
-> CPU path / Windows). Step 2: in `MetalHost.mm`, draw each enabled trace via the existing
-> `drawTracePayloadFromDb` path from the render-thread snapshot data, with **dynamic interpolation
-> matched to the real data rate** (reuse the RMS interval-measurement) and the trace's
-> color/fill/stroke from the published `RenderConfig`/theme — **respect each trace's `visible`
-> toggle** (do not hard-code visibility). Keep `displayGainDb`/tilt compensation consistent with the
-> CPU. Leave the published-db path as the no-engine fallback. No double-smoothing, no per-frame
-> alloc. **Validate:** harness `--analyzer --multitrace` clean (NSZombie+ASan), all traces visible
-> and smooth, `rms_above_peak`-style invariants hold; then PT. ⛔ STOP; human signs + verifies.
+> Port the remaining analyzer traces (L, R, Mid, Side, Mono) onto the Metal render-thread pipeline in
+> `Source/ui/analyzer/metal/MetalHost.mm`, exactly mirroring the existing RMS path. The lock-free
+> `AnalyzerSnapshot` already exposes `fftDbLRms/fftDbRRms/fftDbMidRms/fftDbSideRms/fftDbMonoRms` —
+> read them on the render thread; do NOT touch the shared engine or `AnalyzerSnapshot`.
+>
+> 1. **State arrays** (next to `analyzerSmoothedDb`/`analyzerRmsPreviousDb`/`analyzerRmsTargetDb`,
+>    ~line 2843): add `std::array<float, kMaxAnalyzerBins>` triples `analyzerSmoothedDbL/R/Mid/Side/Mono`
+>    + matching `*PreviousDb` and `*TargetDb`.
+> 2. **`updateAnalyzerPipelineFromSnapshot`** (~1223 loop): inside the existing `for (i < validBins)`
+>    loop, after the main-trace math, add per-trace interpolation for L/R/Mid/Side/Mono reading
+>    `sanitizeAnalyzerDb(renderSnapshot.fftDb{L,R,Mid,Side,Mono}Rms[i])` as the target. **Reuse** the
+>    already-computed `resetState`, `gotNewSnapshot`, and `rmsInterpolationAlpha` — these snapshot
+>    arrays are already ballistic-processed, so apply ONLY the linear interpolation
+>    (`prev + (target-prev)*alpha`); no peak/peak-hold, no second ballistics. On `resetState`/
+>    `gotNewSnapshot` advance prev/target the same way the RMS block does.
+> 3. **`drawAnalyzerFrame`** (~2443–2448): replace the six unconditional
+>    `drawTracePayload(encoder, *frame, frame->{side,mid,left,right,mono,stereo}Trace, …)` calls with:
+>    for each of left/right/mid/side/mono — if `frame->XTrace.visible`, draw via
+>    `drawTracePayloadFromDb(encoder, *frame, frame->XTrace, analyzerSmoothedDbX,
+>    analyzerPipelineBinsForFrame, width, height)` when `analyzerPipelineBinsForFrame > 1`, else fall
+>    back to `drawTracePayload(...)` (no-engine path); for `stereoTrace` use the same pattern but reuse
+>    `analyzerSmoothedDb`. **Keep filling the message-thread `frame->*Trace` payloads unchanged** in
+>    `AnalyzerDisplayView` — they still supply each trace's visible/colour/fill flags AND the fallback
+>    db. Respect each trace's `visible` toggle (don't hard-code). `displayGainDb`/tilt stay correct
+>    automatically (applied in `buildTraceVerticesFromDb`, source-agnostic).
+>
+> No per-frame heap allocation. **Validate:** harness `--analyzer --multitrace` clean under
+> NSZombie+ASan (50×2000); in PT, enable each of L/R/M/S/Mono/Stereo and confirm smooth at present
+> rate (no ~13 fps chop). ⛔ STOP; human signs + verifies.
+>
+> **Known carry-over (do NOT fix here):** the low-end first-bin gap (~10–25 Hz) affects these traces
+> too, identically to the main trace — same fftSize-resolution cause; leave consistent for now.
 
 ---
 

@@ -7,6 +7,7 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <QuartzCore/QuartzCore.h>
+#include <simd/simd.h>
 
 #include <algorithm>
 #include <array>
@@ -76,6 +77,7 @@ struct ColourVertex
 
 constexpr size_t kMaxAnalyzerBins = static_cast<size_t> (AnalyzerSnapshot::kMaxFFTBins);
 constexpr size_t kMaxAnalyzerFillVertices = kMaxAnalyzerBins * 2;
+constexpr size_t kMaxAnalyzerTraceSlots = 40; // max line/fill draws per frame (bottom-fill + glow/core ribbons)
 constexpr size_t kPhaseFanAngleBins = MetalAnalyzerFrame::kPhaseFanAngleBins;
 constexpr size_t kMaxPhaseFanFillVertices = (kPhaseFanAngleBins - 1) * 3;
 constexpr size_t kMaxPhaseFanLineVertices = kPhaseFanAngleBins * 3;
@@ -912,9 +914,11 @@ private:
                                                length: sizeof (quad)
                                               options: MTLResourceStorageModeShared];
 
-        analyzerFillBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxAnalyzerFillVertices
+        analyzerFillSlotBytes_ = ((sizeof (ColourVertex) * kMaxAnalyzerFillVertices) + 255) & ~size_t (255);
+        analyzerLineSlotBytes_ = ((sizeof (ColourVertex) * kMaxAnalyzerBins) + 255) & ~size_t (255);
+        analyzerFillBuffer = [device newBufferWithLength: analyzerFillSlotBytes_ * kMaxAnalyzerTraceSlots
                                                  options: MTLResourceStorageModeShared];
-        analyzerLineBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxAnalyzerBins
+        analyzerLineBuffer = [device newBufferWithLength: analyzerLineSlotBytes_ * kMaxAnalyzerTraceSlots
                                                  options: MTLResourceStorageModeShared];
         phaseFanFillBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxPhaseFanFillVertices
                                                  options: MTLResourceStorageModeShared];
@@ -926,11 +930,27 @@ private:
                                              options: MTLResourceStorageModeShared];
         analyzerFillVertices.resize (kMaxAnalyzerFillVertices);
         analyzerLineVertices.resize (kMaxAnalyzerBins);
+        analyzerCenterlinePx_.resize (kMaxAnalyzerBins);
         gonioPointVertices.resize (kMaxGonioPointVertices);
         meterBarVertices.resize (kMaxMeterBarVertices);
         analyzerSmoothedDb.fill (-200.0f);
         analyzerRmsPreviousDb.fill (-200.0f);
         analyzerRmsTargetDb.fill (-200.0f);
+        analyzerSmoothedDbL.fill (-200.0f);
+        analyzerRmsPreviousDbL.fill (-200.0f);
+        analyzerRmsTargetDbL.fill (-200.0f);
+        analyzerSmoothedDbR.fill (-200.0f);
+        analyzerRmsPreviousDbR.fill (-200.0f);
+        analyzerRmsTargetDbR.fill (-200.0f);
+        analyzerSmoothedDbMid.fill (-200.0f);
+        analyzerRmsPreviousDbMid.fill (-200.0f);
+        analyzerRmsTargetDbMid.fill (-200.0f);
+        analyzerSmoothedDbSide.fill (-200.0f);
+        analyzerRmsPreviousDbSide.fill (-200.0f);
+        analyzerRmsTargetDbSide.fill (-200.0f);
+        analyzerSmoothedDbMono.fill (-200.0f);
+        analyzerRmsPreviousDbMono.fill (-200.0f);
+        analyzerRmsTargetDbMono.fill (-200.0f);
         analyzerRmsIntervalHistory.fill (0.0);
         analyzerPeakDb.fill (-200.0f);
         analyzerPeakHoldDb.fill (-200.0f);
@@ -1082,6 +1102,34 @@ private:
         return std::isfinite (db) ? juce::jlimit (-200.0f, 24.0f, db) : -200.0f;
     }
 
+    static void updateInterpolatedAnalyzerDb (float sourceDb,
+                                              std::array<float, kMaxAnalyzerBins>& previousDb,
+                                              std::array<float, kMaxAnalyzerBins>& targetDb,
+                                              std::array<float, kMaxAnalyzerBins>& smoothedDb,
+                                              size_t index,
+                                              bool resetState,
+                                              bool gotNewSnapshot,
+                                              float interpolationAlpha) noexcept
+    {
+        const float sanitizedDb = sanitizeAnalyzerDb (sourceDb);
+        if (resetState)
+        {
+            previousDb[index] = sanitizedDb;
+            targetDb[index] = sanitizedDb;
+            smoothedDb[index] = sanitizedDb;
+            return;
+        }
+
+        if (gotNewSnapshot)
+        {
+            previousDb[index] = targetDb[index];
+            targetDb[index] = sanitizedDb;
+        }
+
+        smoothedDb[index] = sanitizeAnalyzerDb (previousDb[index]
+            + (targetDb[index] - previousDb[index]) * interpolationAlpha);
+    }
+
     static float timeConstantAlpha (float timeMs, double dtSeconds) noexcept
     {
         if (timeMs <= 0.0f || dtSeconds <= 0.0)
@@ -1227,13 +1275,53 @@ private:
             // linear interpolation between published snapshots to bridge data-rate gaps.
             const float targetDb = sanitizeAnalyzerDb (renderSnapshot.fftDb[i]);
             const float peakSourceDb = sanitizeAnalyzerDb (renderSnapshot.fftPeakDb[i]);
+            updateInterpolatedAnalyzerDb (renderSnapshot.fftDbLRms[i],
+                                          analyzerRmsPreviousDbL,
+                                          analyzerRmsTargetDbL,
+                                          analyzerSmoothedDbL,
+                                          i,
+                                          resetState,
+                                          gotNewSnapshot,
+                                          rmsInterpolationAlpha);
+            updateInterpolatedAnalyzerDb (renderSnapshot.fftDbRRms[i],
+                                          analyzerRmsPreviousDbR,
+                                          analyzerRmsTargetDbR,
+                                          analyzerSmoothedDbR,
+                                          i,
+                                          resetState,
+                                          gotNewSnapshot,
+                                          rmsInterpolationAlpha);
+            updateInterpolatedAnalyzerDb (renderSnapshot.fftDbMidRms[i],
+                                          analyzerRmsPreviousDbMid,
+                                          analyzerRmsTargetDbMid,
+                                          analyzerSmoothedDbMid,
+                                          i,
+                                          resetState,
+                                          gotNewSnapshot,
+                                          rmsInterpolationAlpha);
+            updateInterpolatedAnalyzerDb (renderSnapshot.fftDbSideRms[i],
+                                          analyzerRmsPreviousDbSide,
+                                          analyzerRmsTargetDbSide,
+                                          analyzerSmoothedDbSide,
+                                          i,
+                                          resetState,
+                                          gotNewSnapshot,
+                                          rmsInterpolationAlpha);
+            updateInterpolatedAnalyzerDb (renderSnapshot.fftDbMonoRms[i],
+                                          analyzerRmsPreviousDbMono,
+                                          analyzerRmsTargetDbMono,
+                                          analyzerSmoothedDbMono,
+                                          i,
+                                          resetState,
+                                          gotNewSnapshot,
+                                          rmsInterpolationAlpha);
             if (resetState)
             {
                 analyzerRmsPreviousDb[i] = targetDb;
                 analyzerRmsTargetDb[i] = targetDb;
                 analyzerSmoothedDb[i] = targetDb;
                 analyzerPeakDb[i] = sanitizeAnalyzerDb (juce::jmax (peakSourceDb, targetDb));
-                analyzerPeakHoldDb[i] = targetDb;
+                analyzerPeakHoldDb[i] = analyzerPeakDb[i];
                 continue;
             }
 
@@ -1257,6 +1345,8 @@ private:
             const float rmsFloorDb = analyzerSmoothedDb[i];
             analyzerPeakDb[i] = sanitizeAnalyzerDb (juce::jmax (analyzerPeakDb[i], rmsFloorDb));
             analyzerPeakHoldDb[i] = sanitizeAnalyzerDb (juce::jmax (analyzerPeakHoldDb[i], rmsFloorDb));
+            // Max-hold envelope must always dominate the current peak line.
+            analyzerPeakHoldDb[i] = sanitizeAnalyzerDb (juce::jmax (analyzerPeakHoldDb[i], analyzerPeakDb[i]));
 
             if (std::isfinite (rmsFloorDb)
                 && std::isfinite (analyzerPeakHoldDb[i])
@@ -1403,6 +1493,7 @@ private:
                 { trace.colour.r, trace.colour.g, trace.colour.b, trace.colour.a }
             };
             analyzerLineVertices[lineVertexCount++] = top;
+            analyzerCenterlinePx_[lineVertexCount - 1] = simd_make_float2 (x, y);
 
             if (trace.fillToBottom)
             {
@@ -1513,6 +1604,121 @@ private:
         return lineVertexCount >= 2 || fillVertexCount >= 4;
     }
 
+    void emitAnalyzerFillSlice (id<MTLRenderCommandEncoder> encoder, size_t fillVertexCount)
+    {
+        if (analyzerFillSlot_ >= kMaxAnalyzerTraceSlots)
+            return;
+
+        const size_t offset = analyzerFillSlot_ * analyzerFillSlotBytes_;
+        std::memcpy (static_cast<char*> ([analyzerFillBuffer contents]) + offset,
+                     analyzerFillVertices.data(),
+                     sizeof (ColourVertex) * fillVertexCount);
+        [encoder setVertexBuffer: analyzerFillBuffer offset: offset atIndex: 0];
+        [encoder drawPrimitives: MTLPrimitiveTypeTriangleStrip
+                     vertexStart: 0
+                     vertexCount: static_cast<NSUInteger> (fillVertexCount)];
+        ++analyzerFillSlot_;
+    }
+
+    void emitAnalyzerLineSlice (id<MTLRenderCommandEncoder> encoder, size_t lineVertexCount)
+    {
+        if (analyzerLineSlot_ >= kMaxAnalyzerTraceSlots)
+            return;
+
+        const size_t offset = analyzerLineSlot_ * analyzerLineSlotBytes_;
+        std::memcpy (static_cast<char*> ([analyzerLineBuffer contents]) + offset,
+                     analyzerLineVertices.data(),
+                     sizeof (ColourVertex) * lineVertexCount);
+        [encoder setVertexBuffer: analyzerLineBuffer offset: offset atIndex: 0];
+        [encoder drawPrimitives: MTLPrimitiveTypeLineStrip
+                     vertexStart: 0
+                     vertexCount: static_cast<NSUInteger> (lineVertexCount)];
+        ++analyzerLineSlot_;
+    }
+
+    // Averaged unit normal at centerline point k (perpendicular, pixel space).
+    simd_float2 centerlineNormalPx (size_t k, size_t count) const
+    {
+        const size_t a = (k == 0) ? 0 : k - 1;
+        const size_t b = (k + 1 >= count) ? count - 1 : k + 1;
+        simd_float2 t = analyzerCenterlinePx_[b] - analyzerCenterlinePx_[a];
+        const float len = std::sqrt (t.x * t.x + t.y * t.y);
+        if (len < 1.0e-5f)
+            return simd_make_float2 (0.0f, 1.0f);
+
+        t /= len;
+        return simd_make_float2 (-t.y, t.x);
+    }
+
+    // Wide, uniform-alpha halo: one strip, two rows offset +/- halfPx from center.
+    void emitGlowRibbon (id<MTLRenderCommandEncoder> enc,
+                         size_t count,
+                         float halfPx,
+                         MetalColour c,
+                         float alpha,
+                         float drawableWidth,
+                         float drawableHeight)
+    {
+        if (count < 2)
+            return;
+
+        size_t n = 0;
+        for (size_t k = 0; k < count; ++k)
+        {
+            const simd_float2 p = analyzerCenterlinePx_[k];
+            const simd_float2 nrm = centerlineNormalPx (k, count);
+            const simd_float2 hi = p + nrm * halfPx;
+            const simd_float2 lo = p - nrm * halfPx;
+            analyzerFillVertices[n++] = {
+                { pixelXToNdc (hi.x, drawableWidth), pixelYToNdc (hi.y, drawableHeight) },
+                { c.r, c.g, c.b, alpha }
+            };
+            analyzerFillVertices[n++] = {
+                { pixelXToNdc (lo.x, drawableWidth), pixelYToNdc (lo.y, drawableHeight) },
+                { c.r, c.g, c.b, alpha }
+            };
+            if (n + 2 > kMaxAnalyzerFillVertices)
+                break;
+        }
+
+        emitAnalyzerFillSlice (enc, n);
+    }
+
+    // Feathered band half: edge row alpha 0, center row alpha alpha. Call twice
+    // (sideSign = +1 then -1) to build a soft-edged core bright at center.
+    void emitFeatheredHalf (id<MTLRenderCommandEncoder> enc,
+                            size_t count,
+                            float halfPx,
+                            float sideSign,
+                            MetalColour c,
+                            float alpha,
+                            float drawableWidth,
+                            float drawableHeight)
+    {
+        if (count < 2)
+            return;
+
+        size_t n = 0;
+        for (size_t k = 0; k < count; ++k)
+        {
+            const simd_float2 p = analyzerCenterlinePx_[k];
+            const simd_float2 nrm = centerlineNormalPx (k, count);
+            const simd_float2 edge = p + nrm * (halfPx * sideSign);
+            analyzerFillVertices[n++] = {
+                { pixelXToNdc (p.x, drawableWidth), pixelYToNdc (p.y, drawableHeight) },
+                { c.r, c.g, c.b, alpha }
+            };
+            analyzerFillVertices[n++] = {
+                { pixelXToNdc (edge.x, drawableWidth), pixelYToNdc (edge.y, drawableHeight) },
+                { c.r, c.g, c.b, 0.0f }
+            };
+            if (n + 2 > kMaxAnalyzerFillVertices)
+                break;
+        }
+
+        emitAnalyzerFillSlice (enc, n);
+    }
+
     bool drawTracePayload (id<MTLRenderCommandEncoder> encoder,
                            const MetalAnalyzerFrame& frame,
                            const MetalTracePayload& trace,
@@ -1527,25 +1733,13 @@ private:
         bool didDraw = false;
         if (trace.fillToBottom && fillVertexCount >= 4)
         {
-            std::memcpy ([analyzerFillBuffer contents],
-                         analyzerFillVertices.data(),
-                         sizeof (ColourVertex) * fillVertexCount);
-            [encoder setVertexBuffer: analyzerFillBuffer offset: 0 atIndex: 0];
-            [encoder drawPrimitives: MTLPrimitiveTypeTriangleStrip
-                         vertexStart: 0
-                         vertexCount: static_cast<NSUInteger> (fillVertexCount)];
+            emitAnalyzerFillSlice (encoder, fillVertexCount);
             didDraw = true;
         }
 
         if (trace.strokeVisible && lineVertexCount >= 2)
         {
-            std::memcpy ([analyzerLineBuffer contents],
-                         analyzerLineVertices.data(),
-                         sizeof (ColourVertex) * lineVertexCount);
-            [encoder setVertexBuffer: analyzerLineBuffer offset: 0 atIndex: 0];
-            [encoder drawPrimitives: MTLPrimitiveTypeLineStrip
-                         vertexStart: 0
-                         vertexCount: static_cast<NSUInteger> (lineVertexCount)];
+            emitAnalyzerLineSlice (encoder, lineVertexCount);
             didDraw = true;
         }
 
@@ -1578,29 +1772,52 @@ private:
         bool didDraw = false;
         if (trace.fillToBottom && fillVertexCount >= 4)
         {
-            std::memcpy ([analyzerFillBuffer contents],
-                         analyzerFillVertices.data(),
-                         sizeof (ColourVertex) * fillVertexCount);
-            [encoder setVertexBuffer: analyzerFillBuffer offset: 0 atIndex: 0];
-            [encoder drawPrimitives: MTLPrimitiveTypeTriangleStrip
-                         vertexStart: 0
-                         vertexCount: static_cast<NSUInteger> (fillVertexCount)];
+            emitAnalyzerFillSlice (encoder, fillVertexCount);
             didDraw = true;
         }
 
         if (trace.strokeVisible && lineVertexCount >= 2)
         {
-            std::memcpy ([analyzerLineBuffer contents],
-                         analyzerLineVertices.data(),
-                         sizeof (ColourVertex) * lineVertexCount);
-            [encoder setVertexBuffer: analyzerLineBuffer offset: 0 atIndex: 0];
-            [encoder drawPrimitives: MTLPrimitiveTypeLineStrip
-                         vertexStart: 0
-                         vertexCount: static_cast<NSUInteger> (lineVertexCount)];
+            const float plotW = frame.plotRectPx.w;
+            const float widthScale = juce::jlimit (0.9f, 1.4f, 0.9f + 0.0015f * plotW);
+            const float coreHalf = 0.5f * 1.8f * widthScale;
+            const float glowHalf = coreHalf * 3.0f;
+            const float glowAlpha = trace.colour.a * 0.12f;
+            const float coreAlpha = trace.colour.a * 0.95f;
+
+            // Wide faint halo, then a solid opaque core ribbon on top. A feathered
+            // (tent) core peaks only at a zero-width centerline and washes out under
+            // the glow, so the core must be a uniform-alpha band to read as a line.
+            emitGlowRibbon (encoder, lineVertexCount, glowHalf, trace.colour, glowAlpha, drawableWidth, drawableHeight);
+            emitGlowRibbon (encoder, lineVertexCount, coreHalf, trace.colour, coreAlpha, drawableWidth, drawableHeight);
             didDraw = true;
         }
 
         return didDraw;
+    }
+
+    template <typename DbContainer>
+    bool drawTracePayloadPipelineFirst (id<MTLRenderCommandEncoder> encoder,
+                                        const MetalAnalyzerFrame& frame,
+                                        const MetalTracePayload& trace,
+                                        const DbContainer& db,
+                                        size_t validBins,
+                                        float drawableWidth,
+                                        float drawableHeight)
+    {
+        if (! trace.visible)
+            return false;
+
+        if (validBins > 1)
+            return drawTracePayloadFromDb (encoder,
+                                           frame,
+                                           trace,
+                                           db,
+                                           validBins,
+                                           drawableWidth,
+                                           drawableHeight);
+
+        return drawTracePayload (encoder, frame, trace, drawableWidth, drawableHeight);
     }
 
     static bool hasSuppliedTrace (const MetalAnalyzerFrame& frame) noexcept
@@ -2356,6 +2573,8 @@ private:
 
         if (hasSuppliedTrace (*frame))
         {
+            analyzerLineSlot_ = 0;
+            analyzerFillSlot_ = 0;
             const float width = static_cast<float> (drawableWidth);
             const float height = static_cast<float> (drawableHeight);
             bool didDrawAnyTrace = false;
@@ -2440,12 +2659,51 @@ private:
                 rmsDiagnosticLogged = true;
             }
 
-            didDrawAnyTrace |= drawTracePayload (encoder, *frame, frame->sideTrace, width, height);
-            didDrawAnyTrace |= drawTracePayload (encoder, *frame, frame->midTrace, width, height);
-            didDrawAnyTrace |= drawTracePayload (encoder, *frame, frame->leftTrace, width, height);
-            didDrawAnyTrace |= drawTracePayload (encoder, *frame, frame->rightTrace, width, height);
-            didDrawAnyTrace |= drawTracePayload (encoder, *frame, frame->monoTrace, width, height);
-            didDrawAnyTrace |= drawTracePayload (encoder, *frame, frame->stereoTrace, width, height);
+            const bool sideDrew = drawTracePayloadPipelineFirst (encoder, *frame, frame->sideTrace,
+                                      analyzerSmoothedDbSide, analyzerPipelineBinsForFrame, width, height);
+            const bool midDrew = drawTracePayloadPipelineFirst (encoder, *frame, frame->midTrace,
+                                      analyzerSmoothedDbMid, analyzerPipelineBinsForFrame, width, height);
+            const bool leftDrew = drawTracePayloadPipelineFirst (encoder, *frame, frame->leftTrace,
+                                      analyzerSmoothedDbL, analyzerPipelineBinsForFrame, width, height);
+            const bool rightDrew = drawTracePayloadPipelineFirst (encoder, *frame, frame->rightTrace,
+                                      analyzerSmoothedDbR, analyzerPipelineBinsForFrame, width, height);
+            const bool monoDrew = drawTracePayloadPipelineFirst (encoder, *frame, frame->monoTrace,
+                                      analyzerSmoothedDbMono, analyzerPipelineBinsForFrame, width, height);
+            const bool stereoDrew = drawTracePayloadPipelineFirst (encoder, *frame, frame->stereoTrace,
+                                      analyzerSmoothedDb, analyzerPipelineBinsForFrame, width, height);
+            didDrawAnyTrace |= sideDrew | midDrew | leftDrew | rightDrew | monoDrew | stereoDrew;
+
+            // TEMP 4B DIAGNOSTIC (continuous ~2 Hz): reflects CURRENT state so toggling Show
+            // on/off in PT is captured live. Remove once 4B is verified.
+            if ((analyzerPipelineCalls % 60) == 0)
+            {
+                const size_t n = analyzerPipelineBinsForFrame;
+                const auto mx = [n] (const std::array<float, kMaxAnalyzerBins>& a) {
+                    float m = -1.0e9f; for (size_t i = 0; i < n; ++i) m = std::max (m, a[i]); return m;
+                };
+                if (auto* f = std::fopen ("/tmp/analyzerpro_4b_diag.txt", "wb"))
+                {
+                    std::fprintf (f,
+                        "pipelineBins=%zu multiTraceEnabled=%d\n"
+                        "visible: L=%d R=%d Mid=%d Side=%d Mono=%d Stereo=%d  RMS=%d Peak=%d\n"
+                        "didDraw: L=%d R=%d Mid=%d Side=%d Mono=%d Stereo=%d\n"
+                        "renderMax: L=%.1f R=%.1f Mid=%.1f Side=%.1f Mono=%.1f main=%.1f\n"
+                        "peakMax: peak=%.1f hold=%.1f  frame=%llu isHoldOn=%d\n",
+                        n, renderSnapshot.multiTraceEnabled ? 1 : 0,
+                        frame->leftTrace.visible, frame->rightTrace.visible, frame->midTrace.visible,
+                        frame->sideTrace.visible, frame->monoTrace.visible, frame->stereoTrace.visible,
+                        frame->rmsTrace.visible, frame->peakTrace.visible,
+                        leftDrew, rightDrew, midDrew, sideDrew, monoDrew, stereoDrew,
+                        (double) mx (analyzerSmoothedDbL), (double) mx (analyzerSmoothedDbR),
+                        (double) mx (analyzerSmoothedDbMid), (double) mx (analyzerSmoothedDbSide),
+                        (double) mx (analyzerSmoothedDbMono), (double) mx (analyzerSmoothedDb),
+                        (double) mx (analyzerPeakDb), (double) mx (analyzerPeakHoldDb),
+                        (unsigned long long) analyzerPipelineCalls, renderSnapshot.isHoldOn ? 1 : 0);
+                    std::fclose (f);
+                }
+            }
+
+
             bool rmsBuildOk = false;
             const char* rmsPath = "none";
             if (frame->rmsTrace.visible)
@@ -2813,6 +3071,10 @@ private:
     id<MTLBuffer> chromeQuadBuffer = nil;
     id<MTLBuffer> analyzerFillBuffer = nil;
     id<MTLBuffer> analyzerLineBuffer = nil;
+    size_t analyzerLineSlotBytes_ = 0;
+    size_t analyzerFillSlotBytes_ = 0;
+    size_t analyzerLineSlot_ = 0;
+    size_t analyzerFillSlot_ = 0;
     id<MTLBuffer> phaseFanFillBuffer = nil;
     id<MTLBuffer> phaseFanLineBuffer = nil;
     id<MTLBuffer> gonioPointBuffer = nil;
@@ -2843,10 +3105,26 @@ private:
     std::array<float, kMaxAnalyzerBins> analyzerSmoothedDb {};
     std::array<float, kMaxAnalyzerBins> analyzerRmsPreviousDb {};
     std::array<float, kMaxAnalyzerBins> analyzerRmsTargetDb {};
+    std::array<float, kMaxAnalyzerBins> analyzerSmoothedDbL {};
+    std::array<float, kMaxAnalyzerBins> analyzerRmsPreviousDbL {};
+    std::array<float, kMaxAnalyzerBins> analyzerRmsTargetDbL {};
+    std::array<float, kMaxAnalyzerBins> analyzerSmoothedDbR {};
+    std::array<float, kMaxAnalyzerBins> analyzerRmsPreviousDbR {};
+    std::array<float, kMaxAnalyzerBins> analyzerRmsTargetDbR {};
+    std::array<float, kMaxAnalyzerBins> analyzerSmoothedDbMid {};
+    std::array<float, kMaxAnalyzerBins> analyzerRmsPreviousDbMid {};
+    std::array<float, kMaxAnalyzerBins> analyzerRmsTargetDbMid {};
+    std::array<float, kMaxAnalyzerBins> analyzerSmoothedDbSide {};
+    std::array<float, kMaxAnalyzerBins> analyzerRmsPreviousDbSide {};
+    std::array<float, kMaxAnalyzerBins> analyzerRmsTargetDbSide {};
+    std::array<float, kMaxAnalyzerBins> analyzerSmoothedDbMono {};
+    std::array<float, kMaxAnalyzerBins> analyzerRmsPreviousDbMono {};
+    std::array<float, kMaxAnalyzerBins> analyzerRmsTargetDbMono {};
     std::array<float, kMaxAnalyzerBins> analyzerPeakDb {};
     std::array<float, kMaxAnalyzerBins> analyzerPeakHoldDb {};
     std::vector<ColourVertex> analyzerFillVertices;
     std::vector<ColourVertex> analyzerLineVertices;
+    std::vector<simd_float2> analyzerCenterlinePx_;
     std::vector<ColourVertex> gonioPointVertices;
     std::vector<ColourVertex> meterBarVertices;
     double analyzerPipelineSampleRate = 0.0;
@@ -2863,6 +3141,7 @@ private:
     int instanceId = 0;
     bool renderPipelinesReady = false;
     bool rmsDiagnosticLogged = false;
+    bool wroteMultiTraceDiag_ = false; // TEMP 4B diagnostic one-shot
 #if ANALYZERPRO_METAL_DIAGNOSTICS
     bool wroteRenderFrameDiagnostic = false;
 #endif

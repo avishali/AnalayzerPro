@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../MasterLimiter"
+		},
+		{
+			"path": "../melechdsp-beta-portal"
 		}
 	],
 	"settings": {}
