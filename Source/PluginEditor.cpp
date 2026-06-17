@@ -1,5 +1,8 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#if ANALYZERPRO_DEV_LOOK_PANEL
+#include "ui/dev/DevLookControlsComponent.h"
+#endif
 #if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
 #include "ui/analyzer/metal/MetalEditorRenderer.h"
 #include <cstdlib>
@@ -27,6 +30,22 @@ constexpr int scaledEditorSize (int base, int percent) noexcept
     return (base * percent + 50) / 100;
 }
 }
+
+#if ANALYZERPRO_DEV_LOOK_PANEL
+AnalayzerProAudioProcessorEditor::DevLookWindow::DevLookWindow (juce::Colour backgroundColour)
+    : juce::DocumentWindow ("AnalyzerPro DEV Look",
+                            backgroundColour,
+                            juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton)
+{
+    setUsingNativeTitleBar (true);
+}
+
+void AnalayzerProAudioProcessorEditor::DevLookWindow::closeButtonPressed()
+{
+    if (onClose)
+        onClose();
+}
+#endif
 
 //==============================================================================
 AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerProAudioProcessor& p)
@@ -92,6 +111,10 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
         applyEditorSizePreset (percent);
     };
 
+#if ANALYZERPRO_DEV_LOOK_PANEL
+    mainView.onToggleDevLookPanel = [this] { toggleDevLookPanel(); };
+#endif
+
     // Restore a valid stored size, otherwise open at the 16:9 100% preset.
     const int minW = scaledEditorSize (kBaseEditorWidth, kMinEditorSizePreset);
     const int minH = scaledEditorSize (kBaseEditorHeight, kMinEditorSizePreset);
@@ -145,6 +168,9 @@ AnalayzerProAudioProcessorEditor::AnalayzerProAudioProcessorEditor (AnalayzerPro
 
 AnalayzerProAudioProcessorEditor::~AnalayzerProAudioProcessorEditor()
 {
+#if ANALYZERPRO_DEV_LOOK_PANEL
+    devLookWindow_.reset();
+#endif
 #if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
     editorSurface_.reset();
 #endif
@@ -221,6 +247,15 @@ void AnalayzerProAudioProcessorEditor::startMetalSurfaceIfNeeded()
 
     if (! editorSurface_->start (*this))
         editorSurface_.reset();
+
+    if (editorSurface_ != nullptr)
+    {
+        mainView.setMetalChromeCaptureCallback ([this]()
+        {
+            if (editorSurface_ != nullptr)
+                editorSurface_->requestChromeCapture();
+        });
+    }
 }
 #endif
 
@@ -280,6 +315,34 @@ void AnalayzerProAudioProcessorEditor::applyEditorSizePreset (int percent)
     audioProcessor.setEditorSizePreset (currentEditorSizePreset_);
     setSize (bounds.getWidth(), bounds.getHeight());
 }
+
+#if ANALYZERPRO_DEV_LOOK_PANEL
+void AnalayzerProAudioProcessorEditor::toggleDevLookPanel()
+{
+    if (devLookWindow_ != nullptr)
+    {
+        closeDevLookPanelWindow();
+        return;
+    }
+
+    auto window = std::make_unique<DevLookWindow> (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
+    window->onClose = [this] { closeDevLookPanelWindow(); };
+    window->setResizable (true, true);
+    window->setResizeLimits (320, 480, 900, 1600);
+    window->setContentOwned (new AnalyzerPro::DevLookControlsComponent (
+                                 mainView.analyzerDevLookTunables(),
+                                 [this] { mainView.notifyDevLookTunablesChanged(); }),
+                             true);
+    window->centreWithSize (380, 720);
+    window->setVisible (true);
+    devLookWindow_ = std::move (window);
+}
+
+void AnalayzerProAudioProcessorEditor::closeDevLookPanelWindow()
+{
+    devLookWindow_.reset();
+}
+#endif
 
 #if JUCE_DEBUG
 bool AnalayzerProAudioProcessorEditor::keyPressed (const juce::KeyPress& k)

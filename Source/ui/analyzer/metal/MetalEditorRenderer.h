@@ -21,6 +21,7 @@ public:
     void stop() override;
     void resized() override;
     bool isRunning() const noexcept override;
+    void requestChromeCapture() override;
 
 private:
     void timerCallback (int timerID) override;

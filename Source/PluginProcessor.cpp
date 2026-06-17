@@ -927,6 +927,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
         190.0f,  // Default: 190ms (matches saved Default preset)
         "Release Time (ms)"));
 
+    // Peak-hold decay (Hold off): independent of trace Release / PeakDecay
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "PeakHoldDecay", "Peak Hold Decay",
+        juce::NormalisableRange<float> (200.0f, 10000.0f, 1.0f, 0.4f),
+        2000.0f));
+
     // Analyzer Display Gain (-24..+24 dB, default 0.0 dB, step 0.5 dB)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         "DisplayGain", "Display Gain",
@@ -997,6 +1003,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout AnalayzerProAudioProcessor::
         "analyzerShowRMS", "Show RMS",
         true,   // Default: on
         "Show RMS"));
+
+    // Show Peak
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        "analyzerShowPeak", "Show Peak",
+        true,   // Default: on (preserves current always-on behavior)
+        "Show Peak"));
         
     // Weighting
     params.push_back (std::make_unique<juce::AudioParameterChoice> (

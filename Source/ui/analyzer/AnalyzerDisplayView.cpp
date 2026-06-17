@@ -171,7 +171,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
     // Default trace colours (match the built-in look until a user store is attached).
     theme_.seriesRms = juce::Colours::lightblue.withAlpha (theme_.seriesRms.getFloatAlpha());
     theme_.seriesPeak = juce::Colour (0xffffff33).withAlpha (theme_.seriesPeak.getFloatAlpha());
-    theme_.seriesHold = theme_.seriesPeak;
+    theme_.seriesHold = theme_.seriesPeak.brighter (0.3f);
     addAndMakeVisible (analyzerBridgeWidget_);
     // Analyzer display widget owns render/model/controller internals.
     // The render reads the theme every frame, so applying user trace colours here
@@ -190,7 +190,7 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
             theme_.seriesSide   = traceColors_->get (TraceId::Side);
             theme_.seriesRms    = traceColors_->get (TraceId::Rms);
             theme_.seriesPeak   = traceColors_->get (TraceId::Peak).withAlpha (a);
-            theme_.seriesHold   = theme_.seriesPeak;
+            theme_.seriesHold   = theme_.seriesPeak.brighter (0.3f);
         }
         return theme_;
     });
@@ -314,6 +314,10 @@ AnalyzerDisplayView::AnalyzerDisplayView (mdsp_ui::UiContext& ui, AnalayzerProAu
         handlePumpedSnapshot (s);
     });
     analyzerBridgeWidget_.start (kAnalyzerDisplayTimerHz);
+
+#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+    analyzerBridgeWidget_.getRTADisplay().setSuppressFftCrosshair (true);
+#endif
 
     // Per-format tick source, chosen at runtime (see note at top of file).
     const bool useTimerTick = (audioProcessor.wrapperType == juce::AudioProcessor::wrapperType_AAX);
@@ -513,6 +517,17 @@ void AnalyzerDisplayView::setMetalTraceSuppressedForChromeCapture (bool shouldSu
     analyzerBridgeWidget_.getRTADisplay().setSuppressDynamicTraces (shouldSuppress);
 }
 
+void AnalyzerDisplayView::setMetalChromeCaptureCallback (std::function<void()> cb)
+{
+    metalChromeCaptureCallback_ = std::move (cb);
+
+    analyzerBridgeWidget_.getRTADisplay().setOnInteractionRepaint ([this]()
+    {
+        if (metalChromeCaptureCallback_ != nullptr)
+            metalChromeCaptureCallback_();
+    });
+}
+
 bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& frame,
                                                   const juce::Component& editor,
                                                   float backingScale)
@@ -523,16 +538,15 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
         return false;
     }
 
-    static constexpr float kPlotLeft = 50.0f;
-    static constexpr float kPlotTop = 10.0f;
-    static constexpr float kPlotRight = 10.0f;
-    static constexpr float kPlotBottom = 30.0f;
 
-    const auto widgetBounds = analyzerBridgeWidget_.getBounds().toFloat();
-    const juce::Rectangle<float> plotInAnalyzer (widgetBounds.getX() + kPlotLeft,
-                                                 widgetBounds.getY() + kPlotTop,
-                                                 widgetBounds.getWidth() - kPlotLeft - kPlotRight,
-                                                 widgetBounds.getHeight() - kPlotTop - kPlotBottom);
+    auto& rta = analyzerBridgeWidget_.getRTADisplay();
+    const float plotLeftRta = rta.getPlotAreaLeftPx();
+    const float plotTopRta = rta.getPlotAreaTopPx();
+    const float plotWidthRta = rta.getPlotAreaWidthPx();
+    const float plotHeightRta = rta.getPlotAreaHeightPx();
+
+    const juce::Rectangle<float> plotInRta (plotLeftRta, plotTopRta, plotWidthRta, plotHeightRta);
+    const auto plotInAnalyzer = analyzerBridgeWidget_.getLocalArea (&rta, plotInRta);
     if (plotInAnalyzer.isEmpty())
         return false;
 
@@ -551,6 +565,8 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
     frame.sampleRate = lastMetaSampleRate_;
     frame.fftSize = lastMetaFftSize_;
     frame.rmsReleaseMs = releaseMs_;
+    frame.peakHoldDecayMs = peakHoldDecayMs_;
+    frame.look = lookTunables_;
     frame.weightingMode = currentWeightingMode_;
     frame.tiltMode = static_cast<int> (currentTiltMode_);
     frame.sequence = metalAnalyzerSequence_++;
@@ -598,41 +614,41 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
     if (fftFrame_.hasCurrent_)
     {
         setTrace (frame.rmsTrace, fftFrame_.display_, rms, traceConfig_.showRMS, true, true, 0.35f, 0.05f);
-        const bool anyNonPeakTraceEnabled = traceConfig_.showSide
-            || traceConfig_.showMid
-            || traceConfig_.showL
-            || traceConfig_.showR
-            || traceConfig_.showLR
-            || traceConfig_.showMono
-            || traceConfig_.showRMS;
+        frame.rmsTrace.strokeWidthPx = 2.4f;
 
         setTrace (frame.stereoTrace,
                   fftFrame_.display_,
                   colourFor (AnalyzerPro::TraceId::LR, theme_.seriesStereo),
                   traceConfig_.showLR, true,
                   loneTrace && traceConfig_.showLR, kLoneFillTopAlpha, kLoneFillBottomAlpha);
+        frame.stereoTrace.strokeWidthPx = 2.0f;
 
         if (fftPeakDbDisplay_.size() == fftFrame_.display_.size())
         {
             setTrace (frame.peakTrace,
                       fftPeakDbDisplay_,
                       colourFor (AnalyzerPro::TraceId::Peak, theme_.seriesPeak),
+                      showPeak_,
                       true,
                       true,
-                      ! anyNonPeakTraceEnabled,
-                      0.24f,
-                      0.05f);
+                      lookTunables_.peakFillTop,
+                      lookTunables_.peakFillBot);
             frame.peakTrace.colour.a *= 0.80f;
+            frame.peakTrace.strokeWidthPx = 2.8f;
+            frame.peakTrace.emphasize = true;
         }
 
-        // Peak-hold is the held-max envelope; it only makes sense while Hold is
-        // engaged. With Hold off it collapses onto the live Peak line, so showing it
-        // there is a redundant yellow "duplicate". Gate it on the hold state.
         setTrace (frame.peakHoldTrace,
                   fftFrame_.display_,
                   colourFor (AnalyzerPro::TraceId::Peak, theme_.seriesHold),
-                  isHoldOn_);
+                  showPeak_,
+                  true,           // strokeVisible
+                  true,           // fillToBottom — fade fill under the held ceiling
+                  lookTunables_.holdFillTop,
+                  lookTunables_.holdFillBot);
         frame.peakHoldTrace.colour.a *= 0.80f;
+        frame.peakHoldTrace.strokeWidthPx = 2.6f;   // thicker than before
+        frame.peakHoldTrace.emphasize = true;        // glow + bright highlight, like Peak
     }
 
     const bool hasMultiTrace = latestMultiTraceEnabled_
@@ -649,14 +665,19 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
     {
         setTrace (frame.leftTrace, multiTraceLFrame_.display_, colourFor (AnalyzerPro::TraceId::L, theme_.seriesLeft), traceConfig_.showL,
                   true, loneTrace && traceConfig_.showL, kLoneFillTopAlpha, kLoneFillBottomAlpha);
+        frame.leftTrace.strokeWidthPx = 2.0f;
         setTrace (frame.rightTrace, multiTraceRFrame_.display_, colourFor (AnalyzerPro::TraceId::R, theme_.seriesRight), traceConfig_.showR,
                   true, loneTrace && traceConfig_.showR, kLoneFillTopAlpha, kLoneFillBottomAlpha);
+        frame.rightTrace.strokeWidthPx = 2.0f;
         setTrace (frame.midTrace, multiTraceMidFrame_.display_, colourFor (AnalyzerPro::TraceId::Mid, theme_.seriesMid), traceConfig_.showMid,
                   true, loneTrace && traceConfig_.showMid, kLoneFillTopAlpha, kLoneFillBottomAlpha);
+        frame.midTrace.strokeWidthPx = 2.0f;
         setTrace (frame.sideTrace, multiTraceSideFrame_.display_, colourFor (AnalyzerPro::TraceId::Side, theme_.seriesSide), traceConfig_.showSide,
                   true, loneTrace && traceConfig_.showSide, kLoneFillTopAlpha, kLoneFillBottomAlpha);
+        frame.sideTrace.strokeWidthPx = 2.0f;
         setTrace (frame.monoTrace, multiTraceMonoFrame_.display_, colourFor (AnalyzerPro::TraceId::Mono, theme_.seriesMono), traceConfig_.showMono,
                   true, loneTrace && traceConfig_.showMono, kLoneFillTopAlpha, kLoneFillBottomAlpha);
+        frame.monoTrace.strokeWidthPx = 2.0f;
     }
 
 #if defined(ANALYZERPRO_METAL_DIAGNOSTICS) && ANALYZERPRO_METAL_DIAGNOSTICS
@@ -701,6 +722,30 @@ bool AnalyzerDisplayView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnaly
         }
     }
 #endif
+
+    frame.crosshairActive = false;
+    frame.crosshairTraceId = -1;
+    frame.crosshairXPx = 0.0f;
+    frame.crosshairColour = {};
+
+    if (rta.isFftHoverActive())
+    {
+        const float hoverX = rta.getFftHoverMouseXpx();
+        const float plotLeft = rta.getPlotAreaLeftPx();
+        const float plotW = rta.getPlotAreaWidthPx();
+        if (plotW > 0.0f && hoverX >= plotLeft && hoverX <= plotLeft + plotW)
+        {
+            const float xNorm = (hoverX - plotLeft) / plotW;
+            frame.crosshairXPx = frame.plotRectPx.x + xNorm * frame.plotRectPx.w;
+            frame.crosshairActive = true;
+            frame.crosshairTraceId = static_cast<int> (rta.getFftCrosshairTrace());
+            const juce::Colour crosshairCol = theme_.text.brighter (0.2f).withAlpha (0.85f);
+            frame.crosshairColour = { crosshairCol.getFloatRed(),
+                                      crosshairCol.getFloatGreen(),
+                                      crosshairCol.getFloatBlue(),
+                                      crosshairCol.getFloatAlpha() };
+        }
+    }
 
     return frame.valid;
 }
@@ -1105,6 +1150,36 @@ void AnalyzerDisplayView::setTraceConfig (const mdsp::gui::AnalyzerDisplayWidget
     kickSnapshotPumpImmediate();
 }
 
+void AnalyzerDisplayView::setShowPeak (bool shouldShow) noexcept
+{
+    if (showPeak_ == shouldShow)
+        return;
+
+    showPeak_ = shouldShow;
+
+    if (! showPeak_)
+        analyzerBridgeWidget_.clearPeakAndHoldTraces();
+
+    forceNextRenderFrame_ = true;
+    kickSnapshotPumpImmediate();
+    requestAnalyzerRepaint();
+}
+
+void AnalyzerDisplayView::setPeakHoldDecayMs (float ms) noexcept
+{
+    peakHoldDecayMs_ = juce::jmax (1.0f, ms);
+    forceNextRenderFrame_ = true;
+}
+
+#if ANALYZERPRO_DEV_LOOK_PANEL
+void AnalyzerDisplayView::notifyDevLookTunablesChanged() noexcept
+{
+    forceNextRenderFrame_ = true;
+    kickSnapshotPumpImmediate();
+    requestAnalyzerRepaint();
+}
+#endif
+
 void AnalyzerDisplayView::syncRenderProviderConfig()
 {
     mdsp::gui::AnalyzerRenderStateProviderConfig providerCfg;
@@ -1450,8 +1525,9 @@ void AnalyzerDisplayView::feedInterpolatedRenderFrame (double nowMs)
                                        && fftPeakDbDisplay_.size() == fftFrame_.display_.size());
                 const auto& peakHoldDb = renderStateProvider_.peakHoldDb();
                 analyzerBridgeWidget_.setFFTData (fftFrame_.display_,
-                                                  usePeaks ? &fftPeakDbDisplay_ : nullptr,
-                                                  (! peakHoldDb.empty() && renderStateProvider_.usePeakHold()) ? &peakHoldDb : nullptr);
+                                                  usePeaks && showPeak_ ? &fftPeakDbDisplay_ : nullptr,
+                                                  (showPeak_ && ! peakHoldDb.empty()
+                                                       && renderStateProvider_.usePeakHold()) ? &peakHoldDb : nullptr);
                 analyzerBridgeWidget_.setSessionMarker (renderStateProvider_.sessionMarkerVisible(),
                                                         renderStateProvider_.sessionMarkerBin(),
                                                         renderStateProvider_.sessionMarkerDb());

@@ -18,6 +18,39 @@ int scaledDimension (int value, float scale) noexcept
 {
     return juce::jmax (1, juce::roundToInt (static_cast<float> (value) * scale));
 }
+
+void copyImageToPayload (const juce::Image& image,
+                         FrameTexturePayload& payload,
+                         int widthPx,
+                         int heightPx,
+                         int bytesPerRow)
+{
+    juce::Image::BitmapData bitmap (image, juce::Image::BitmapData::readOnly);
+    if (bitmap.pixelStride <= 0 || bitmap.lineStride <= 0)
+        return;
+
+    for (int y = 0; y < heightPx; ++y)
+    {
+        const uint8_t* source = bitmap.getLinePointer (y);
+        uint8_t* dest = payload.bgraPixels.data() + static_cast<size_t> (bytesPerRow) * static_cast<size_t> (y);
+
+        if (bitmap.pixelStride == 4)
+        {
+            std::memcpy (dest, source, static_cast<size_t> (bytesPerRow));
+        }
+        else
+        {
+            for (int x = 0; x < widthPx; ++x)
+            {
+                const auto colour = bitmap.getPixelColour (x, y);
+                dest[(x * 4) + 0] = colour.getBlue();
+                dest[(x * 4) + 1] = colour.getGreen();
+                dest[(x * 4) + 2] = colour.getRed();
+                dest[(x * 4) + 3] = colour.getAlpha();
+            }
+        }
+    }
+}
 } // namespace
 
 MetalEditorRenderer::MetalEditorRenderer() = default;
@@ -86,6 +119,16 @@ void MetalEditorRenderer::resized()
 bool MetalEditorRenderer::isRunning() const noexcept
 {
     return host_ != nullptr && host_->isRunning();
+}
+
+void MetalEditorRenderer::requestChromeCapture()
+{
+    if (! isRunning())
+        return;
+
+    // Coalesce rapid hover/legend repaints into the next chrome capture tick.
+    if (! isTimerRunning (kChromeCaptureTimerId))
+        startTimer (kChromeCaptureTimerId, 16);
 }
 
 void MetalEditorRenderer::timerCallback (int timerID)
@@ -163,41 +206,13 @@ void MetalEditorRenderer::captureChromeFrame()
             analyzerEditor->setMetalTraceSuppressedForChromeCapture (false);
     }
 
-    juce::Image::BitmapData bitmap (chromeImage_, juce::Image::BitmapData::readOnly);
-    if (bitmap.pixelStride <= 0 || bitmap.lineStride <= 0)
-    {
-        recordCaptureCost();
-        return;
-    }
-
     payload->widthPx = widthPx;
     payload->heightPx = heightPx;
     payload->bytesPerRow = chromePayloadBytesPerRow_;
     payload->scale = captureScale;
     payload->sequence = nextSequence_++;
 
-    for (int y = 0; y < heightPx; ++y)
-    {
-        const uint8_t* source = bitmap.getLinePointer (y);
-        uint8_t* dest = payload->bgraPixels.data() + static_cast<size_t> (payload->bytesPerRow) * static_cast<size_t> (y);
-
-        if (bitmap.pixelStride == 4)
-        {
-            std::memcpy (dest, source, static_cast<size_t> (payload->bytesPerRow));
-        }
-        else
-        {
-            for (int x = 0; x < widthPx; ++x)
-            {
-                const auto colour = bitmap.getPixelColour (x, y);
-                dest[(x * 4) + 0] = colour.getBlue();
-                dest[(x * 4) + 1] = colour.getGreen();
-                dest[(x * 4) + 2] = colour.getRed();
-                dest[(x * 4) + 3] = colour.getAlpha();
-            }
-        }
-    }
-
+    copyImageToPayload (chromeImage_, *payload, widthPx, heightPx, chromePayloadBytesPerRow_);
     host_->setChromeFrame (std::move (payload));
 
     recordCaptureCost();

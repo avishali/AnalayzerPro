@@ -54,6 +54,8 @@ private:
     juce::ToggleButton   holdBtn_;
     AnalyzerPro::DraggableParamValueLabel releaseTimeValue_;
     juce::Label          releaseTimeLabel_;
+    AnalyzerPro::DraggableParamValueLabel holdDecayValue_;
+    juce::Label          holdDecayLabel_;
 
     // Scopes
     juce::ComboBox       scopeModeCombo_, scopeShapeCombo_, scopeInputCombo_;
@@ -64,7 +66,7 @@ private:
     juce::ToggleButton   meterHoldBtn_;
 
     // Traces
-    juce::ToggleButton   lrBtn_, monoBtn_, lBtn_, rBtn_, midBtn_, sideBtn_, rmsBtn_;
+    juce::ToggleButton   lrBtn_, monoBtn_, lBtn_, rBtn_, midBtn_, sideBtn_, peakBtn_, rmsBtn_;
 
     // Scrollable container for Traces section
     juce::Viewport       tracesViewport_;
@@ -77,7 +79,7 @@ private:
     mdsp_ui::ToggleRow   scopeHoldRow_;
     mdsp_ui::ChoiceRow   meterInputRow_;
     mdsp_ui::ToggleRow   meterHoldRow_;
-    mdsp_ui::ToggleRow   lrRow_, monoRow_, lRow_, rRow_, midRow_, sideRow_, rmsRow_;
+    mdsp_ui::ToggleRow   lrRow_, monoRow_, lRow_, rRow_, midRow_, sideRow_, peakRow_, rmsRow_;
 
     void initSpectrum (juce::AudioProcessorValueTreeState* apvts);
     void initScopes   (juce::AudioProcessorValueTreeState* apvts);

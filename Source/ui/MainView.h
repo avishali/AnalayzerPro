@@ -18,7 +18,8 @@
 #include "meters/PhaseFanScopeComponent.h"
 #include "loudness/LoudnessNumericPanel.h"
 #include <array>
-#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+#include "ui/dev/DevLookPanelConfig.h"
+#if (defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR) || ANALYZERPRO_DEV_LOOK_PANEL
 #include "analyzer/metal/MetalHostShared.h"
 #endif
 
@@ -53,8 +54,14 @@ public:
     void setTooltipManager (mdsp_ui::TooltipManager* manager);
     void setSizePresetPercent (int percent);
     std::function<void (int)> onSizePresetChanged;
+#if ANALYZERPRO_DEV_LOOK_PANEL
+    std::function<void()> onToggleDevLookPanel;
+    AnalyzerPro::metal::MetalLookTunables& analyzerDevLookTunables() noexcept;
+    void notifyDevLookTunablesChanged() noexcept;
+#endif
 #if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
     void setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept;
+    void setMetalChromeCaptureCallback (std::function<void()> cb);
     bool fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& frame,
                                  const juce::Component& editor,
                                  float backingScale);
@@ -99,12 +106,15 @@ private:
     ControlRail rail_;
     FooterBar footer_;
     
+    // Guards the deferred "keep at least one analyzer trace enabled" restore so we never
+    // call setValueNotifyingHost() synchronously from inside parameterChanged() (that
+    // re-enters the AAX host and recurses until the stack overflows — crashed PT 2026-06-16).
+    std::atomic<bool> restoringLastTrace_ { false };
+
     bool railIsOpen_ = false; // Default: rail is closed
-    int animatedRailWidth_ = AnalyzerPro::Layout::railNormalWidth; // Current animated width
-    juce::ComponentAnimator railAnimator_;
-    
+
     void toggleRail();
-    void animateRailWidth (int targetWidth);
+    int computeRailOverlayWidth (const juce::Rectangle<int>& contentBounds) const noexcept;
     AnalyzerDisplayView analyzerView_;
     StereoScopeComponent stereoScopeComponent_;
     PhaseFanScopeComponent phaseFanScopeComponent_;

@@ -5,7 +5,8 @@
 //==============================================================================
 FooterBar::FooterBar (mdsp_ui::UiContext& ui)
     : ui_ (ui),
-      releaseTimeValue_ (ui)
+      releaseTimeValue_ (ui),
+      holdDecayValue_ (ui)
 {
     const auto& theme = ui_.theme();
     const auto& type  = ui_.type();
@@ -37,6 +38,30 @@ FooterBar::FooterBar (mdsp_ui::UiContext& ui)
     addAndMakeVisible (releaseLabel_);
 
     addAndMakeVisible (releaseTimeValue_);
+
+    // ── Always-visible: Peak-hold decay (Hold off) ───────────────────────────
+    holdDecayLabel_.setText ("Hold Decay", juce::dontSendNotification);
+    holdDecayLabel_.setFont (type.labelSmallFont());
+    holdDecayLabel_.setJustificationType (juce::Justification::centredRight);
+    holdDecayLabel_.setColour (juce::Label::textColourId, theme.grey);
+    holdDecayLabel_.setTooltip ("Peak-hold decay time when Hold is off");
+    addAndMakeVisible (holdDecayLabel_);
+
+    addAndMakeVisible (holdDecayValue_);
+
+#if ANALYZERPRO_DEV_LOOK_PANEL
+    devLookButton_.setTooltip ("Open DEV Look tuning panel");
+    devLookButton_.setColour (juce::TextButton::buttonColourId, theme.black.withAlpha (0.35f));
+    devLookButton_.setColour (juce::TextButton::buttonOnColourId, theme.black.withAlpha (0.50f));
+    devLookButton_.setColour (juce::TextButton::textColourOffId, theme.grey.withAlpha (0.70f));
+    devLookButton_.setColour (juce::TextButton::textColourOnId, theme.lightGrey.withAlpha (0.85f));
+    devLookButton_.onClick = [this]
+    {
+        if (onDevLookClicked)
+            onDevLookClicked();
+    };
+    addAndMakeVisible (devLookButton_);
+#endif
 }
 
 FooterBar::~FooterBar() = default;
@@ -45,6 +70,7 @@ void FooterBar::setControlBinder (AnalyzerPro::ControlBinder& binder)
 {
     binder.bindToggle (AnalyzerPro::ControlId::AnalyzerHoldPeaks, holdBtn_);
     binder.bindDraggableValueLabel (AnalyzerPro::ControlId::AnalyzerPeakDecay, releaseTimeValue_);
+    binder.bindDraggableValueLabel (AnalyzerPro::ControlId::PeakHoldDecayTime, holdDecayValue_);
 }
 
 void FooterBar::paint (juce::Graphics& g)
@@ -66,13 +92,26 @@ void FooterBar::resized()
     const int btnW    = 32;  // toggle pill width
     const int gap     = 6;
 
-    // Right side: Release label + value | Hold label + button
+#if ANALYZERPRO_DEV_LOOK_PANEL
+    constexpr int kDevBtnW = 28;
+    auto devBtn = area.removeFromRight (kDevBtnW).withSizeKeepingCentre (kDevBtnW, btnH);
+    area.removeFromRight (gap);
+    devLookButton_.setBounds (devBtn);
+#endif
+
+    // Right side: Release | Hold Decay | Hold (right to left)
     auto right = area;
 
     // Release time: value + label
     auto releaseVal = right.removeFromRight (valW).withSizeKeepingCentre (valW, btnH);
     right.removeFromRight (gap);
     auto releaseLbl = right.removeFromRight (lblW).withSizeKeepingCentre (lblW, btnH);
+    right.removeFromRight (gap * 2);
+
+    // Hold decay: value + label
+    auto holdDecayVal = right.removeFromRight (valW).withSizeKeepingCentre (valW, btnH);
+    right.removeFromRight (gap);
+    auto holdDecayLbl = right.removeFromRight (lblW + 8).withSizeKeepingCentre (lblW + 8, btnH);
     right.removeFromRight (gap * 2);
 
     // Hold: button + label
@@ -83,6 +122,8 @@ void FooterBar::resized()
 
     holdLabel_      .setBounds (holdLbl);
     holdBtn_        .setBounds (holdToggle);
+    holdDecayLabel_ .setBounds (holdDecayLbl);
+    holdDecayValue_ .setBounds (holdDecayVal);
     releaseLabel_   .setBounds (releaseLbl);
     releaseTimeValue_.setBounds (releaseVal);
 

@@ -11,6 +11,7 @@ SettingsPopupPanel::SettingsPopupPanel (Section section,
     : section_ (section),
       ui_ (ui),
       releaseTimeValue_ (ui),
+      holdDecayValue_ (ui),
       fftSizeRow_  (ui, "FFT Size",   fftSizeCombo_),
       detailRow_   (ui, "Detail",     detailCombo_),
       tiltRow_     (ui, "Tilt",       tiltCombo_),
@@ -29,6 +30,7 @@ SettingsPopupPanel::SettingsPopupPanel (Section section,
       rRow_    (ui, "Show Right",  rBtn_),
       midRow_  (ui, "Show Mid",    midBtn_),
       sideRow_ (ui, "Show Side",   sideBtn_),
+      peakRow_ (ui, "Show Peak",   peakBtn_),
       rmsRow_  (ui, "Show RMS",    rmsBtn_)
 {
     binder_ = std::make_unique<AnalyzerPro::ControlBinder> (apvts, makeDefaultParamIdMap());
@@ -113,6 +115,15 @@ void SettingsPopupPanel::initSpectrum (juce::AudioProcessorValueTreeState* /*apv
     addAndMakeVisible (releaseTimeValue_);
     binder_->bindDraggableValueLabel (ControlId::AnalyzerPeakDecay, releaseTimeValue_);
 
+    holdDecayLabel_.setText ("Hold Decay", juce::dontSendNotification);
+    holdDecayLabel_.setFont (type.labelSmallFont());
+    holdDecayLabel_.setJustificationType (juce::Justification::centredLeft);
+    holdDecayLabel_.setColour (juce::Label::textColourId, theme.grey);
+    holdDecayLabel_.setTooltip ("Peak-hold decay time when Hold is off.");
+    addAndMakeVisible (holdDecayLabel_);
+    addAndMakeVisible (holdDecayValue_);
+    binder_->bindDraggableValueLabel (ControlId::PeakHoldDecayTime, holdDecayValue_);
+
     // Tilt / Smoothing / Weighting
     tiltCombo_.addItem ("Flat",  1);
     tiltCombo_.addItem ("Pink",  2);
@@ -193,6 +204,7 @@ void SettingsPopupPanel::initTraces (juce::AudioProcessorValueTreeState* /*apvts
         { rRow_,    rBtn_,    ControlId::TraceShowR,     "Show right channel trace.",     theme.seriesRight  },
         { midRow_,  midBtn_,  ControlId::TraceShowMid,   "Show mid (L+R) trace.",         theme.seriesMid    },
         { sideRow_, sideBtn_, ControlId::TraceShowSide,  "Show side (L-R) trace.",        theme.seriesSide   },
+        { peakRow_, peakBtn_, ControlId::TraceShowPeak,  "Show peak trace.",              theme.seriesPeak   },
         { rmsRow_,  rmsBtn_,  ControlId::TraceShowRMS,   "Show RMS trace.",               theme.seriesRms    },
     };
 
@@ -257,6 +269,7 @@ int SettingsPopupPanel::getPreferredHeight() const
             h += toggleH;           // hold
             h += btnRowH + gap;     // reset button
             h += toggleH;           // release time label + value
+            h += toggleH;           // hold decay label + value
             h += choiceH;           // tilt
             h += choiceH;           // smoothing
             h += choiceH;           // weighting
@@ -268,8 +281,8 @@ int SettingsPopupPanel::getPreferredHeight() const
             h += choiceH + toggleH;
             break;
         case Section::Traces:
-            // Seven trace toggles (Stereo, Mono, L, R, Mid, Side, RMS); height must fit all rows in the CallOutBox.
-            h += toggleH * 7;
+            // Eight trace toggles (Stereo, Mono, L, R, Mid, Side, Peak, RMS); height must fit all rows in the CallOutBox.
+            h += toggleH * 8;
             break;
     }
     return h;
@@ -343,6 +356,11 @@ void SettingsPopupPanel::resized()
             releaseTimeValue_.setBounds (x, y, w, valH);
             y += valH + gap;
 
+            holdDecayLabel_.setBounds (x, y, w, secH);
+            y += secH;
+            holdDecayValue_.setBounds (x, y, w, valH);
+            y += valH + gap;
+
             placeChoice (tiltRow_);
             placeChoice (smoothingRow_);
             placeChoice (weightingRow_);
@@ -360,8 +378,8 @@ void SettingsPopupPanel::resized()
             break;
         case Section::Traces:
         {
-            // Viewport fills remaining space; container holds all 7 rows
-            const int totalContentH = toggleH * 7;
+            // Viewport fills remaining space; container holds all 8 rows
+            const int totalContentH = toggleH * 8;
             tracesViewport_.setBounds (bounds.withY (y).withHeight (bounds.getBottom() - y));
             tracesContainer_.setBounds (0, 0, bounds.getWidth(), totalContentH);
 
@@ -379,6 +397,7 @@ void SettingsPopupPanel::resized()
             placeInContainer (rRow_);
             placeInContainer (midRow_);
             placeInContainer (sideRow_);
+            placeInContainer (peakRow_);
             placeInContainer (rmsRow_);
             break;
         }

@@ -25,6 +25,7 @@ enum class ControlId
     AnalyzerAveraging,
     AnalyzerHoldPeaks,   // Consolidated Hold
     AnalyzerPeakDecay,
+    PeakHoldDecayTime,
     AnalyzerTilt,
     MasterBypass,
     TraceShowLR,
@@ -33,6 +34,7 @@ enum class ControlId
     TraceShowR,
     TraceShowMid,
     TraceShowSide,
+    TraceShowPeak,
     TraceShowRMS,
     AnalyzerWeighting,
     

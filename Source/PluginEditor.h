@@ -12,6 +12,7 @@
 #include "analyzer/AnalyzerEngine.h"
 #include "ui/MainView.h"
 #include "ui/tooltips/TooltipManager.h"
+#include "ui/dev/DevLookPanelConfig.h"
 #if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
 #include "ui/analyzer/metal/IEditorSurface.h"
 #endif
@@ -52,6 +53,10 @@ private:
     static int deriveEditorSizePreset (int width, int height) noexcept;
     juce::Rectangle<int> getPresetBoundsForPercent (int percent) const;
     void applyEditorSizePreset (int percent);
+#if ANALYZERPRO_DEV_LOOK_PANEL
+    void toggleDevLookPanel();
+    void closeDevLookPanelWindow();
+#endif
 #if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
     static AnalyzerPro::metal::MetalHostMechanism getConfiguredMetalHostMechanism();
     void startMetalSurfaceIfNeeded();
@@ -70,6 +75,21 @@ private:
     std::unique_ptr<AnalyzerPro::metal::IEditorSurface> editorSurface_;
 #endif
     int currentEditorSizePreset_ = 100;
+#if ANALYZERPRO_DEV_LOOK_PANEL
+    class DevLookWindow : public juce::DocumentWindow
+    {
+    public:
+        explicit DevLookWindow (juce::Colour backgroundColour);
+        void closeButtonPressed() override;
+
+        std::function<void()> onClose;
+
+    private:
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DevLookWindow)
+    };
+
+    std::unique_ptr<DevLookWindow> devLookWindow_;
+#endif
 #if JUCE_DEBUG
     DebugGridOverlay debugGrid;
 #endif

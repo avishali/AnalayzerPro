@@ -12,6 +12,7 @@ ap::control::ParamIdMap ap::control::makeDefaultParamIdMap()
     m[ap::control::ControlId::AnalyzerAveraging] = "Averaging";
     m[ap::control::ControlId::AnalyzerHoldPeaks] = "HoldPeaks";
     m[ap::control::ControlId::AnalyzerPeakDecay] = "PeakDecay";
+    m[ap::control::ControlId::PeakHoldDecayTime] = "PeakHoldDecay";
     m[ap::control::ControlId::AnalyzerTilt] = "Tilt";
     m[ap::control::ControlId::MasterBypass] = "Bypass";
     
@@ -23,6 +24,7 @@ ap::control::ParamIdMap ap::control::makeDefaultParamIdMap()
     m[ap::control::ControlId::TraceShowR]    = "analyzerShowR";
     m[ap::control::ControlId::TraceShowMid]  = "analyzerShowMid";
     m[ap::control::ControlId::TraceShowSide] = "analyzerShowSide";
+    m[ap::control::ControlId::TraceShowPeak] = "analyzerShowPeak";
     m[ap::control::ControlId::TraceShowRMS]  = "analyzerShowRMS";
     m[ap::control::ControlId::AnalyzerWeighting] = "analyzerWeighting";
     m[ap::control::ControlId::ScopeChannelMode]  = "scopeChannelMode";

@@ -84,6 +84,8 @@ private:
     juce::ToggleButton holdButton;
     juce::Label releaseTimeLabel_;
     AnalyzerPro::DraggableParamValueLabel releaseTimeValue_;
+    juce::Label holdDecayLabel_;
+    AnalyzerPro::DraggableParamValueLabel holdDecayValue_;
     juce::ComboBox tiltCombo;
     juce::TextButton resetPeaksButton { "Reset" };
     
@@ -132,6 +134,7 @@ private:
     juce::ToggleButton showRButton;
     juce::ToggleButton showMidButton;
     juce::ToggleButton showSideButton;
+    juce::ToggleButton showPeakButton;
     juce::ToggleButton showRmsButton;
     
     mdsp_ui::ToggleRow showLrRow;
@@ -140,6 +143,7 @@ private:
     mdsp_ui::ToggleRow showRRow;
     mdsp_ui::ToggleRow showMidRow;
     mdsp_ui::ToggleRow showSideRow;
+    mdsp_ui::ToggleRow showPeakRow;
     mdsp_ui::ToggleRow showRmsRow;
     
     // Smoothing
@@ -155,7 +159,6 @@ private:
     // Trace colour customisation (Traces module). Index follows TraceId order.
     AnalyzerPro::TraceColorStore* traceColors_ = nullptr; // not owned
     std::array<AnalyzerPro::ColorSwatch, AnalyzerPro::kNumTraceColors> traceSwatches_;
-    juce::Label      peakColorLabel_;                 // label for the Peak colour row (no toggle)
     juce::TextButton resetColorsButton_ { "Reset" };
     juce::TextButton saveColorsDefaultButton_ { "Save Default" };
     void openTraceColourPicker (AnalyzerPro::TraceId id);

@@ -23,6 +23,8 @@
 #include <thread>
 #include <vector>
 
+#include <mdsp_ui/rta/MultiTraceState.h>
+
 #if !defined(ANALYZERPRO_METAL_DIAGNOSTICS)
 #define ANALYZERPRO_METAL_DIAGNOSTICS 0
 #endif
@@ -80,14 +82,14 @@ constexpr size_t kMaxAnalyzerFillVertices = kMaxAnalyzerBins * 2;
 constexpr size_t kMaxAnalyzerTraceSlots = 40; // max line/fill draws per frame (bottom-fill + glow/core ribbons)
 constexpr size_t kPhaseFanAngleBins = MetalAnalyzerFrame::kPhaseFanAngleBins;
 constexpr size_t kMaxPhaseFanFillVertices = (kPhaseFanAngleBins - 1) * 3;
-constexpr size_t kMaxPhaseFanLineVertices = kPhaseFanAngleBins * 3;
-constexpr size_t kMaxPhaseFanLineDraws = kPhaseFanAngleBins * 3;
+constexpr size_t kMaxPhaseFanRibbonVertices = kPhaseFanAngleBins * 4;
 constexpr size_t kMaxGonioPoints = MetalAnalyzerFrame::kGonioMaxPoints;
 constexpr size_t kMaxGonioHistoryPoints = MetalAnalyzerFrame::kGonioHistoryPointCapacity;
 constexpr size_t kMaxGonioHoldPoints = MetalAnalyzerFrame::kGonioHoldBins;
-constexpr size_t kMaxGonioPointQuads = kMaxGonioPoints + kMaxGonioHistoryPoints + kMaxGonioHoldPoints;
+constexpr size_t kMaxGonioPointQuads = kMaxGonioPoints * 2 + kMaxGonioHistoryPoints + kMaxGonioHoldPoints;
 constexpr size_t kMaxGonioPointVertices = kMaxGonioPointQuads * 6;
-constexpr size_t kMaxMeterBarVertices = MetalAnalyzerFrame::kMaxMeters * 5 * 6;
+constexpr size_t kMaxMeterBarVertices = MetalAnalyzerFrame::kMaxMeters * 7 * 6;
+constexpr size_t kMaxCrosshairVertices = 18;
 constexpr size_t kChromeTextureRingSize = 3;
 constexpr int kNoChromeTextureIndex = -1;
 constexpr int kMeterDisplayModeRms = 0;
@@ -202,6 +204,14 @@ juce::ModifierKeys makeModifiers (NSEvent* event)
 NSPoint pointInView (NSView* view, NSEvent* event)
 {
     return [view convertPoint: [event locationInWindow] fromView: nil];
+}
+
+float railClipRightPx (const MetalAnalyzerFrame* frame, float defaultRight) noexcept
+{
+    if (frame == nullptr || ! frame->railOverlayActive)
+        return defaultRight;
+
+    return juce::jmin (defaultRight, frame->railOverlayRectPx.x);
 }
 
 } // namespace
@@ -383,6 +393,12 @@ struct MetalHostImpl final : private juce::ComponentMovementWatcher
         {
             [meterBarBuffer release];
             meterBarBuffer = nil;
+        }
+
+        if (crosshairBuffer != nil)
+        {
+            [crosshairBuffer release];
+            crosshairBuffer = nil;
         }
 
         if (metalLayer != nil)
@@ -922,12 +938,14 @@ private:
                                                  options: MTLResourceStorageModeShared];
         phaseFanFillBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxPhaseFanFillVertices
                                                  options: MTLResourceStorageModeShared];
-        phaseFanLineBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxPhaseFanLineVertices
+        phaseFanLineBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxPhaseFanRibbonVertices
                                                  options: MTLResourceStorageModeShared];
         gonioPointBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxGonioPointVertices
                                                options: MTLResourceStorageModeShared];
         meterBarBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxMeterBarVertices
                                              options: MTLResourceStorageModeShared];
+        crosshairBuffer = [device newBufferWithLength: sizeof (ColourVertex) * kMaxCrosshairVertices
+                                              options: MTLResourceStorageModeShared];
         analyzerFillVertices.resize (kMaxAnalyzerFillVertices);
         analyzerLineVertices.resize (kMaxAnalyzerBins);
         analyzerCenterlinePx_.resize (kMaxAnalyzerBins);
@@ -1207,9 +1225,11 @@ private:
         analyzerPipelineFftSize = renderSnapshot.fftSize;
         analyzerPipelineSampleRate = renderSnapshot.sampleRate;
 
-        const float peakDecayDbPerSecond = 60.0f / juce::jmax (0.01f, frame.rmsReleaseMs / 1000.0f);
-        const float peakDecayThisFrame = peakDecayDbPerSecond * static_cast<float> (juce::jmax (0.0, renderDtSeconds));
         int rmsAbovePeakViolations = 0;
+
+        const float holdReleaseMs       = juce::jmax (1.0f, frame.peakHoldDecayMs);
+        const float holdDecayDbPerSec   = 60000.0f / holdReleaseMs;
+        const float holdDecayThisFrame  = holdDecayDbPerSec * static_cast<float> (juce::jmax (0.0, renderDtSeconds));
 
         lastRenderDtSeconds = renderDtSeconds;
         lastRenderAttackMs = 0.0f;
@@ -1321,7 +1341,7 @@ private:
                 analyzerRmsTargetDb[i] = targetDb;
                 analyzerSmoothedDb[i] = targetDb;
                 analyzerPeakDb[i] = sanitizeAnalyzerDb (juce::jmax (peakSourceDb, targetDb));
-                analyzerPeakHoldDb[i] = targetDb;
+                analyzerPeakHoldDb[i] = analyzerPeakDb[i];
                 continue;
             }
 
@@ -1336,15 +1356,20 @@ private:
 
             analyzerPeakDb[i] = sanitizeAnalyzerDb (juce::jmax (peakSourceDb, targetDb));
 
-            const float currentPeakHoldDb = analyzerPeakHoldDb[i];
-            const float decayedPeakHoldDb = renderSnapshot.isHoldOn
-                ? currentPeakHoldDb
-                : currentPeakHoldDb - peakDecayThisFrame;
-            analyzerPeakHoldDb[i] = sanitizeAnalyzerDb (juce::jmax (targetDb, decayedPeakHoldDb));
-
             const float rmsFloorDb = analyzerSmoothedDb[i];
             analyzerPeakDb[i] = sanitizeAnalyzerDb (juce::jmax (analyzerPeakDb[i], rmsFloorDb));
-            analyzerPeakHoldDb[i] = sanitizeAnalyzerDb (juce::jmax (analyzerPeakHoldDb[i], rmsFloorDb));
+
+            if (renderSnapshot.isHoldOn)
+            {
+                // Mode 1 — infinite hold: latch the running max, never decay (Reset clears it).
+                analyzerPeakHoldDb[i] = sanitizeAnalyzerDb (juce::jmax (analyzerPeakHoldDb[i], analyzerPeakDb[i]));
+            }
+            else
+            {
+                // Mode 2 — decay: held peak falls toward the live peak over the Release time.
+                const float decayed = analyzerPeakHoldDb[i] - holdDecayThisFrame;
+                analyzerPeakHoldDb[i] = sanitizeAnalyzerDb (juce::jmax (analyzerPeakDb[i], decayed));
+            }
 
             if (std::isfinite (rmsFloorDb)
                 && std::isfinite (analyzerPeakHoldDb[i])
@@ -1745,18 +1770,32 @@ private:
 
         if (trace.strokeVisible && lineVertexCount >= 2)
         {
-            const float plotW = frame.plotRectPx.w;
+            const float plotW      = frame.plotRectPx.w;
             const float widthScale = juce::jlimit (0.9f, 1.4f, 0.9f + 0.0015f * plotW);
-            const float coreHalf = 0.5f * 1.8f * widthScale;
-            const float glowHalf = coreHalf * 3.0f;
-            const float glowAlpha = trace.colour.a * 0.12f;
-            const float coreAlpha = trace.colour.a * 0.95f;
+            const float base       = (trace.strokeWidthPx > 0.0f ? trace.strokeWidthPx : 1.8f);
+            const float coreHalf   = 0.5f * base * widthScale;
+            const auto& look       = frame.look;
+            const float glowHalf   = coreHalf * (trace.emphasize ? look.glowMultEmph : look.glowMultNorm);
+            const float shadowHalf = coreHalf * look.shadowMult;
+            const float coreAlpha  = trace.colour.a * (trace.emphasize ? look.coreAlphaEmph : look.coreAlphaNorm);
+            const float glowAlpha  = trace.colour.a * (trace.emphasize ? look.glowAlphaEmph : look.glowAlphaNorm);
+            const float shadowAlpha= trace.colour.a * look.shadowAlpha;
 
-            // Wide faint halo, then a solid opaque core ribbon on top. A feathered
-            // (tent) core peaks only at a zero-width centerline and washes out under
-            // the glow, so the core must be a uniform-alpha band to read as a line.
-            emitGlowRibbon (encoder, lineVertexCount, glowHalf, trace.colour, glowAlpha, drawableWidth, drawableHeight);
-            emitGlowRibbon (encoder, lineVertexCount, coreHalf, trace.colour, coreAlpha, drawableWidth, drawableHeight);
+            emitGlowRibbon (encoder, lineVertexCount, shadowHalf, trace.colour, shadowAlpha, drawableWidth, drawableHeight);
+            emitGlowRibbon (encoder, lineVertexCount, glowHalf,   trace.colour, glowAlpha,   drawableWidth, drawableHeight);
+            emitGlowRibbon (encoder, lineVertexCount, coreHalf,   trace.colour, coreAlpha,   drawableWidth, drawableHeight);
+
+            if (trace.emphasize)
+            {
+                MetalColour hi = trace.colour;
+                hi.r = juce::jmin (1.0f, hi.r + look.hiBrighten);
+                hi.g = juce::jmin (1.0f, hi.g + look.hiBrighten);
+                hi.b = juce::jmin (1.0f, hi.b + look.hiBrighten);
+                const float hiHalf  = coreHalf * look.hiMult;
+                const float hiAlpha = trace.colour.a * look.hiAlpha;
+                emitGlowRibbon (encoder, lineVertexCount, hiHalf, hi, hiAlpha, drawableWidth, drawableHeight);
+            }
+
             didDraw = true;
         }
 
@@ -1868,15 +1907,128 @@ private:
     }
 #endif
 
-    struct PhaseFanLineDraw
+    static MetalColour brightenPhaseFanColour (MetalColour colour, float amount) noexcept
     {
-        NSUInteger vertexStart = 0;
-        NSUInteger vertexCount = 0;
-    };
+        colour.r = juce::jmin (1.0f, colour.r + amount);
+        colour.g = juce::jmin (1.0f, colour.g + amount);
+        colour.b = juce::jmin (1.0f, colour.b + amount);
+        return colour;
+    }
 
     static bool phaseFanDrawsLines (int renderMode) noexcept
     {
         return renderMode == 1 || renderMode == 2;
+    }
+
+    simd_float2 phaseFanCenterlineNormalPx (size_t k, size_t count) const noexcept
+    {
+        const size_t a = (k == 0) ? 0 : k - 1;
+        const size_t b = (k + 1 >= count) ? count - 1 : k + 1;
+        simd_float2 t = phaseFanCenterlinePx_[b] - phaseFanCenterlinePx_[a];
+        const float len = std::sqrt (t.x * t.x + t.y * t.y);
+        if (len < 1.0e-5f)
+            return simd_make_float2 (0.0f, 1.0f);
+
+        t /= len;
+        return simd_make_float2 (-t.y, t.x);
+    }
+
+    void emitPhaseFanRibbonStrip (id<MTLRenderCommandEncoder> encoder,
+                                  size_t count,
+                                  float halfPx,
+                                  MetalColour colour,
+                                  float alpha,
+                                  float drawableWidth,
+                                  float drawableHeight)
+    {
+        if (count < 2 || phaseFanLineBuffer == nil)
+            return;
+
+        size_t vertexCount = 0;
+        for (size_t k = 0; k < count; ++k)
+        {
+            if (vertexCount + 2 > kMaxPhaseFanRibbonVertices)
+                break;
+
+            const simd_float2 p = phaseFanCenterlinePx_[k];
+            const simd_float2 nrm = phaseFanCenterlineNormalPx (k, count);
+            const simd_float2 hi = p + nrm * halfPx;
+            const simd_float2 lo = p - nrm * halfPx;
+            const float a = juce::jlimit (0.0f, 1.0f, colour.a * alpha);
+
+            phaseFanRibbonVertices[vertexCount++] = {
+                { pixelXToNdc (hi.x, drawableWidth), pixelYToNdc (hi.y, drawableHeight) },
+                { colour.r, colour.g, colour.b, a }
+            };
+            phaseFanRibbonVertices[vertexCount++] = {
+                { pixelXToNdc (lo.x, drawableWidth), pixelYToNdc (lo.y, drawableHeight) },
+                { colour.r, colour.g, colour.b, a }
+            };
+        }
+
+        if (vertexCount < 4)
+            return;
+
+        std::memcpy ([phaseFanLineBuffer contents], phaseFanRibbonVertices.data(), sizeof (ColourVertex) * vertexCount);
+        [encoder setVertexBuffer: phaseFanLineBuffer offset: 0 atIndex: 0];
+        [encoder drawPrimitives: MTLPrimitiveTypeTriangleStrip
+                     vertexStart: 0
+                     vertexCount: static_cast<NSUInteger> (vertexCount)];
+    }
+
+    void emitPhaseFanRibbonPasses (id<MTLRenderCommandEncoder> encoder,
+                                   size_t count,
+                                   float coreWidthPx,
+                                   MetalColour colour,
+                                   const MetalLookTunables& look,
+                                   float drawableWidth,
+                                   float drawableHeight)
+    {
+        if (count < 2)
+            return;
+
+        const float coreHalf = 0.5f * juce::jmax (0.5f, coreWidthPx);
+        const float glowHalf = coreHalf * juce::jmax (1.0f, look.phaseFanLineGlowMult);
+
+        emitPhaseFanRibbonStrip (encoder, count, glowHalf, colour, look.phaseFanLineGlowAlpha, drawableWidth, drawableHeight);
+        emitPhaseFanRibbonStrip (encoder, count, coreHalf, colour, look.phaseFanLineCoreAlpha, drawableWidth, drawableHeight);
+    }
+
+    void drawPhaseFanRibbonFromSource (id<MTLRenderCommandEncoder> encoder,
+                                       const MetalAnalyzerFrame& frame,
+                                       const std::array<float, MetalAnalyzerFrame::kPhaseFanAngleBins>& source,
+                                       float threshold,
+                                       MetalColour colour,
+                                       float coreWidthPx,
+                                       float drawableWidth,
+                                       float drawableHeight)
+    {
+        size_t segmentCount = 0;
+
+        auto flushSegment = [&]
+        {
+            if (segmentCount >= 2)
+                emitPhaseFanRibbonPasses (encoder, segmentCount, coreWidthPx, colour, frame.look, drawableWidth, drawableHeight);
+            segmentCount = 0;
+        };
+
+        for (size_t a = 0; a < kPhaseFanAngleBins; ++a)
+        {
+            const float rNorm = source[a];
+            if (rNorm <= threshold)
+            {
+                flushSegment();
+                continue;
+            }
+
+            if (segmentCount >= phaseFanCenterlinePx_.size())
+                break;
+
+            const auto pt = phaseFanPointFor (frame, static_cast<int> (a), rNorm);
+            phaseFanCenterlinePx_[segmentCount++] = simd_make_float2 (pt.x, pt.y);
+        }
+
+        flushSegment();
     }
 
     static float phaseFanRadiusToPx (const MetalAnalyzerFrame& frame, float rNorm) noexcept
@@ -1951,66 +2103,6 @@ private:
         return vertexCount;
     }
 
-    void finishPhaseFanLineSegment (std::array<ColourVertex, kMaxPhaseFanLineVertices>&,
-                                    size_t& vertexCount,
-                                    std::array<PhaseFanLineDraw, kMaxPhaseFanLineDraws>& draws,
-                                    size_t& drawCount,
-                                    size_t segmentStart,
-                                    size_t segmentCount) noexcept
-    {
-        if (segmentCount >= 2)
-        {
-            draws[drawCount++] = {
-                static_cast<NSUInteger> (segmentStart),
-                static_cast<NSUInteger> (segmentCount)
-            };
-        }
-        else
-        {
-            vertexCount = segmentStart;
-        }
-    }
-
-    void appendPhaseFanLineSegments (const MetalAnalyzerFrame& frame,
-                                     const std::array<float, MetalAnalyzerFrame::kPhaseFanAngleBins>& source,
-                                     float threshold,
-                                     MetalColour colour,
-                                     float alpha,
-                                     std::array<ColourVertex, kMaxPhaseFanLineVertices>& vertices,
-                                     size_t& vertexCount,
-                                     std::array<PhaseFanLineDraw, kMaxPhaseFanLineDraws>& draws,
-                                     size_t& drawCount,
-                                     float drawableWidth,
-                                     float drawableHeight)
-    {
-        size_t segmentStart = vertexCount;
-        size_t segmentCount = 0;
-
-        for (size_t a = 0; a < kPhaseFanAngleBins; ++a)
-        {
-            const float rNorm = source[a];
-            if (rNorm <= threshold)
-            {
-                finishPhaseFanLineSegment (vertices, vertexCount, draws, drawCount, segmentStart, segmentCount);
-                segmentStart = vertexCount;
-                segmentCount = 0;
-                continue;
-            }
-
-            if (vertexCount >= vertices.size())
-                break;
-
-            vertices[vertexCount++] = makePhaseFanVertex (phaseFanPointFor (frame, static_cast<int> (a), rNorm),
-                                                          colour,
-                                                          alpha,
-                                                          drawableWidth,
-                                                          drawableHeight);
-            ++segmentCount;
-        }
-
-        finishPhaseFanLineSegment (vertices, vertexCount, draws, drawCount, segmentStart, segmentCount);
-    }
-
     void drawPhaseFanFrame (id<MTLRenderCommandEncoder> encoder,
                             id<MTLTexture> drawableTexture,
                             const std::shared_ptr<const MetalAnalyzerFrame>& frame)
@@ -2028,7 +2120,11 @@ private:
 
         const NSUInteger scissorX = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableWidth), frame->phaseFanRectPx.x));
         const NSUInteger scissorY = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableHeight), frame->phaseFanRectPx.y));
-        const NSUInteger scissorRight = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableWidth), frame->phaseFanRectPx.x + frame->phaseFanRectPx.w));
+        const float phaseFanRightF = railClipRightPx (frame.get(),
+                                                      juce::jlimit (0.0f,
+                                                                    static_cast<float> (drawableWidth),
+                                                                    frame->phaseFanRectPx.x + frame->phaseFanRectPx.w));
+        const NSUInteger scissorRight = static_cast<NSUInteger> (phaseFanRightF);
         const NSUInteger scissorBottom = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableHeight), frame->phaseFanRectPx.y + frame->phaseFanRectPx.h));
         if (scissorRight <= scissorX || scissorBottom <= scissorY)
             return;
@@ -2049,6 +2145,27 @@ private:
         const size_t fillVertexCount = buildPhaseFanFillVertices (*frame, fillVertices, width, height);
         if (fillVertexCount > 0 && fillVertexCount <= kMaxPhaseFanFillVertices)
         {
+            std::array<ColourVertex, kMaxPhaseFanFillVertices> glowVertices {};
+            const juce::Point<float> centre { frame->phaseFanCx, frame->phaseFanCy };
+            const float kGlowScale = frame->look.phaseFanGlowScale;
+            for (size_t i = 0; i < fillVertexCount; ++i)
+            {
+                glowVertices[i] = fillVertices[i];
+                const float px = (fillVertices[i].position[0] + 1.0f) * 0.5f * width;
+                const float py = (1.0f - fillVertices[i].position[1]) * 0.5f * height;
+                const float sx = centre.x + (px - centre.x) * kGlowScale;
+                const float sy = centre.y + (py - centre.y) * kGlowScale;
+                glowVertices[i].position[0] = pixelXToNdc (sx, width);
+                glowVertices[i].position[1] = pixelYToNdc (sy, height);
+                glowVertices[i].colour[3] = frame->look.phaseFanGlowAlpha;
+            }
+
+            std::memcpy ([phaseFanFillBuffer contents], glowVertices.data(), sizeof (ColourVertex) * fillVertexCount);
+            [encoder setVertexBuffer: phaseFanFillBuffer offset: 0 atIndex: 0];
+            [encoder drawPrimitives: MTLPrimitiveTypeTriangle
+                         vertexStart: 0
+                         vertexCount: static_cast<NSUInteger> (fillVertexCount)];
+
             std::memcpy ([phaseFanFillBuffer contents], fillVertices.data(), sizeof (ColourVertex) * fillVertexCount);
             [encoder setVertexBuffer: phaseFanFillBuffer offset: 0 atIndex: 0];
             [encoder drawPrimitives: MTLPrimitiveTypeTriangle
@@ -2058,60 +2175,30 @@ private:
 
         if (phaseFanDrawsLines (frame->phaseFanRenderMode))
         {
-            std::array<ColourVertex, kMaxPhaseFanLineVertices> lineVertices {};
-            std::array<PhaseFanLineDraw, kMaxPhaseFanLineDraws> lineDraws {};
-            size_t lineVertexCount = 0;
-            size_t lineDrawCount = 0;
+            static constexpr float kContourMinDraw = 0.003f;
+            const auto& look = frame->look;
 
-            appendPhaseFanLineSegments (*frame,
-                                        frame->phaseFanContourRNorm,
-                                        0.003f,
-                                        frame->phaseFanColour,
-                                        0.90f,
-                                        lineVertices,
-                                        lineVertexCount,
-                                        lineDraws,
-                                        lineDrawCount,
-                                        width,
-                                        height);
+            drawPhaseFanRibbonFromSource (encoder,
+                                          *frame,
+                                          frame->phaseFanContourRNorm,
+                                          kContourMinDraw,
+                                          frame->phaseFanColour,
+                                          look.phaseFanLineWidth,
+                                          width,
+                                          height);
 
             if (frame->phaseFanPeakHoldEnabled)
             {
-                appendPhaseFanLineSegments (*frame,
-                                            frame->phaseFanPeakRNorm,
-                                            0.003f,
-                                            frame->phaseFanColour,
-                                            0.22f,
-                                            lineVertices,
-                                            lineVertexCount,
-                                            lineDraws,
-                                            lineDrawCount,
-                                            width,
-                                            height);
-                appendPhaseFanLineSegments (*frame,
-                                            frame->phaseFanPeakRNorm,
-                                            0.003f,
-                                            frame->phaseFanColour,
-                                            0.98f,
-                                            lineVertices,
-                                            lineVertexCount,
-                                            lineDraws,
-                                            lineDrawCount,
-                                            width,
-                                            height);
-            }
-
-            if (lineVertexCount > 0 && lineVertexCount <= kMaxPhaseFanLineVertices)
-            {
-                std::memcpy ([phaseFanLineBuffer contents], lineVertices.data(), sizeof (ColourVertex) * lineVertexCount);
-                [encoder setVertexBuffer: phaseFanLineBuffer offset: 0 atIndex: 0];
-
-                for (size_t i = 0; i < lineDrawCount; ++i)
-                {
-                    [encoder drawPrimitives: MTLPrimitiveTypeLineStrip
-                                 vertexStart: lineDraws[i].vertexStart
-                                 vertexCount: lineDraws[i].vertexCount];
-                }
+                auto peakColour = brightenPhaseFanColour (frame->phaseFanColour, 0.20f);
+                peakColour.a = frame->phaseFanColour.a;
+                drawPhaseFanRibbonFromSource (encoder,
+                                              *frame,
+                                              frame->phaseFanPeakRNorm,
+                                              kContourMinDraw,
+                                              peakColour,
+                                              look.phaseFanPeakWidth,
+                                              width,
+                                              height);
             }
         }
 
@@ -2125,6 +2212,42 @@ private:
             frame.gonioCx + point.x * frame.gonioHalfUsable,
             frame.gonioCy - point.y * frame.gonioHalfUsable
         };
+    }
+
+    bool appendGonioPointGlowQuad (const MetalAnalyzerFrame& frame,
+                                   MetalPoint point,
+                                   float drawableWidth,
+                                   float drawableHeight,
+                                   size_t& vertexCount) noexcept
+    {
+        if (! std::isfinite (point.x) || ! std::isfinite (point.y))
+            return true;
+
+        if (vertexCount + 6 > gonioPointVertices.size())
+            return false;
+
+        const auto centre = gonioPointToDrawablePx (frame, point);
+        const float baseHalf = frame.gonioPointHalfSizePx > 0.0f ? frame.gonioPointHalfSizePx : 0.75f;
+        const float halfSize = baseHalf * frame.look.gonioGlowMult;
+        const float left = centre.x - halfSize;
+        const float right = centre.x + halfSize;
+        const float top = centre.y - halfSize;
+        const float bottom = centre.y + halfSize;
+        const auto colour = frame.gonioColour;
+        const float kGlowAlpha = frame.look.gonioGlowAlpha;
+
+        const ColourVertex quad[] = {
+            { { pixelXToNdc (left,  drawableWidth), pixelYToNdc (bottom, drawableHeight) }, { colour.r, colour.g, colour.b, kGlowAlpha } },
+            { { pixelXToNdc (right, drawableWidth), pixelYToNdc (bottom, drawableHeight) }, { colour.r, colour.g, colour.b, kGlowAlpha } },
+            { { pixelXToNdc (left,  drawableWidth), pixelYToNdc (top,    drawableHeight) }, { colour.r, colour.g, colour.b, kGlowAlpha } },
+            { { pixelXToNdc (right, drawableWidth), pixelYToNdc (bottom, drawableHeight) }, { colour.r, colour.g, colour.b, kGlowAlpha } },
+            { { pixelXToNdc (right, drawableWidth), pixelYToNdc (top,    drawableHeight) }, { colour.r, colour.g, colour.b, kGlowAlpha } },
+            { { pixelXToNdc (left,  drawableWidth), pixelYToNdc (top,    drawableHeight) }, { colour.r, colour.g, colour.b, kGlowAlpha } }
+        };
+
+        std::memcpy (gonioPointVertices.data() + vertexCount, quad, sizeof (quad));
+        vertexCount += 6;
+        return true;
     }
 
     bool appendGonioPointQuad (const MetalAnalyzerFrame& frame,
@@ -2180,7 +2303,11 @@ private:
 
         const NSUInteger scissorX = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableWidth), frame->gonioRectPx.x));
         const NSUInteger scissorY = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableHeight), frame->gonioRectPx.y));
-        const NSUInteger scissorRight = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableWidth), frame->gonioRectPx.x + frame->gonioRectPx.w));
+        const float gonioRightF = railClipRightPx (frame.get(),
+                                                   juce::jlimit (0.0f,
+                                                                 static_cast<float> (drawableWidth),
+                                                                 frame->gonioRectPx.x + frame->gonioRectPx.w));
+        const NSUInteger scissorRight = static_cast<NSUInteger> (gonioRightF);
         const NSUInteger scissorBottom = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableHeight), frame->gonioRectPx.y + frame->gonioRectPx.h));
         if (scissorRight <= scissorX || scissorBottom <= scissorY)
             return;
@@ -2244,6 +2371,13 @@ private:
                                             frame->gonioNumPoints);
         for (int i = 0; i < numPoints; ++i)
         {
+            if (vertexCount + 12 <= gonioPointVertices.size())
+                appendGonioPointGlowQuad (*frame,
+                                          frame->gonioPoints[static_cast<size_t> (i)],
+                                          width,
+                                          height,
+                                          vertexCount);
+
             if (! appendGonioPointQuad (*frame,
                                         frame->gonioPoints[static_cast<size_t> (i)],
                                         0.82f,
@@ -2368,16 +2502,25 @@ private:
 
             const float scissorLeftF = juce::jlimit (0.0f, width, std::floor (rect.x));
             const float scissorTopF = juce::jlimit (0.0f, height, std::floor (rect.y));
-            const float scissorRightF = juce::jlimit (0.0f, width, std::ceil (rect.x + rect.w));
+            const float scissorRightF = railClipRightPx (frame.get(),
+                                                         juce::jlimit (0.0f, width, std::ceil (rect.x + rect.w)));
             const float scissorBottomF = juce::jlimit (0.0f, height, std::ceil (rect.y + rect.h));
             if (scissorRightF <= scissorLeftF || scissorBottomF <= scissorTopF)
                 continue;
 
+            // Expand the per-bar scissor by a margin so the glow halo can bleed
+            // beyond the bar rect (otherwise it is clipped to the bar and invisible).
+            const float kMeterGlowMargin = frame->look.meterGlowMargin;
+            const float gScissorLeftF   = juce::jlimit (0.0f, width,  scissorLeftF   - kMeterGlowMargin);
+            const float gScissorTopF    = juce::jlimit (0.0f, height, scissorTopF    - kMeterGlowMargin);
+            const float gScissorRightF  = railClipRightPx (frame.get(),
+                                                            juce::jlimit (0.0f, width, scissorRightF + kMeterGlowMargin));
+            const float gScissorBottomF = juce::jlimit (0.0f, height, scissorBottomF + kMeterGlowMargin);
             const MTLScissorRect scissor {
-                static_cast<NSUInteger> (scissorLeftF),
-                static_cast<NSUInteger> (scissorTopF),
-                static_cast<NSUInteger> (scissorRightF - scissorLeftF),
-                static_cast<NSUInteger> (scissorBottomF - scissorTopF)
+                static_cast<NSUInteger> (gScissorLeftF),
+                static_cast<NSUInteger> (gScissorTopF),
+                static_cast<NSUInteger> (gScissorRightF - gScissorLeftF),
+                static_cast<NSUInteger> (gScissorBottomF - gScissorTopF)
             };
 
             const size_t drawStart = vertexCount;
@@ -2392,19 +2535,16 @@ private:
 
             if (mainH >= 0.5f)
             {
-                if (! appendMeterQuad (left - 1.0f,
-                                       mainTop,
-                                       right + 1.0f,
-                                       barBottom,
-                                       bar.mainColour,
-                                       0.34f,
-                                       0.05f,
-                                       width,
-                                       height,
-                                       vertexCount))
-                {
-                    break;
-                }
+                appendMeterQuad (left - 7.0f,
+                                 mainTop - 9.0f,
+                                 right + 7.0f,
+                                 barBottom,
+                                 bar.mainColour,
+                                 frame->look.meterHaloTop,
+                                 frame->look.meterHaloBot,
+                                 width,
+                                 height,
+                                 vertexCount);
 
                 if (! appendMeterQuad (left,
                                        mainTop,
@@ -2444,10 +2584,24 @@ private:
                     }
                 }
 
+                const float capTop = juce::jlimit (rect.y, barBottom, peakTop - capHalf);
+                const float capBottom = juce::jlimit (rect.y, barBottom, peakTop + capHalf);
+
+                appendMeterQuad (left + 1.0f,
+                                 capTop - 2.0f,
+                                 right - 1.0f,
+                                 capBottom + 2.0f,
+                                 peakColour,
+                                 frame->look.meterCapGlowAlpha,
+                                 frame->look.meterCapGlowAlpha,
+                                 width,
+                                 height,
+                                 vertexCount);
+
                 if (! appendMeterQuad (left + 2.0f,
-                                       juce::jlimit (rect.y, barBottom, peakTop - capHalf),
+                                       capTop,
                                        right - 2.0f,
-                                       juce::jlimit (rect.y, barBottom, peakTop + capHalf),
+                                       capBottom,
                                        peakColour,
                                        0.95f,
                                        0.95f,
@@ -2510,6 +2664,174 @@ private:
         [encoder setScissorRect: fullScissor];
     }
 
+    const std::array<float, kMaxAnalyzerBins>* crosshairDbArrayForTrace (int traceId) const noexcept
+    {
+        if (traceId < 0)
+            return nullptr;
+
+        using mdsp_ui::rta::TraceId;
+        switch (static_cast<TraceId> (traceId))
+        {
+            case TraceId::Peak:   return &analyzerPeakDb;
+            case TraceId::Hold:   return &analyzerPeakHoldDb;
+            case TraceId::Rms:    return &analyzerSmoothedDb;
+            case TraceId::Stereo: return &analyzerSmoothedDb;
+            case TraceId::Left:   return &analyzerSmoothedDbL;
+            case TraceId::Right:  return &analyzerSmoothedDbR;
+            case TraceId::Mid:    return &analyzerSmoothedDbMid;
+            case TraceId::Side:   return &analyzerSmoothedDbSide;
+            case TraceId::Mono:   return &analyzerSmoothedDbMono;
+            default:              return nullptr;
+        }
+    }
+
+    size_t crosshairBinIndexForX (const MetalAnalyzerFrame& frame, float crosshairXPx, size_t maxBins) const noexcept
+    {
+        if (maxBins <= 1 || frame.plotRectPx.w <= 0.0f)
+            return 0;
+
+        const float logMin = std::log10 (frame.minHz);
+        const float logMax = std::log10 (frame.maxHz);
+        const float logRange = logMax - logMin;
+        if (logRange <= 0.0f)
+            return 0;
+
+        const float xNorm = juce::jlimit (0.0f, 1.0f, (crosshairXPx - frame.plotRectPx.x) / frame.plotRectPx.w);
+        const float freqHz = std::pow (10.0f, logMin + xNorm * logRange);
+        const float binHz = static_cast<float> (frame.sampleRate) / static_cast<float> (frame.fftSize);
+        if (binHz <= 0.0f)
+            return 0;
+
+        const size_t idx = static_cast<size_t> (std::lround (freqHz / binHz));
+        return juce::jmin (maxBins - 1, idx);
+    }
+
+    bool appendCrosshairQuad (float left,
+                              float top,
+                              float right,
+                              float bottom,
+                              MetalColour colour,
+                              float alpha,
+                              float drawableWidth,
+                              float drawableHeight,
+                              size_t& vertexCount) noexcept
+    {
+        if (vertexCount + 6 > kMaxCrosshairVertices)
+            return false;
+
+        if (! std::isfinite (left) || ! std::isfinite (top) || ! std::isfinite (right) || ! std::isfinite (bottom)
+            || right <= left || bottom <= top)
+        {
+            return true;
+        }
+
+        const float a = colour.a * juce::jlimit (0.0f, 1.0f, alpha);
+        const ColourVertex quad[] = {
+            { { pixelXToNdc (left,  drawableWidth), pixelYToNdc (bottom, drawableHeight) }, { colour.r, colour.g, colour.b, a } },
+            { { pixelXToNdc (right, drawableWidth), pixelYToNdc (bottom, drawableHeight) }, { colour.r, colour.g, colour.b, a } },
+            { { pixelXToNdc (left,  drawableWidth), pixelYToNdc (top,    drawableHeight) }, { colour.r, colour.g, colour.b, a } },
+            { { pixelXToNdc (right, drawableWidth), pixelYToNdc (bottom, drawableHeight) }, { colour.r, colour.g, colour.b, a } },
+            { { pixelXToNdc (right, drawableWidth), pixelYToNdc (top,    drawableHeight) }, { colour.r, colour.g, colour.b, a } },
+            { { pixelXToNdc (left,  drawableWidth), pixelYToNdc (top,    drawableHeight) }, { colour.r, colour.g, colour.b, a } }
+        };
+
+        std::memcpy (crosshairVertices.data() + vertexCount, quad, sizeof (quad));
+        vertexCount += 6;
+        return true;
+    }
+
+    void drawCrosshair (id<MTLRenderCommandEncoder> encoder,
+                        id<MTLTexture> drawableTexture,
+                        const MetalAnalyzerFrame& frame,
+                        size_t pipelineBins)
+    {
+        if (! frame.crosshairActive || crosshairBuffer == nil)
+            return;
+
+        const float width = static_cast<float> ([drawableTexture width]);
+        const float height = static_cast<float> ([drawableTexture height]);
+        if (width <= 0.0f || height <= 0.0f || frame.plotRectPx.isEmpty())
+            return;
+
+        const float plotRightF = railClipRightPx (&frame,
+                                                  juce::jlimit (0.0f, width, frame.plotRectPx.x + frame.plotRectPx.w));
+        if (frame.crosshairXPx >= plotRightF)
+            return;
+
+        const float x = juce::jlimit (frame.plotRectPx.x, plotRightF, frame.crosshairXPx);
+        const float plotTop = frame.plotRectPx.y;
+        const float plotBottom = frame.plotRectPx.y + frame.plotRectPx.h;
+
+        size_t vertexCount = 0;
+        auto colour = frame.crosshairColour;
+        if (colour.a <= 0.0f)
+            colour = { 0.9f, 0.9f, 0.9f, 0.45f };
+
+        appendCrosshairQuad (x - 0.75f, plotTop, x + 0.75f, plotBottom, colour, colour.a, width, height, vertexCount);
+
+        const size_t maxBins = pipelineBins > 1 ? pipelineBins : 0;
+        if (frame.crosshairTraceId >= 0 && maxBins > 1)
+        {
+            const auto* dbArray = crosshairDbArrayForTrace (frame.crosshairTraceId);
+            if (dbArray != nullptr)
+            {
+                const size_t binIdx = crosshairBinIndexForX (frame, x, maxBins);
+                const float rawDb = (*dbArray)[binIdx];
+                if (std::isfinite (rawDb) && rawDb > -199.0f)
+                {
+                    const float logMin = std::log10 (frame.minHz);
+                    const float logMax = std::log10 (frame.maxHz);
+                    const float logRange = logMax - logMin;
+                    const float xNorm = juce::jlimit (0.0f, 1.0f, (x - frame.plotRectPx.x) / frame.plotRectPx.w);
+                    const float freqHz = std::pow (10.0f, logMin + xNorm * logRange);
+                    const float compensatedDb = rawDb + frame.displayGainDb + computeTiltDb (freqHz, frame.tiltMode);
+                    const float dbRange = frame.topDb - frame.bottomDb;
+                    if (dbRange > 0.0f)
+                    {
+                        const float clampedDb = juce::jlimit (frame.bottomDb - 24.0f,
+                                                              frame.topDb + 18.0f,
+                                                              sanitizeAnalyzerDb (compensatedDb));
+                        const float yNorm = (frame.topDb - clampedDb) / dbRange;
+                        const float y = plotTop + yNorm * frame.plotRectPx.h;
+                        if (std::isfinite (y))
+                        {
+                            // Full-width horizontal line at the trace value (a proper crosshair,
+                            // not just a short tick) so both axes read clearly.
+                            appendCrosshairQuad (frame.plotRectPx.x, y - 0.75f, plotRightF, y + 0.75f, colour, 0.55f, width, height, vertexCount);
+                            constexpr float kDotHalf = 3.0f;
+                            appendCrosshairQuad (x - kDotHalf, y - kDotHalf, x + kDotHalf, y + kDotHalf, colour, 1.0f, width, height, vertexCount);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (vertexCount == 0)
+            return;
+
+        const NSUInteger scissorX = static_cast<NSUInteger> (juce::jlimit (0.0f, width, frame.plotRectPx.x));
+        const NSUInteger scissorY = static_cast<NSUInteger> (juce::jlimit (0.0f, height, frame.plotRectPx.y));
+        const NSUInteger scissorRight = static_cast<NSUInteger> (plotRightF);
+        const NSUInteger scissorBottom = static_cast<NSUInteger> (juce::jlimit (0.0f, height, plotBottom));
+        if (scissorRight <= scissorX || scissorBottom <= scissorY)
+            return;
+
+        const MTLScissorRect scissor {
+            scissorX,
+            scissorY,
+            scissorRight - scissorX,
+            scissorBottom - scissorY
+        };
+
+        std::memcpy ([crosshairBuffer contents], crosshairVertices.data(), sizeof (ColourVertex) * vertexCount);
+        [encoder setScissorRect: scissor];
+        [encoder setRenderPipelineState: colourPipeline];
+        [encoder setVertexBuffer: crosshairBuffer offset: 0 atIndex: 0];
+        [encoder drawPrimitives: MTLPrimitiveTypeTriangle
+                     vertexStart: 0
+                     vertexCount: static_cast<NSUInteger> (vertexCount)];
+    }
+
     void drawAnalyzerFrame (id<MTLRenderCommandEncoder> encoder,
                             id<MTLTexture> drawableTexture,
                             const std::shared_ptr<const MetalAnalyzerFrame>& frame,
@@ -2523,7 +2845,11 @@ private:
         const NSUInteger drawableHeight = [drawableTexture height];
         const NSUInteger scissorX = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableWidth), frame->plotRectPx.x));
         const NSUInteger scissorY = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableHeight), frame->plotRectPx.y));
-        const NSUInteger scissorRight = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableWidth), frame->plotRectPx.x + frame->plotRectPx.w));
+        const float plotRightF = railClipRightPx (frame.get(),
+                                                  juce::jlimit (0.0f,
+                                                                static_cast<float> (drawableWidth),
+                                                                frame->plotRectPx.x + frame->plotRectPx.w));
+        const NSUInteger scissorRight = static_cast<NSUInteger> (plotRightF);
         const NSUInteger scissorBottom = static_cast<NSUInteger> (juce::jlimit (0.0f, static_cast<float> (drawableHeight), frame->plotRectPx.y + frame->plotRectPx.h));
 
         if (scissorRight <= scissorX || scissorBottom <= scissorY)
@@ -2560,30 +2886,10 @@ private:
                                       analyzerSmoothedDb, analyzerPipelineBinsForFrame, width, height);
             didDrawAnyTrace |= sideDrew | midDrew | leftDrew | rightDrew | monoDrew | stereoDrew;
 
+            // NOTE: RMS is drawn LAST (below) so it sits in FRONT of Peak/Peak-hold —
+            // the peaks still read above the RMS line since they're higher in dB.
             bool rmsBuildOk = false;
             const char* rmsPath = "none";
-            if (frame->rmsTrace.visible)
-            {
-                if (analyzerPipelineBinsForFrame > 1)
-                {
-                    rmsPath = "pipeline";
-                    rmsBuildOk = drawTracePayloadFromDb (encoder,
-                                                         *frame,
-                                                         frame->rmsTrace,
-                                                         analyzerSmoothedDb,
-                                                         analyzerPipelineBinsForFrame,
-                                                         width,
-                                                         height);
-                }
-                else
-                {
-                    rmsPath = "fallback";
-                    rmsBuildOk = drawTracePayload (encoder, *frame, frame->rmsTrace, width, height);
-                }
-
-                didDrawAnyTrace |= rmsBuildOk;
-            }
-            updateRmsTelemetry (*frame, rmsPath, analyzerPipelineBinsForFrame, rmsBuildOk);
 
             bool peakBuildOk = false;
             const char* peakPath = "none";
@@ -2632,6 +2938,30 @@ private:
 
                 didDrawAnyTrace |= peakHoldBuildOk;
             }
+
+            // RMS drawn LAST → in front of Peak/Peak-hold (peaks remain visible above it).
+            if (frame->rmsTrace.visible)
+            {
+                if (analyzerPipelineBinsForFrame > 1)
+                {
+                    rmsPath = "pipeline";
+                    rmsBuildOk = drawTracePayloadFromDb (encoder,
+                                                         *frame,
+                                                         frame->rmsTrace,
+                                                         analyzerSmoothedDb,
+                                                         analyzerPipelineBinsForFrame,
+                                                         width,
+                                                         height);
+                }
+                else
+                {
+                    rmsPath = "fallback";
+                    rmsBuildOk = drawTracePayload (encoder, *frame, frame->rmsTrace, width, height);
+                }
+
+                didDrawAnyTrace |= rmsBuildOk;
+            }
+            updateRmsTelemetry (*frame, rmsPath, analyzerPipelineBinsForFrame, rmsBuildOk);
             updatePeakTelemetry (peakPath, peakHoldPath, peakBuildOk, peakHoldBuildOk);
 #if ANALYZERPRO_METAL_DIAGNOSTICS
             appendRenderFrameDiagnostic (*frame, rmsBuildOk, peakPath, peakBuildOk);
@@ -2639,11 +2969,13 @@ private:
 
             if (! didDrawAnyTrace)
             {
+                drawCrosshair (encoder, drawableTexture, *frame, analyzerPipelineBinsForFrame);
                 const MTLScissorRect fullScissor { 0, 0, drawableWidth, drawableHeight };
                 [encoder setScissorRect: fullScissor];
                 return;
             }
 
+            drawCrosshair (encoder, drawableTexture, *frame, analyzerPipelineBinsForFrame);
             const MTLScissorRect fullScissor { 0, 0, drawableWidth, drawableHeight };
             [encoder setScissorRect: fullScissor];
             return;
@@ -2651,6 +2983,7 @@ private:
 
         updateRmsTelemetry (*frame, "none", analyzerPipelineBinsForFrame, false);
         updatePeakTelemetry ("none", "none", false, false);
+        drawCrosshair (encoder, drawableTexture, *frame, analyzerPipelineBinsForFrame);
         const MTLScissorRect fullScissor { 0, 0, drawableWidth, drawableHeight };
         [encoder setScissorRect: fullScissor];
     }
@@ -2933,8 +3266,12 @@ private:
     size_t analyzerFillSlot_ = 0;
     id<MTLBuffer> phaseFanFillBuffer = nil;
     id<MTLBuffer> phaseFanLineBuffer = nil;
+    std::array<simd_float2, kPhaseFanAngleBins> phaseFanCenterlinePx_ {};
+    std::array<ColourVertex, kMaxPhaseFanRibbonVertices> phaseFanRibbonVertices {};
     id<MTLBuffer> gonioPointBuffer = nil;
     id<MTLBuffer> meterBarBuffer = nil;
+    id<MTLBuffer> crosshairBuffer = nil;
+    std::array<ColourVertex, kMaxCrosshairVertices> crosshairVertices {};
     std::array<id<MTLTexture>, kChromeTextureRingSize> chromeTextures {};
     int chromeTextureWidth = 0;
     int chromeTextureHeight = 0;

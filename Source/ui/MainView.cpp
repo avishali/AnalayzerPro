@@ -111,10 +111,13 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     // Add layout components
     addAndMakeVisible (header_);
     addAndMakeVisible (railViewport_);
+    railViewport_.setOpaque (false);
+    railViewport_.setVisible (false);
     railViewport_.setViewedComponent (&rail_, false);
     railViewport_.setScrollBarsShown (true, false);
     railViewport_.setScrollBarThickness (10);
     railViewport_.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::never);
+    rail_.setOpaque (false);
     addAndMakeVisible (footer_);
     addAndMakeVisible (analyzerView_);
     addAndMakeVisible (stereoScopeComponent_);
@@ -126,6 +129,13 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
     // Initialize header and rail with control binder
     header_.setControlBinder (controls_.getBinder());
     footer_.setControlBinder (controls_.getBinder());
+#if ANALYZERPRO_DEV_LOOK_PANEL
+    footer_.onDevLookClicked = [this]
+    {
+        if (onToggleDevLookPanel)
+            onToggleDevLookPanel();
+    };
+#endif
     header_.setManagers (&p.getPresetManager(), &p.getABStateManager());
     header_.onRailToggleClicked = [this] { toggleRail(); };
     header_.onSizePresetChanged = [this] (int percent)
@@ -194,6 +204,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         apvts->addParameterListener ("Averaging", this);
         apvts->addParameterListener ("HoldPeaks", this);
         apvts->addParameterListener ("PeakDecay", this);
+        apvts->addParameterListener ("PeakHoldDecay", this);
         apvts->addParameterListener ("DbRange", this);
         apvts->addParameterListener ("DisplayGain", this);
         // CLEANUP: DUPLICATE - Removed duplicate parameter listener registration (line 76)
@@ -205,6 +216,7 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
         apvts->addParameterListener ("analyzerShowR", this);
         apvts->addParameterListener ("analyzerShowMid", this);
         apvts->addParameterListener ("analyzerShowSide", this);
+        apvts->addParameterListener ("analyzerShowPeak", this);
         apvts->addParameterListener ("analyzerShowRMS", this);
         apvts->addParameterListener ("analyzerWeighting", this);
         apvts->addParameterListener ("scopeChannelMode", this); // New
@@ -316,6 +328,8 @@ MainView::MainView (mdsp_ui::UiContext& ui, AnalayzerProAudioProcessor& p, juce:
             const float decayNorm = juce::jlimit (0.0f, 1.0f, (ms - 100.0f) / 4900.0f);
             analyzerView_.setSpectrumDecayRate (decayNorm);
         }
+        if (auto* raw = apvts_->getRawParameterValue ("PeakHoldDecay"))
+            analyzerView_.setPeakHoldDecayMs (raw->load());
         syncAnalyzerTraceConfig();
     }
         
@@ -383,6 +397,7 @@ void MainView::shutdown()
         apvts_->removeParameterListener ("Averaging", this);
         apvts_->removeParameterListener ("HoldPeaks", this);
         apvts_->removeParameterListener ("PeakDecay", this);
+        apvts_->removeParameterListener ("PeakHoldDecay", this);
         apvts_->removeParameterListener ("DbRange", this);
         apvts_->removeParameterListener ("DisplayGain", this);
         apvts_->removeParameterListener ("Tilt", this);
@@ -392,6 +407,7 @@ void MainView::shutdown()
         apvts_->removeParameterListener ("analyzerShowR", this);
         apvts_->removeParameterListener ("analyzerShowMid", this);
         apvts_->removeParameterListener ("analyzerShowSide", this);
+        apvts_->removeParameterListener ("analyzerShowPeak", this);
         apvts_->removeParameterListener ("analyzerShowRMS", this);
         apvts_->removeParameterListener ("analyzerWeighting", this);
         apvts_->removeParameterListener ("scopeChannelMode", this);
@@ -525,6 +541,12 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
         analyzerView_.setSpectrumDecayRate (decayNorm);
         syncAnalyzerTraceConfig();
     }
+    else if (parameterID == "PeakHoldDecay")
+    {
+        if (apvts_ != nullptr)
+            if (auto* raw = apvts_->getRawParameterValue ("PeakHoldDecay"))
+                analyzerView_.setPeakHoldDecayMs (raw->load());
+    }
     else if (parameterID == "DbRange")
     {
         const int idx = juce::jlimit (0, 2, juce::roundToInt (newValue));
@@ -565,9 +587,60 @@ void MainView::parameterChanged (const juce::String& parameterID, float newValue
           || parameterID == "analyzerShowR"
           || parameterID == "analyzerShowMid"
           || parameterID == "analyzerShowSide"
+          || parameterID == "analyzerShowPeak"
           || parameterID == "analyzerShowRMS"
           || parameterID == "analyzerWeighting")
     {
+        // Keep at least one analyzer trace enabled so the plot is never blank.
+        // (analyzerWeighting is not a trace toggle - skip the guard for it.)
+        if (parameterID != "analyzerWeighting" && newValue < 0.5f)
+        {
+            static const char* const kTraceShowIds[] = {
+                "TraceShowLR", "analyzerShowMono", "analyzerShowL", "analyzerShowR",
+                "analyzerShowMid", "analyzerShowSide", "analyzerShowPeak", "analyzerShowRMS"
+            };
+
+            bool anyOn = false;
+            for (auto* id : kTraceShowIds)
+            {
+                if (auto* v = apvts_->getRawParameterValue (id))
+                {
+                    if (v->load() > 0.5f)
+                    {
+                        anyOn = true;
+                        break;
+                    }
+                }
+            }
+
+            if (! anyOn)
+            {
+                // Re-enable the just-disabled trace so the plot is never blank — but DEFER it.
+                // Calling setValueNotifyingHost() synchronously here re-enters the AAX host and
+                // recurses until the stack overflows (crashed PT 2026-06-16). Schedule the restore
+                // on the message loop so it runs outside this callback; the guard prevents piling
+                // up multiple restores if the user spams toggles before it fires.
+                if (! restoringLastTrace_.exchange (true))
+                {
+                    juce::Component::SafePointer<MainView> safeThis (this);
+                    const juce::String idToRestore = parameterID;
+                    juce::MessageManager::callAsync ([safeThis, idToRestore]
+                    {
+                        if (auto* self = safeThis.getComponent())
+                        {
+                            if (self->apvts_ != nullptr)
+                                if (auto* p = self->apvts_->getParameter (idToRestore))
+                                    p->setValueNotifyingHost (1.0f);
+
+                            self->restoringLastTrace_ = false;
+                        }
+                    });
+                }
+
+                return;
+            }
+        }
+
         juce::ignoreUnused (newValue);
         syncAnalyzerTraceConfig();
     }
@@ -593,6 +666,7 @@ void MainView::syncAnalyzerTraceConfig()
     cfg.showMid = getBoolParam ("analyzerShowMid");
     cfg.showSide = getBoolParam ("analyzerShowSide");
     cfg.showRMS = getBoolParam ("analyzerShowRMS");
+    analyzerView_.setShowPeak (getBoolParam ("analyzerShowPeak"));
 
     if (auto* pWeight = apvts_->getRawParameterValue ("analyzerWeighting"))
         cfg.weightingMode = juce::roundToInt (pWeight->load());
@@ -642,8 +716,34 @@ bool MainView::keyPressed (const juce::KeyPress& key, juce::Component* originati
         return true;
     }
 
+#if ANALYZERPRO_DEV_LOOK_PANEL
+#if JUCE_MAC
+    const auto devLookMods = juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier;
+    const juce::KeyPress devLookLower { 'l', devLookMods, 0 };
+    const juce::KeyPress devLookUpper { 'L', devLookMods, 0 };
+    if (key == devLookLower || key == devLookUpper)
+    {
+        if (onToggleDevLookPanel)
+            onToggleDevLookPanel();
+        return true;
+    }
+#endif
+#endif
+
     return false;
 }
+
+#if ANALYZERPRO_DEV_LOOK_PANEL
+AnalyzerPro::metal::MetalLookTunables& MainView::analyzerDevLookTunables() noexcept
+{
+    return analyzerView_.devLookTunables();
+}
+
+void MainView::notifyDevLookTunablesChanged() noexcept
+{
+    analyzerView_.notifyDevLookTunablesChanged();
+}
+#endif
 
 void MainView::selectRailModule (HeaderBar::ActiveModule headerModule, ControlRail::ActiveModule railModule)
 {
@@ -674,6 +774,11 @@ void MainView::setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noe
     phaseFanScopeComponent_.setMetalTraceSuppressedForChromeCapture (shouldSuppress);
     inputMeters_.setMetalTraceSuppressedForChromeCapture (shouldSuppress);
     outputMeters_.setMetalTraceSuppressedForChromeCapture (shouldSuppress);
+}
+
+void MainView::setMetalChromeCaptureCallback (std::function<void()> cb)
+{
+    analyzerView_.setMetalChromeCaptureCallback (std::move (cb));
 }
 
 bool MainView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& frame,
@@ -766,6 +871,16 @@ bool MainView::fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& f
     appendMetalMeterBar (frame, editor, inputMeters_.getMeter (1), backingScale, meterPeakColour, meterRmsColour, meterHoldColour);
     appendMetalMeterBar (frame, editor, outputMeters_.getMeter (0), backingScale, meterPeakColour, meterRmsColour, meterHoldColour);
     appendMetalMeterBar (frame, editor, outputMeters_.getMeter (1), backingScale, meterPeakColour, meterRmsColour, meterHoldColour);
+
+    frame.railOverlayActive = railIsOpen_ && railViewport_.isVisible();
+    if (frame.railOverlayActive)
+    {
+        frame.railOverlayRectPx = componentBoundsToMetalRectPx (editor,
+                                                               railViewport_,
+                                                               railViewport_.getLocalBounds(),
+                                                               backingScale);
+    }
+
     return true;
 }
 #endif
@@ -816,62 +931,21 @@ void MainView::timerCallback()
 
 void MainView::toggleRail()
 {
-    railAnimator_.cancelAnimation (&railViewport_, false);
     railIsOpen_ = !railIsOpen_;
-    header_.setRailOpen (railIsOpen_);
-    
-    // Calculate target width based on state
-    auto mode = getLayoutMode (getWidth());
-    int targetWidth = 0;
+    railViewport_.setVisible (railIsOpen_);
     if (railIsOpen_)
-    {
-        targetWidth = AnalyzerPro::Layout::railNormalWidth;
-        if (mode == LayoutMode::Wide)
-            targetWidth = juce::jmin (AnalyzerPro::Layout::railWideWidth, getWidth() / 4);
-        targetWidth = juce::jmax (AnalyzerPro::Layout::railMinWidth, targetWidth);
-    }
-    
-    animateRailWidth (targetWidth);
+        railViewport_.toFront (false);
+    resized();
+    header_.setRailOpen (railIsOpen_);
 }
 
-void MainView::animateRailWidth (int targetWidth)
+int MainView::computeRailOverlayWidth (const juce::Rectangle<int>& contentBounds) const noexcept
 {
-    auto currentBounds = railViewport_.getBounds();
-    const int rightEdge = currentBounds.getRight();
-    auto targetBounds = currentBounds.withX (rightEdge - targetWidth).withWidth (targetWidth);
-    
-    railAnimator_.animateComponent (&railViewport_,
-                                    targetBounds,
-                                    1.0f,
-                                    300,
-                                    false,
-                                    0.0,
-                                    0.0);
-    
-    // Set up a timer to update layout during animation
-    // ComponentAnimator updates the viewport bounds, but we need to update other components
-    struct LayoutUpdater : juce::Timer
-    {
-        LayoutUpdater (MainView* mv) : mainView (mv) { startTimer (16); }
-        void timerCallback() override
-        {
-            if (!mainView->railAnimator_.isAnimating (&mainView->railViewport_))
-            {
-                // Animation complete - final layout update
-                mainView->resized();
-                stopTimer();
-                delete this;
-            }
-            else
-            {
-                // Update layout during animation - resized() will use current viewport width
-                mainView->resized();
-            }
-        }
-        MainView* mainView;
-    };
-    
-    new LayoutUpdater (this);
+    const auto mode = getLayoutMode (contentBounds.getWidth());
+    int railWidth = AnalyzerPro::Layout::railNormalWidth;
+    if (mode == LayoutMode::Wide)
+        railWidth = juce::jmin (AnalyzerPro::Layout::railWideWidth, contentBounds.getWidth() / 4);
+    return juce::jmax (AnalyzerPro::Layout::railMinWidth, railWidth);
 }
 
 void MainView::paint (juce::Graphics& g)
@@ -999,46 +1073,11 @@ void MainView::resized()
     if (bounds.isEmpty())
         return;
 
-    auto mode = getLayoutMode (bounds.getWidth());
-    int railWidth;
-    if (railAnimator_.isAnimating (&railViewport_))
-    {
-        railWidth = railViewport_.getWidth();
-    }
-    else
-    {
-        railWidth = railIsOpen_ ? AnalyzerPro::Layout::railNormalWidth : 0;
-        if (railIsOpen_ && mode == LayoutMode::Wide)
-            railWidth = juce::jmin (AnalyzerPro::Layout::railWideWidth, bounds.getWidth() / 4);
-        if (railIsOpen_)
-            railWidth = juce::jmax (AnalyzerPro::Layout::railMinWidth, railWidth);
-        animatedRailWidth_ = railWidth; // Update stored width
-    }
-
-    auto railArea = bounds.removeFromRight (juce::jmax (0, railWidth));
+    const auto contentBounds = bounds;
+    const auto mode = getLayoutMode (contentBounds.getWidth());
     rail_.setLayoutMode (static_cast<int> (mode));
-    railViewport_.setVisible (railArea.getWidth() > 0 && railArea.getHeight() > 0);
-    railViewport_.setBounds (railArea);
-    if (railViewport_.isVisible())
-    {
-        const int viewY = railViewport_.getViewPosition().getY();
-        const int preferredH = rail_.getPreferredHeight();
-        rail_.setBounds (0, 0, railViewport_.getWidth(), preferredH);
-        const int maxY = juce::jmax (0, preferredH - railArea.getHeight());
-        railViewport_.setViewPosition (0, juce::jlimit (0, maxY, viewY));
-    }
-    else
-    {
-        rail_.setBounds (0, 0, 0, 0);
-    }
-#if JUCE_DEBUG
-    debugRail = railArea;
-#endif
 
-    if (bounds.isEmpty())
-        return;
-
-    // Bottom area (scope + loudness) — clamp so rail is never starved
+    // Bottom area (scope + loudness) — full width; rail overlays on top when open
     int bottomHeight = juce::jlimit (180, 260, bounds.getHeight() / 3);
     auto bottomArea = bounds.removeFromBottom (bottomHeight);
 #if JUCE_DEBUG
@@ -1074,12 +1113,40 @@ void MainView::resized()
             loudnessPanel_.setBounds (loudnessArea);
     }
 
-    // Main analyzer plot (all remaining center space)
+    // Main analyzer plot (all remaining center space — same size whether rail is open)
     if (bounds.getWidth() > 0 && bounds.getHeight() > 0)
         analyzerView_.setBounds (bounds);
 #if JUCE_DEBUG
     debugAnalyzerTop = bounds;
     debugLeft = bounds;
+#endif
+
+    // Rail overlay on the right edge (does not shrink the analyzer layout)
+    juce::Rectangle<int> railArea;
+    if (contentBounds.getWidth() > 0 && contentBounds.getHeight() > 0)
+    {
+        const int railWidth = computeRailOverlayWidth (contentBounds);
+        railArea = contentBounds.withWidth (railWidth)
+                               .withX (contentBounds.getRight() - railWidth);
+
+        railViewport_.setBounds (railArea);
+        railViewport_.setVisible (railIsOpen_);
+        if (railIsOpen_)
+            railViewport_.toFront (false);
+
+        const int viewY = railViewport_.getViewPosition().getY();
+        const int preferredH = rail_.getPreferredHeight();
+        rail_.setBounds (0, 0, railViewport_.getWidth(), preferredH);
+        const int maxY = juce::jmax (0, preferredH - railArea.getHeight());
+        railViewport_.setViewPosition (0, juce::jlimit (0, maxY, viewY));
+    }
+    else
+    {
+        railViewport_.setVisible (false);
+        rail_.setBounds (0, 0, 0, 0);
+    }
+#if JUCE_DEBUG
+    debugRail = railArea;
     if (debugRectCallback_)
     {
         debugRectCallback_ ("Analyzer", debugAnalyzerTop, juce::Colours::blue);
@@ -1141,6 +1208,7 @@ void MainView::auditApvtsParameters()
     apvtsParams.insert ("PeakHold");
     apvtsParams.insert ("Hold");
     apvtsParams.insert ("PeakDecay");
+    apvtsParams.insert ("PeakHoldDecay");
     apvtsParams.insert ("DisplayGain");
     apvtsParams.insert ("Tilt");
     apvtsParams.insert ("DbRange");
@@ -1151,6 +1219,7 @@ void MainView::auditApvtsParameters()
     apvtsParams.insert ("analyzerShowR");
     apvtsParams.insert ("analyzerShowMid");
     apvtsParams.insert ("analyzerShowSide");
+    apvtsParams.insert ("analyzerShowPeak");
     apvtsParams.insert ("analyzerShowRMS");
     apvtsParams.insert ("analyzerWeighting");
     apvtsParams.insert ("scopeChannelMode");
@@ -1165,6 +1234,7 @@ void MainView::auditApvtsParameters()
     uiRepresented.insert ("PeakHold");
     uiRepresented.insert ("Hold");
     uiRepresented.insert ("PeakDecay");
+    uiRepresented.insert ("PeakHoldDecay");
     uiRepresented.insert ("DbRange");
     uiRepresented.insert ("DisplayGain");
     uiRepresented.insert ("Tilt");

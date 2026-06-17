@@ -5,6 +5,7 @@
 ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     : ui_ (ui),
       releaseTimeValue_ (ui),
+      holdDecayValue_ (ui),
       scopeReleaseValue_ (ui),
       spectrumHeader (ui, "Spectrum"),
       scopesHeader (ui, "Scopes"),
@@ -26,6 +27,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
       showRRow (ui, "Show Right", showRButton),
       showMidRow (ui, "Show Mid", showMidButton),
       showSideRow (ui, "Show Side", showSideButton),
+      showPeakRow (ui, "Show Peak", showPeakButton),
       showRmsRow (ui, "Show RMS", showRmsButton),
       smoothingRow (ui, "Smoothing", smoothingCombo),
       weightingRow (ui, "Weighting", weightingCombo)
@@ -87,6 +89,13 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     releaseTimeLabel_.setTooltip ("Peak decay / release time. Drag value or use mouse wheel to change.");
     addAndMakeVisible (releaseTimeLabel_);
     addAndMakeVisible (releaseTimeValue_);
+    holdDecayLabel_.setText ("Hold Decay", juce::dontSendNotification);
+    holdDecayLabel_.setFont (type.labelSmallFont());
+    holdDecayLabel_.setJustificationType (juce::Justification::centredLeft);
+    holdDecayLabel_.setColour (juce::Label::textColourId, theme.grey);
+    holdDecayLabel_.setTooltip ("Peak-hold decay time when Hold is off. Drag value or use mouse wheel to change.");
+    addAndMakeVisible (holdDecayLabel_);
+    addAndMakeVisible (holdDecayValue_);
     tiltRow.attachToParent (*this);
     scopeModeRow.attachToParent (*this);
     scopeShapeRow.attachToParent (*this);
@@ -119,6 +128,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     showRRow.attachToParent (*this);
     showMidRow.attachToParent (*this);
     showSideRow.attachToParent (*this);
+    showPeakRow.attachToParent (*this);
     showRmsRow.attachToParent (*this);
     showLrButton.setTooltip ("Show left/right stereo trace.");
     showMonoButton.setTooltip ("Show mono sum trace.");
@@ -126,6 +136,7 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
     showRButton.setTooltip ("Show right channel trace.");
     showMidButton.setTooltip ("Show mid (L+R) trace.");
     showSideButton.setTooltip ("Show side (L-R) trace.");
+    showPeakButton.setTooltip ("Show peak trace.");
     showRmsButton.setTooltip ("Show RMS trace.");
 
     // Trace colour swatches (Traces module). Hidden until a store is attached + module active.
@@ -136,11 +147,6 @@ ControlRail::ControlRail (mdsp_ui::UiContext& ui)
         traceSwatches_[i].onClick = [this, id] { openTraceColourPicker (id); };
         addChildComponent (traceSwatches_[i]);
     }
-    peakColorLabel_.setText ("Peak", juce::dontSendNotification);
-    peakColorLabel_.setJustificationType (juce::Justification::centredLeft);
-    peakColorLabel_.setColour (juce::Label::textColourId, ui_.theme().text);
-    addChildComponent (peakColorLabel_);
-
     resetColorsButton_.setTooltip ("Reset all trace colours to defaults");
     resetColorsButton_.onClick = [this]
     {
@@ -235,6 +241,7 @@ void ControlRail::setControlBinder (AnalyzerPro::ControlBinder& binder)
     {
         controlBinder->bindToggle (AnalyzerPro::ControlId::AnalyzerHoldPeaks, holdButton);
         controlBinder->bindDraggableValueLabel (AnalyzerPro::ControlId::AnalyzerPeakDecay, releaseTimeValue_);
+        controlBinder->bindDraggableValueLabel (AnalyzerPro::ControlId::PeakHoldDecayTime, holdDecayValue_);
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerTilt, tiltCombo);
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerAveraging, smoothingCombo);
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerWeighting, weightingCombo);
@@ -250,6 +257,7 @@ void ControlRail::setControlBinder (AnalyzerPro::ControlBinder& binder)
         controlBinder->bindToggle (AnalyzerPro::ControlId::TraceShowR, showRButton);
         controlBinder->bindToggle (AnalyzerPro::ControlId::TraceShowMid, showMidButton);
         controlBinder->bindToggle (AnalyzerPro::ControlId::TraceShowSide, showSideButton);
+        controlBinder->bindToggle (AnalyzerPro::ControlId::TraceShowPeak, showPeakButton);
         controlBinder->bindToggle (AnalyzerPro::ControlId::TraceShowRMS, showRmsButton);
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerFftSize, fftSizeCombo_);
         controlBinder->bindCombo (AnalyzerPro::ControlId::AnalyzerDetail, detailCombo_);
@@ -286,7 +294,6 @@ void ControlRail::setTraceColorUiVisible (bool visible)
 {
     for (auto& sw : traceSwatches_)
         sw.setVisible (visible);
-    peakColorLabel_.setVisible (visible);
     resetColorsButton_.setVisible (visible);
     saveColorsDefaultButton_.setVisible (visible);
 }
@@ -391,8 +398,9 @@ void ControlRail::paint (juce::Graphics& g)
 {
     const auto& theme = ui_.theme();
 
-    // Dark panel background with subtle contrast
-    g.fillAll (theme.panel);
+    // Semi-transparent panel so the analyzer grid/labels show through the overlay rail.
+    // (Metal content is clipped out of the rail rect, so this reveals the chrome behind it.)
+    g.fillAll (theme.panel.withAlpha (0.60f));
     g.setColour (theme.borderDivider);
     g.fillRect (getLocalBounds().removeFromLeft (1));
 }
@@ -446,6 +454,8 @@ void ControlRail::resized()
     resetPeaksButton.setVisible (false);
     releaseTimeLabel_.setVisible (false);
     releaseTimeValue_.setVisible (false);
+    holdDecayLabel_.setVisible (false);
+    holdDecayValue_.setVisible (false);
 
     setChoiceVisible (fftSizeRow_, false);
     setChoiceVisible (detailRow_, false);
@@ -468,6 +478,7 @@ void ControlRail::resized()
     setToggleVisible (showRRow, false);
     setToggleVisible (showMidRow, false);
     setToggleVisible (showSideRow, false);
+    setToggleVisible (showPeakRow, false);
     setToggleVisible (showRmsRow, false);
     setTraceColorUiVisible (false);
 
@@ -533,6 +544,13 @@ void ControlRail::resized()
             releaseTimeValue_.setVisible (true);
             releaseTimeValue_.setBounds (x, y, w, valueLabelH);
             y += valueLabelH + gapSmall;
+
+            holdDecayLabel_.setVisible (true);
+            holdDecayLabel_.setBounds (x, y, w, secondaryHeight);
+            y += secondaryHeight;
+            holdDecayValue_.setVisible (true);
+            holdDecayValue_.setBounds (x, y, w, valueLabelH);
+            y += valueLabelH + gapSmall;
             break;
         }
         case ActiveModule::Scopes:
@@ -588,19 +606,11 @@ void ControlRail::resized()
             placeTraceRow (showRRow,    AnalyzerPro::TraceId::R);
             placeTraceRow (showMidRow,  AnalyzerPro::TraceId::Mid);
             placeTraceRow (showSideRow, AnalyzerPro::TraceId::Side);
+            placeTraceRow (showPeakRow, AnalyzerPro::TraceId::Peak);
             placeTraceRow (showRmsRow,  AnalyzerPro::TraceId::Rms);
 
             if (hasColors)
             {
-                // Peak colour row (Peak trace has no visibility toggle — colour only).
-                const int yPeak = y;
-                peakColorLabel_.setVisible (true);
-                peakColorLabel_.setBounds (x, yPeak, w - rowTrim, toggleRowH);
-                auto& peakSw = traceSwatches_[static_cast<size_t> (AnalyzerPro::TraceId::Peak)];
-                peakSw.setVisible (true);
-                peakSw.setBounds (swatchRight, yPeak + (toggleRowH - swatchSize) / 2, swatchSize, swatchSize);
-                y = yPeak + toggleRowH;
-
                 // Reset / Save-default actions.
                 y += gapSmall;
                 const int halfW = (w - gapSmall) / 2;

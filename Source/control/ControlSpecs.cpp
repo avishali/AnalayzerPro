@@ -27,6 +27,7 @@ constexpr std::array<Spec, static_cast<std::size_t>(ControlId::Count)> kSpecs = 
     Spec{ ControlId::AnalyzerAveraging, Stage{}, Type{}, "Averaging", "analyzer.averaging" },
     Spec{ ControlId::AnalyzerHoldPeaks, Stage{}, Type{}, "Hold Peaks", "analyzer.holdPeaks" },
     Spec{ ControlId::AnalyzerPeakDecay, Stage{}, Type{}, "Peak Decay", "analyzer.peakDecay" },
+    Spec{ ControlId::PeakHoldDecayTime, Stage{}, Type{}, "Hold Decay", "analyzer.peakHoldDecay" },
     Spec{ ControlId::AnalyzerTilt, Stage{}, Type{}, "Tilt", "analyzer.tilt" },
     Spec{ ControlId::MasterBypass, Stage{}, Type{}, "Bypass", "master.bypass" },
 };

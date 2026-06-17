@@ -397,6 +397,9 @@ target_sources(${PLUGIN_NAME}
         Source/presets/PresetManager.cpp
         Source/presets/ABStateManager.cpp
         Source/ui/loudness/LoudnessNumericPanel.cpp
+        Source/ui/dev/DevLookControlsComponent.cpp
+        Source/ui/dev/DevLookControlsComponent.h
+        Source/ui/dev/DevLookPanelConfig.h
 )
 
 if(APPLE AND ANALYZERPRO_METAL_EDITOR)

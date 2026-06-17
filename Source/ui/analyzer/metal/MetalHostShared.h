@@ -41,6 +41,43 @@ struct MetalColour
     float a = 1.0f;
 };
 
+struct MetalLookTunables
+{
+    // analyzer trace stroke (drawTracePayloadFromDb)
+    float glowMultEmph   = 3.2f;
+    float glowMultNorm   = 2.8f;
+    float glowAlphaEmph  = 0.13f;
+    float glowAlphaNorm  = 0.10f;
+    float shadowMult     = 5.5f;
+    float shadowAlpha    = 0.05f;
+    float coreAlphaEmph  = 0.95f;
+    float coreAlphaNorm  = 0.82f;
+    float hiMult         = 0.5f;
+    float hiAlpha        = 0.30f;
+    float hiBrighten     = 0.18f;
+    // peak / hold fills (set in AnalyzerDisplayView)
+    float peakFillTop = 0.22f;
+    float peakFillBot = 0.04f;
+    float holdFillTop = 0.18f;
+    float holdFillBot = 0.03f;
+    // meters (drawMeterBars)
+    float meterGlowMargin   = 8.0f;
+    float meterHaloTop      = 0.38f;
+    float meterHaloBot      = 0.06f;
+    float meterCapGlowAlpha = 0.15f;
+    // phase-fan (drawPhaseFanFrame)
+    float phaseFanGlowScale = 1.11f;
+    float phaseFanGlowAlpha = 0.22f;
+    float phaseFanLineWidth     = 2.0f;
+    float phaseFanPeakWidth     = 2.6f;
+    float phaseFanLineGlowMult  = 3.0f;
+    float phaseFanLineGlowAlpha = 0.20f;
+    float phaseFanLineCoreAlpha = 0.95f;
+    // goniometer (drawGonioFrame)
+    float gonioGlowMult  = 4.0f;
+    float gonioGlowAlpha = 0.22f;
+};
+
 struct MetalTracePayload
 {
     std::vector<float> db;
@@ -50,6 +87,8 @@ struct MetalTracePayload
     bool fillToBottom = false;
     float fillTopAlpha = 0.0f;
     float fillBottomAlpha = 0.0f;
+    float strokeWidthPx = 1.8f;   // base core thickness (pre-widthScale)
+    bool  emphasize     = false;  // Peak: wider glow + bright highlight pass
 };
 
 struct MetalRectPx
@@ -136,12 +175,21 @@ struct MetalAnalyzerFrame
     float displayGainDb = 0.0f;
     float rmsAttackMs = 60.0f;
     float rmsReleaseMs = 300.0f;
+    float peakHoldDecayMs = 2000.0f;
+    MetalLookTunables look;
+    bool        railOverlayActive = false;
+    MetalRectPx railOverlayRectPx;
     double sampleRate = 48000.0;
     int fftSize = 2048;
     int weightingMode = 0;
     int tiltMode = 0;
     uint64_t sequence = 0;
     bool valid = false;
+
+    bool crosshairActive = false;
+    float crosshairXPx = 0.0f;
+    int crosshairTraceId = -1;
+    MetalColour crosshairColour;
 };
 
 inline const char* getMetalHostMechanismName (MetalHostMechanism mechanism) noexcept

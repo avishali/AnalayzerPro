@@ -14,6 +14,7 @@ public:
     virtual void stop() = 0;
     virtual void resized() = 0;
     virtual bool isRunning() const noexcept = 0;
+    virtual void requestChromeCapture() = 0;
 };
 
 } // namespace AnalyzerPro::metal

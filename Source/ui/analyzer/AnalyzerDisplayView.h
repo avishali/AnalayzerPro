@@ -9,10 +9,12 @@
 #include <mdsp_ui/UiContext.h>
 #include <mdsp_ui/controls/FloatingIconPanel.h>
 #include <array>
+#include <functional>
 #include <vector>
 #include "../../PluginProcessor.h"
 #include "../theme/TraceColors.h"
-#if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
+#include "ui/dev/DevLookPanelConfig.h"
+#if (defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR) || ANALYZERPRO_DEV_LOOK_PANEL
 #include "metal/MetalHostShared.h"
 #endif
 
@@ -110,6 +112,12 @@ public:
     void setDisplayGainDb (float db);
     void setTiltMode (TiltMode mode);
     void setTraceConfig (const mdsp::gui::AnalyzerDisplayWidget::TraceConfig& cfg);
+    void setShowPeak (bool shouldShow) noexcept;
+    void setPeakHoldDecayMs (float ms) noexcept;
+#if ANALYZERPRO_DEV_LOOK_PANEL
+    AnalyzerPro::metal::MetalLookTunables& devLookTunables() noexcept { return lookTunables_; }
+    void notifyDevLookTunablesChanged() noexcept;
+#endif
 
     /** Forward to shared spectrum engine: FFT order (e.g. 10=1024, 11=2048). */
     void setSpectrumFftOrder (int order);
@@ -121,6 +129,7 @@ public:
 
 #if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
     void setMetalTraceSuppressedForChromeCapture (bool shouldSuppress) noexcept;
+    void setMetalChromeCaptureCallback (std::function<void()> cb);
     bool fillMetalAnalyzerFrame (AnalyzerPro::metal::MetalAnalyzerFrame& frame,
                                  const juce::Component& editor,
                                  float backingScale);
@@ -223,6 +232,12 @@ private:
     AnalyzerSnapshot lastValidSnapshot_;  // Hold last valid frame for grace period
     bool hasLastValid_ = false;
     bool isHoldOn_ = false;
+    bool showPeak_ = true;
+    float peakHoldDecayMs_ = 2000.0f;
+#if (defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR) || ANALYZERPRO_DEV_LOOK_PANEL
+    AnalyzerPro::metal::MetalLookTunables lookTunables_;
+#endif
+
     mdsp::gui::AnalyzerDisplayWidget analyzerBridgeWidget_;
     mdsp::gui::AnalyzerRenderStateProvider renderStateProvider_;
     std::vector<float> fftDb_;
@@ -355,6 +370,7 @@ private:
     uint32_t smoothingGen_ = 0;   // Increments when smoothing param changes
 #if defined(ANALYZERPRO_METAL_EDITOR) && ANALYZERPRO_METAL_EDITOR
     uint64_t metalAnalyzerSequence_ = 1;
+    std::function<void()> metalChromeCaptureCallback_;
 #endif
 
 #if ANALYZERPRO_DEV_DIAGNOSTICS

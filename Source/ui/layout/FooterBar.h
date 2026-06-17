@@ -1,8 +1,10 @@
 #pragma once
 
+#include <functional>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <mdsp_ui/UiContext.h>
 #include "DraggableParamValueLabel.h"
+#include "../dev/DevLookPanelConfig.h"
 
 namespace AnalyzerPro { class ControlBinder; }
 
@@ -24,6 +26,10 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
 
+#if ANALYZERPRO_DEV_LOOK_PANEL
+    std::function<void()> onDevLookClicked;
+#endif
+
 private:
     mdsp_ui::UiContext& ui_;
 
@@ -34,6 +40,12 @@ private:
     juce::ToggleButton       holdBtn_;
     juce::Label              releaseLabel_;
     AnalyzerPro::DraggableParamValueLabel releaseTimeValue_;
+    juce::Label              holdDecayLabel_;
+    AnalyzerPro::DraggableParamValueLabel holdDecayValue_;
+
+#if ANALYZERPRO_DEV_LOOK_PANEL
+    juce::TextButton devLookButton_ { "dev" };
+#endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FooterBar)
 };
